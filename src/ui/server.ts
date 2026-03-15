@@ -9878,6 +9878,18 @@ async function renderHtml(
       aspect-ratio: 1 / 1;
       border-radius: 10px;
     }
+    .collaboration-avatar.has-photo .agent-stage {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 255, 0.92)),
+        radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.56), transparent 58%);
+    }
+    .collaboration-avatar.has-photo .agent-photo-image {
+      object-fit: cover;
+      object-position: center 34%;
+      transform: scale(1.34);
+      transform-origin: center center;
+      filter: saturate(1.03) contrast(1.03);
+    }
     .collaboration-avatar .agent-animal-label {
       display: none;
     }
@@ -13651,10 +13663,7 @@ function deriveCustomStaffAvatarIdentity(agentId: string): AgentAnimalIdentity |
   if (reservedKey) {
     return buildCustomStaffAvatarIdentity(reservedKey);
   }
-
-  const catalog = CUSTOM_STAFF_AVATAR_CATALOG;
-  const randomishKey = catalog[stableHashIndex(key) % catalog.length]?.key;
-  return randomishKey ? buildCustomStaffAvatarIdentity(randomishKey) : undefined;
+  return undefined;
 }
 
 function buildAgentAnimalIdentityMap(agentIds: string[]): Map<string, AgentAnimalIdentity> {
@@ -13665,47 +13674,18 @@ function buildAgentAnimalIdentityMap(agentIds: string[]): Map<string, AgentAnima
     return identityByKey;
   }
 
-  const uniqueCustomOnly = normalizedAgentIds.length <= CUSTOM_STAFF_AVATAR_CATALOG.length;
-  const usedCustomKeys = new Set<CustomStaffAvatarKey>();
-  const availableCustomKeys = (): CustomStaffAvatarKey[] =>
-    CUSTOM_STAFF_AVATAR_CATALOG
-      .map((item) => item.key)
-      .filter((item) => !usedCustomKeys.has(item));
-
-  const assignCustomIdentity = (agentId: string, avatarKey: CustomStaffAvatarKey): void => {
-    const identity = buildCustomStaffAvatarIdentity(avatarKey);
-    if (!identity) return;
-    identityByKey.set(normalizeLookupKey(agentId), identity);
-    if (uniqueCustomOnly) {
-      usedCustomKeys.add(avatarKey);
-    }
-  };
-
   for (const agentId of normalizedAgentIds) {
     const key = normalizeLookupKey(agentId);
     const reservedKey = CORE_STAFF_AVATAR_OVERRIDES.get(key);
     if (!reservedKey) continue;
-    if (uniqueCustomOnly && usedCustomKeys.has(reservedKey)) continue;
-    assignCustomIdentity(agentId, reservedKey);
+    const identity = buildCustomStaffAvatarIdentity(reservedKey);
+    if (!identity) continue;
+    identityByKey.set(key, identity);
   }
 
   for (const agentId of normalizedAgentIds) {
     const key = normalizeLookupKey(agentId);
     if (identityByKey.has(key)) continue;
-    if (!uniqueCustomOnly) {
-      const catalog = CUSTOM_STAFF_AVATAR_CATALOG;
-      const avatarKey = catalog[stableHashIndex(`${key}:${normalizedAgentIds.length}`) % catalog.length]?.key;
-      if (avatarKey) {
-        assignCustomIdentity(agentId, avatarKey);
-        continue;
-      }
-    }
-    const remaining = availableCustomKeys();
-    if (remaining.length > 0) {
-      const pickIndex = stableHashIndex(key) % remaining.length;
-      assignCustomIdentity(agentId, remaining[pickIndex]);
-      continue;
-    }
     identityByKey.set(key, deriveGeneratedAgentAnimalIdentity(agentId));
   }
 
@@ -14624,15 +14604,20 @@ function renderAgentAvatarFrame(input: {
   canvasHeight: number;
   language?: UiLanguage;
   showAnimalLabel?: boolean;
+  extraClassName?: string;
+  ariaLabel?: string;
 }): string {
-  const avatarClassName = input.identity.imageHref ? `${input.className} has-photo` : input.className;
+  const avatarClassName = [input.className, input.extraClassName?.trim(), input.identity.imageHref ? "has-photo" : ""]
+    .filter(Boolean)
+    .join(" ");
   const stageContent = input.identity.imageHref
     ? `<img class="agent-photo-image" src="${escapeHtml(input.identity.imageHref)}" alt="" loading="eager" decoding="async" />`
     : `<canvas class="agent-pixel-canvas" width="${input.canvasWidth}" height="${input.canvasHeight}"></canvas>`;
   const animalLabelHtml = input.showAnimalLabel
     ? `<div class="agent-animal-label">${escapeHtml(animalLabel(input.identity.animal, input.language ?? "zh"))}</div>`
     : "";
-  return `<div class="${avatarClassName}" style="--agent-accent:${escapeHtml(input.identity.accent)};" data-agent-id="${escapeHtml(input.agentId)}" data-animal="${escapeHtml(input.identity.animal)}">
+  const ariaLabelAttr = input.ariaLabel?.trim() ? ` aria-label="${escapeHtml(input.ariaLabel)}"` : "";
+  return `<div class="${avatarClassName}" style="--agent-accent:${escapeHtml(input.identity.accent)};" data-agent-id="${escapeHtml(input.agentId)}" data-animal="${escapeHtml(input.identity.animal)}"${ariaLabelAttr}>
     <div class="agent-stage" aria-hidden="true">
       ${stageContent}
     </div>
@@ -16097,11 +16082,15 @@ function renderCollaborationThreadCards(
       const participantAvatars = card.participants
         .map((participant, index) => {
           const avatar = `<div class="collaboration-participant">
-            <div class="agent-avatar collaboration-avatar${participant.current ? " is-current" : ""}" style="--agent-accent:${escapeHtml(participant.identity.accent)};" data-agent-id="${escapeHtml(participant.agentId)}" data-animal="${escapeHtml(participant.identity.animal)}" aria-label="${escapeHtml(participant.label)}">
-              <div class="agent-stage" aria-hidden="true">
-                <canvas class="agent-pixel-canvas" width="224" height="224"></canvas>
-              </div>
-            </div>
+            ${renderAgentAvatarFrame({
+              agentId: participant.agentId,
+              identity: participant.identity,
+              className: "agent-avatar",
+              extraClassName: `collaboration-avatar${participant.current ? " is-current" : ""}`,
+              canvasWidth: 224,
+              canvasHeight: 224,
+              ariaLabel: participant.label,
+            })}
             <div class="collaboration-participant-label">${escapeHtml(participant.roleLabel)}</div>
           </div>`;
           const arrow =

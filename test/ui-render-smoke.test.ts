@@ -291,6 +291,10 @@ test("collaboration section is a standalone dashboard page with inline thread ex
   assert(source.includes('pickUiText(input.language, "Parent opened child session", "父会话发起子会话")'));
   assert(source.includes('pickUiText(input.language, "Child session reply", "子会话最近回复")'));
   assert(source.includes('renderCollaborationThreadCards(collaborationThreadCards, options.language)'));
+  assert(source.includes("renderAgentAvatarFrame({"));
+  assert(source.includes('extraClassName: `collaboration-avatar${participant.current ? " is-current" : ""}`'));
+  assert(source.includes(".collaboration-avatar.has-photo .agent-photo-image {"));
+  assert(source.includes("object-position: center 34%;"));
   assert(source.includes('if (options.section === "collaboration") sectionBody = collaborationSection;'));
   assert(!source.includes('当前还没有看到跨智能体协作'));
 });
@@ -1129,6 +1133,7 @@ test("agent animal identity mapping prefers custom staff avatars and stays deter
   const codexB = deriveAgentAnimalIdentity("codex");
   assert.equal(codexA.animal, codexB.animal);
   assert.equal(codexA.imageHref, codexB.imageHref);
+  assert.equal(codexA.imageHref, undefined);
   assert.equal(typeof codexA.title, "string");
   assert.notEqual(codexA.title, "");
 
@@ -1136,6 +1141,7 @@ test("agent animal identity mapping prefers custom staff avatars and stays deter
   const fallbackB = deriveAgentAnimalIdentity("zxq-agent-42");
   assert.equal(fallbackA.animal, fallbackB.animal);
   assert.equal(fallbackA.imageHref, fallbackB.imageHref);
+  assert.equal(fallbackA.imageHref, undefined);
   assert.equal(typeof fallbackA.title, "string");
   assert.notEqual(fallbackA.title, "");
 });
