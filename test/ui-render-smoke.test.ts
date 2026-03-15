@@ -302,7 +302,10 @@ test("dashboard renders manual refresh and auto refresh controls with edit guard
   assert(source.includes('data-dashboard-auto-refresh-toggle'));
   assert(source.includes('data-dashboard-auto-refresh-interval'));
   assert(source.includes('data-dashboard-refresh-status'));
-  assert(source.includes('data-refresh-generated-at="${escapeHtml(snapshot.generatedAt ?? "")}"'));
+  assert(source.includes("const dashboardRefreshGeneratedAt ="));
+  assert(source.includes("docHubSnapshot.generatedAt"));
+  assert(source.includes("agentTeamEmbed.runtime.updatedAt"));
+  assert(source.includes('data-refresh-generated-at="${escapeHtml(dashboardRefreshGeneratedAt ?? "")}"'));
   assert(source.includes("openclaw:dashboard-refresh:v1"));
   assert(source.includes("window.__openclawSetRefreshGuard = setRefreshGuard;"));
   assert(source.includes("'doc-preview'"));

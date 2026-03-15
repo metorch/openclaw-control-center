@@ -6513,6 +6513,14 @@ async function renderHtml(
     needsMemorySection ? loadCachedOpenClawMemorySummary() : Promise.resolve<OpenClawMemorySummary | undefined>(undefined),
   ]);
   markRenderPhase("section-assets");
+  const dashboardRefreshGeneratedAt =
+    pickLatestSessionActivityTimestamp(
+      snapshot.generatedAt,
+      sessionPreview.generatedAt,
+      collaborationPreview.generatedAt,
+      docHubSnapshot.generatedAt,
+      agentTeamEmbed.runtime.updatedAt,
+    ) ?? snapshot.generatedAt;
   const usageToday = usageCost.periods.find((item) => item.key === "today");
   const usage7d = usageCost.periods.find((item) => item.key === "7d");
   const usage30d = usageCost.periods.find((item) => item.key === "30d");
@@ -11649,13 +11657,13 @@ async function renderHtml(
     }
   </style>
 </head>
-<body class="ui-preload" data-ui-polish="apple-native-v3" data-apple-window-controls="true" data-ui-language="${escapeHtml(options.language)}" data-refresh-generated-at="${escapeHtml(snapshot.generatedAt ?? "")}" style="--fold-open-label:${options.language === "en" ? "'Expand'" : "'展开'"}; --fold-close-label:${options.language === "en" ? "'Collapse'" : "'收起'"};">
+<body class="ui-preload" data-ui-polish="apple-native-v3" data-apple-window-controls="true" data-ui-language="${escapeHtml(options.language)}" data-refresh-generated-at="${escapeHtml(dashboardRefreshGeneratedAt ?? "")}" style="--fold-open-label:${options.language === "en" ? "'Expand'" : "'展开'"}; --fold-close-label:${options.language === "en" ? "'Collapse'" : "'收起'"};">
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-kicker">${escapeHtml(uiEmployeeBrand(options.language))}</div>
         <h1>${escapeHtml(uiEmployeeSystemBrand(options.language))}</h1>
-        <div class="meta">${escapeHtml(t("Updated", "更新时间"))}${escapeHtml(options.language === "en" ? ": " : "：")}${escapeHtml(snapshot.generatedAt ?? t("Not available", "暂无"))}</div>
+        <div class="meta">${escapeHtml(t("Updated", "更新时间"))}${escapeHtml(options.language === "en" ? ": " : "：")}${escapeHtml(dashboardRefreshGeneratedAt ?? t("Not available", "暂无"))}</div>
         ${languageToggle}
       </div>
       <nav class="nav-links">${sectionNav}</nav>
