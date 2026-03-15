@@ -12,6 +12,12 @@ export interface OfficeSessionPresenceSnapshot {
   totalActiveSessions: number;
 }
 
+type SessionStoreCandidate = {
+  agentId: string;
+  path: string;
+  source: "runtime_home" | "workspace";
+};
+
 const ACTIVE_SESSION_STATES = new Set([
   "running",
   "active",
@@ -47,46 +53,40 @@ const ACTIVE_RECENCY_WINDOWS_MS = resolveActiveRecencyWindowsMs();
 export async function loadBestEffortOfficeSessionPresence(): Promise<OfficeSessionPresenceSnapshot> {
   const openclawHome = resolveOpenClawHomePath();
   const agentsPath = join(openclawHome, "agents");
-  const sourcePath = join(agentsPath, "*/sessions/sessions.json");
+  const sourcePath = `${join(agentsPath, "*/sessions/sessions.json")} | <configured workspace>/sessions/sessions.json`;
   const currentCatalog = await loadCurrentAgentCatalog();
-  const configuredAgentKeys = new Set(currentCatalog.entries.map((entry) => normalizeAgentKey(entry.agentId)));
+  const configuredEntries = currentCatalog.entries.filter((entry) => entry.agentId.trim().length > 0);
+  const configuredAgentKeys = new Set(configuredEntries.map((entry) => normalizeAgentKey(entry.agentId)));
 
   let agentDirs: string[] = [];
+  let runtimeDirReadable = true;
   try {
     const entries = await readdir(agentsPath, { withFileTypes: true });
     agentDirs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   } catch (error) {
     if (!isFsNotFound(error)) {
-      return {
-        status: "partial",
-        sourcePath,
-        detail: "Runtime agent directory exists but could not be read cleanly.",
-        activeSessionsByAgent: new Map(),
-        totalActiveSessions: 0,
-      };
+      runtimeDirReadable = false;
+    } else {
+      agentDirs = [];
     }
-
-    return {
-      status: "not_connected",
-      sourcePath,
-      detail: "Runtime agent directory not found.",
-      activeSessionsByAgent: new Map(),
-      totalActiveSessions: 0,
-    };
   }
 
-  if (configuredAgentKeys.size > 0) {
-    agentDirs = agentDirs.filter((agentId) => configuredAgentKeys.has(normalizeAgentKey(agentId)));
-  }
+  const storeCandidates = buildSessionStoreCandidates({
+    agentsPath,
+    runtimeAgentDirs: agentDirs,
+    configuredEntries,
+  });
 
-  if (agentDirs.length === 0) {
+  if (storeCandidates.length === 0) {
     return {
-      status: "not_connected",
+      status: runtimeDirReadable ? "not_connected" : "partial",
       sourcePath,
       detail:
         configuredAgentKeys.size > 0
-          ? "No runtime session stores were found for the current configured agents."
-          : "Runtime agent directory is empty.",
+          ? "No session-store candidates were found for the current configured agents."
+          : runtimeDirReadable
+            ? "Runtime agent directory is empty."
+            : "Runtime agent directory exists but could not be read cleanly.",
       activeSessionsByAgent: new Map(),
       totalActiveSessions: 0,
     };
@@ -95,15 +95,16 @@ export async function loadBestEffortOfficeSessionPresence(): Promise<OfficeSessi
   const recordsByAgent = new Map<string, Record<string, unknown>[]>();
   let parsedStores = 0;
   let parseErrors = 0;
+  const connectedSources = new Set<SessionStoreCandidate["source"]>();
 
-  for (const agentId of agentDirs) {
-    const sessionsPath = join(agentsPath, agentId, "sessions", "sessions.json");
+  for (const candidate of storeCandidates) {
     try {
-      const parsed = JSON.parse(await readFile(sessionsPath, "utf8")) as unknown;
+      const parsed = JSON.parse(await readFile(candidate.path, "utf8")) as unknown;
       parsedStores += 1;
       const records = extractSessionRecords(parsed);
-
-      recordsByAgent.set(agentId, records);
+      const current = recordsByAgent.get(candidate.agentId) ?? [];
+      recordsByAgent.set(candidate.agentId, mergeSessionRecords(current, records));
+      connectedSources.add(candidate.source);
     } catch (error) {
       if (isFsNotFound(error)) continue;
       parseErrors += 1;
@@ -130,15 +131,18 @@ export async function loadBestEffortOfficeSessionPresence(): Promise<OfficeSessi
 
   if (parsedStores === 0 && parseErrors === 0) {
     return {
-      status: "not_connected",
+      status: runtimeDirReadable ? "not_connected" : "partial",
       sourcePath,
-      detail: "No runtime session stores found.",
+      detail:
+        configuredAgentKeys.size > 0
+          ? "No session stores were found for the current configured agents in runtime-home or workspace locations."
+          : "No runtime session stores found.",
       activeSessionsByAgent: selectedActiveByAgent,
       totalActiveSessions,
     };
   }
 
-  const status: OfficeSessionPresenceStatus = parseErrors > 0 ? "partial" : "connected";
+  const status: OfficeSessionPresenceStatus = parseErrors > 0 || !runtimeDirReadable ? "partial" : "connected";
   return {
     status,
     sourcePath,
@@ -146,13 +150,93 @@ export async function loadBestEffortOfficeSessionPresence(): Promise<OfficeSessi
       `Derived ${totalActiveSessions} active session(s) from ${parsedStores} session store(s)` +
       ` using state + ${Math.round(selectedWindowMs / 60000)}m recency window.` +
       (configuredAgentKeys.size > 0 ? ` Filtered to ${configuredAgentKeys.size} configured current agent(s).` : "") +
+      (connectedSources.size > 0
+        ? ` Sources: ${[...connectedSources]
+            .map((source) => (source === "workspace" ? "workspace" : "runtime-home"))
+            .join(", ")}.`
+        : "") +
       (usedAdaptiveFallback
         ? ` Window auto-expanded from ${Math.round((ACTIVE_RECENCY_WINDOWS_MS[0] ?? selectedWindowMs) / 60000)}m after an all-zero pass.`
         : "") +
+      (!runtimeDirReadable ? " Runtime-home directory could not be read cleanly." : "") +
       (parseErrors > 0 ? ` ${parseErrors} store(s) could not be parsed.` : ""),
     activeSessionsByAgent: selectedActiveByAgent,
     totalActiveSessions,
   };
+}
+
+function buildSessionStoreCandidates(input: {
+  agentsPath: string;
+  runtimeAgentDirs: string[];
+  configuredEntries: Awaited<ReturnType<typeof loadCurrentAgentCatalog>>["entries"];
+}): SessionStoreCandidate[] {
+  const output: SessionStoreCandidate[] = [];
+  const seen = new Set<string>();
+  const append = (candidate: SessionStoreCandidate): void => {
+    const key = `${normalizeAgentKey(candidate.agentId)}::${candidate.path.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    output.push(candidate);
+  };
+
+  if (input.configuredEntries.length > 0) {
+    for (const entry of input.configuredEntries) {
+      const agentId = entry.agentId.trim();
+      if (!agentId) continue;
+      append({
+        agentId,
+        path: join(input.agentsPath, agentId, "sessions", "sessions.json"),
+        source: "runtime_home",
+      });
+      const workspace = entry.workspace?.trim();
+      if (workspace) {
+        append({
+          agentId,
+          path: join(workspace, "sessions", "sessions.json"),
+          source: "workspace",
+        });
+      }
+    }
+    return output;
+  }
+
+  for (const agentId of input.runtimeAgentDirs) {
+    const normalized = agentId.trim();
+    if (!normalized) continue;
+    append({
+      agentId: normalized,
+      path: join(input.agentsPath, normalized, "sessions", "sessions.json"),
+      source: "runtime_home",
+    });
+  }
+
+  return output;
+}
+
+function mergeSessionRecords(
+  existing: Record<string, unknown>[],
+  incoming: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  if (incoming.length === 0) return existing;
+  const output = existing.slice();
+  const seen = new Set(output.map((item) => sessionRecordIdentity(item)));
+  for (const record of incoming) {
+    const identity = sessionRecordIdentity(record);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    output.push(record);
+  }
+  return output;
+}
+
+function sessionRecordIdentity(item: Record<string, unknown>): string {
+  return (
+    asString(item.sessionKey)?.trim() ||
+    asString(item.sessionId)?.trim() ||
+    asString(item.key)?.trim() ||
+    asString(item.sessionFile)?.trim() ||
+    JSON.stringify(item)
+  );
 }
 
 function deriveActiveSessionsByAgent(

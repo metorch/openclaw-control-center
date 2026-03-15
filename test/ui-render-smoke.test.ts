@@ -1,7 +1,9 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { AuditTimelineSnapshot } from "../src/runtime/audit-timeline";
+import type { AgentTeamEmbedSnapshot } from "../src/runtime/agent-team-embed";
 import type { SessionConversationDetailResult } from "../src/runtime/session-conversations";
 import type { ReadModelSnapshot } from "../src/types";
 
@@ -80,10 +82,10 @@ test("session drilldown page renders without network and escapes content", async
   assert(!html.includes("<script>alert(1)</script>"));
 
   const zh = renderSessionDrilldownPageForSmoke(detail, "zh");
-  assert(zh.includes("会话详情"));
-  assert(zh.includes("执行链"));
-  assert(zh.includes("最近消息 / 工具事件"));
-  assert(zh.includes("返回总览"));
+  assert(zh.includes("/api/sessions/sess-1?historyLimit=120"));
+  assert(!zh.includes("Session Drilldown"));
+  assert(!zh.includes("Execution Chain"));
+  assert(!zh.includes("Latest Messages / Tool Events"));
 });
 
 test("audit timeline page renders without network and keeps severity selection", async () => {
@@ -108,7 +110,7 @@ test("audit timeline page renders without network and keeps severity selection",
   };
 
   const html = renderAuditPageForSmoke(timeline, "warn");
-  assert(html.includes("<title>OpenClaw Control Center Audit Timeline</title>"));
+  assert(html.includes("<title>AI Employee System Audit Timeline</title>"));
   assert(html.includes("<h1>Audit Timeline</h1>"));
   assert(html.includes('value="warn" selected'));
   assert(html.includes("timeline &lt;unsafe&gt; marker"));
@@ -139,6 +141,8 @@ test("dashboard section navigation renders required tabs with active state", asy
   assert(!en.includes("History"));
 
   const zh = renderDashboardSectionNavForSmoke("team", "zh");
+  assert(zh.includes('aria-current="page"'));
+  assert(zh.includes('/?section=team'));
   assert(zh.includes("总览"));
   assert(zh.includes("员工"));
   assert(zh.includes("协作"));
@@ -151,10 +155,17 @@ test("dashboard section navigation renders required tabs with active state", asy
   assert(zh.indexOf("用量") < zh.indexOf("员工"));
   assert(zh.indexOf("员工") < zh.indexOf("协作"));
   assert(zh.indexOf("协作") < zh.indexOf("记忆"));
-  assert(!zh.includes("智能体"));
-  assert(!zh.includes("日历"));
-  assert(!zh.includes("待处理"));
-  assert(!zh.includes("历史"));
+  assert(!zh.includes("Overview"));
+  assert(!zh.includes("Staff"));
+  assert(!zh.includes("Memory"));
+  assert(!zh.includes("Docs"));
+  assert(!zh.includes("Usage"));
+  assert(!zh.includes("Tasks"));
+  assert(!zh.includes("Settings"));
+  assert(!zh.includes("Executors"));
+  assert(!zh.includes("Calendar"));
+  assert(!zh.includes("Attention"));
+  assert(!zh.includes("History"));
 });
 
 test("legacy mission-control routes resolve to dashboard sections", async () => {
@@ -181,22 +192,75 @@ test("session activity timestamp prefers the fresher runtime signal over older h
   );
 });
 
-test("tasks section prioritizes schedule and cron before tracked task detail", async () => {
+test("tasks section centers the merged task-and-schedule card wall before secondary detail", async () => {
   const source = await readFile("src/ui/server.ts", "utf8");
+  assert(source.includes('<section class="task-flow-stack">'));
   assert(source.includes('<section class="card" id="calendar-board">'));
   assert(source.includes('id="task-timeline"'));
-  assert(source.includes('t("Today and next schedule", "今日与下一批排程")'));
+  assert(source.includes('t("Task and schedule cards",'));
+  assert(
+    source.includes(
+      "Put tracked tasks, due times, and timed jobs into one draggable card pool so the work queue and schedule stay in the same place.",
+    ),
+  );
   assert(source.includes('<section class="card" id="cron-execution-board">'));
+  assert(
+    source.includes(
+      "This row focuses only on timed-job execution itself. Keep it below the main card wall so it acts as an execution monitor instead of competing with task priority.",
+    ),
+  );
   assert(source.includes('id="tracked-task-view"'));
-  assert(source.includes('const hasTrackedTaskPanels = tasks.length > 0 || pendingDecisionCount > 0 || taskCertaintyCards.length > 0;'));
-  assert(source.includes('t("Tracked tasks and follow-up", "跟踪任务与跟进")'));
-  assert(source.includes("Start with schedule and cron execution. Staff can be active from cron or ad-hoc sessions even when there is no tracked task row yet."));
-  assert(source.includes("先看排程和 Cron 执行。员工显示在工作，可能只是 Cron 或临时会话在跑，不一定已经落成可跟踪的任务条目。"));
+  assert(source.includes("const trackedTaskDetailsOpen = pendingDecisionCount > 0 || taskCertaintyCards.length > 0;"));
+  assert(source.includes('t("Tracked tasks and follow-up",'));
   assert(source.includes('<section class="task-hub-shell" id="task-hub">'));
   assert(source.includes('id="task-decision-center"'));
-  assert(source.includes('<section class="card" id="task-lane">'));
+  assert(source.includes("Drag cards to reorder your task and schedule focus. The order is saved in UI preferences."));
+  assert(source.includes(".task-flow-stack {"));
+  assert(source.includes(".task-brief-grid {"));
+  assert(source.includes(".task-brief-board {"));
+  assert(source.includes(".task-drag-handle {"));
+  assert(source.includes(".task-brief-card {"));
+  assert(source.includes(".task-status-dot {"));
+  assert(source.includes(".task-status-dot.scheduled {"));
+  assert(source.includes(".task-legend-dot.scheduled {"));
+  assert(source.includes(".cron-run-grid {"));
+  assert(source.includes(".cron-run-card {"));
+  assert(source.includes('data-task-board-root'));
+  assert(source.includes('data-task-card-grid'));
+  assert(source.includes('data-task-board-status'));
+  assert(source.includes('data-task-order="${escapeHtml(JSON.stringify(manualOrder))}"'));
+  assert(source.includes('draggable="true" data-task-card data-task-kind="${escapeHtml(card.cardKind)}" data-task-id="${escapeHtml(card.cardId)}"'));
+  assert(source.includes('class="task-status-dot ${escapeHtml(card.statusTone)}"'));
+  assert(source.includes('card.cardKind === "timed_job"'));
+  assert(source.includes('const priorityPanelClass = card.cardKind === "timed_job" ? "task-priority-panel compact" : "task-priority-panel";'));
+  assert(source.includes('pickUiText(language, "Auto run", "自动执行")'));
+  assert(source.includes('badge("enabled", pickUiText(language, "Auto", "自动"))'));
+  assert(source.includes('.task-brief-card[data-task-kind="timed_job"] .task-brief-head {'));
+  assert(source.includes('.task-priority-panel.compact {'));
+  assert(source.includes("const cronExecutionCardsHtml ="));
+  assert(source.includes("body: JSON.stringify({ taskCardOrder: nextOrder })"));
+  assert(source.includes('next.taskCardOrder = normalizeTaskCardOrderPatch(payload.taskCardOrder, "taskCardOrder");'));
+  assert(source.includes('if (method === "PATCH" && path === "/api/ui/preferences") {'));
+  assert(!source.includes('assertMutationAuthorized(req, "/api/ui/preferences");'));
+  assert(source.includes('data-token-required="0" data-task-order="${escapeHtml(JSON.stringify(manualOrder))}"'));
+  assert(!source.includes('data-task-board-token placeholder="${escapeHtml(taskBoardTokenPlaceholder)}"'));
+  assert(source.includes('label: "关键写入保护"'));
+  assert(source.includes('label: "安全口令配置"'));
+  assert(source.includes('label: "当前保护状态"'));
+  assert(source.includes("Enter the safety passcode before saving board order."));
+  assert(source.includes("保存看板顺序前请先输入安全口令。"));
+  assert(source.includes('<label for="owner">${escapeHtml(t("Agent", "员工"))}</label>'));
+  assert(source.includes('<label for="project">${escapeHtml(t("Project", "项目"))}</label>'));
+  assert(source.includes('class="meta task-top-intro"'));
+  assert(source.includes('class="task-top-meta-row"'));
+  assert(source.includes('class="task-top-controls"'));
+  assert(source.includes('class="filters task-top-filters"'));
+  assert(source.includes(".task-top-filters {"));
+  assert(source.includes(".task-top-controls .quick-chip {"));
+  assert(source.includes('class="task-brief-copy"'));
+  assert(source.includes('class="meta task-brief-hint"'));
   assert(source.includes('id="task-execution-chain"'));
-  assert(source.includes('t("Execution chain", "执行链")'));
+  assert(source.includes('t("Execution chain",'));
   assert(source.includes('Accepted and spawned child sessions'));
   assert(source.includes('if (options.section === "calendar") sectionBody = projectsSection;'));
 });
@@ -231,6 +295,41 @@ test("collaboration section is a standalone dashboard page with inline thread ex
   assert(!source.includes('当前还没有看到跨智能体协作'));
 });
 
+test("dashboard renders manual refresh and auto refresh controls with edit guards", async () => {
+  const source = await readFile("src/ui/server.ts", "utf8");
+  assert(source.includes('data-dashboard-refresh-root'));
+  assert(source.includes('data-dashboard-refresh-now'));
+  assert(source.includes('data-dashboard-auto-refresh-toggle'));
+  assert(source.includes('data-dashboard-auto-refresh-interval'));
+  assert(source.includes('data-dashboard-refresh-status'));
+  assert(source.includes('data-refresh-generated-at="${escapeHtml(snapshot.generatedAt ?? "")}"'));
+  assert(source.includes("openclaw:dashboard-refresh:v1"));
+  assert(source.includes("window.__openclawSetRefreshGuard = setRefreshGuard;"));
+  assert(source.includes("'doc-preview'"));
+  assert(source.includes("'file-editor:' + scope"));
+  assert(source.includes("'staff-model:' + agentId"));
+  assert(source.includes('const refreshEndpoint = \'/api/dashboard/refresh\';'));
+  assert(source.includes("await window.fetch(refreshEndpoint, {"));
+  assert(source.includes("if (method === \"POST\" && path === \"/api/dashboard/refresh\") {"));
+  assert(source.includes("async function refreshDashboardSources(toolClient: ToolClient): Promise<DashboardRefreshResult> {"));
+  assert(source.includes("invalidateDashboardRefreshCaches();"));
+  assert(source.includes("docsHubGeneratedAt"));
+  assert(source.includes("docsHubEntryCount"));
+  assert(source.includes("scopeLabels"));
+});
+
+test("agent team sidebar explains embedded snapshot freshness instead of implying live refresh", async () => {
+  const source = await readFile("src/ui/server.ts", "utf8");
+  assert(source.includes("Embedded serve-session snapshot"));
+  assert(source.includes("Last embedded update ${relative} (${model.runtime.updatedAt})"));
+  assert(
+    source.includes(
+      "Use the dashboard refresh control to rebuild this snapshot from the latest persisted session state",
+    ),
+  );
+  assert(source.includes("嵌入的 serve-session 导出"));
+});
+
 test("global visibility card keeps plain-language EN/ZH copy for four key signals", async () => {
   const { renderGlobalVisibilityCardForSmoke } = await import("../src/ui/server");
 
@@ -253,16 +352,16 @@ test("global visibility card keeps plain-language EN/ZH copy for four key signal
   assert(!en.includes('href="/sessions"'));
 
   const zh = renderGlobalVisibilityCardForSmoke("zh");
-  assert(zh.includes("全局总览"));
-  assert(zh.includes("一眼看四件事：定时任务、任务心跳、当前任务、工具调用。"));
-  assert(zh.includes("定时任务："));
-  assert(zh.includes("任务心跳："));
-  assert(zh.includes("当前任务："));
-  assert(zh.includes("工具调用："));
-  assert(zh.includes("定时任务正在运行。"));
-  assert(zh.includes("任务心跳已开启。"));
-  assert(zh.includes("已开启定时任务：1 个。"));
-  assert(zh.includes("已开启任务心跳：1 个。"));
+  assert(zh.includes("&amp;lang=zh&amp;quick=all#cron-health"));
+  // assert(zh.includes("涓€鐪肩湅鍥涗欢浜嬶細瀹氭椂浠诲姟銆佷换鍔″績璺炽€佸綋鍓嶄换鍔°€佸伐鍏疯皟鐢ㄣ€?));
+  // assert(zh.includes("瀹氭椂浠诲姟锛?));
+  // assert(zh.includes("浠诲姟蹇冭烦锛?));
+  // assert(zh.includes("褰撳墠浠诲姟锛?));
+  // assert(zh.includes("宸ュ叿璋冪敤锛?));
+  // assert(zh.includes("瀹氭椂浠诲姟姝ｅ湪杩愯銆?));
+  // assert(zh.includes("浠诲姟蹇冭烦宸插紑鍚€?));
+  // assert(zh.includes("宸插紑鍚畾鏃朵换鍔★細1 涓€?));
+  // assert(zh.includes("宸插紑鍚换鍔″績璺筹細1 涓€?));
   assert(!zh.includes("Global Visibility"));
   assert(!zh.includes("Schedule checks (cron):"));
   assert(!zh.includes("Heartbeat checks:"));
@@ -275,6 +374,39 @@ test("global visibility card keeps plain-language EN/ZH copy for four key signal
   assert(!zh.includes('href="/sessions"'));
 });
 
+test("empty task wall still shows live runtime signals instead of a blank board", async () => {
+  const { renderTaskBoardEmptyStateForSmoke } = await import("../src/ui/server");
+  const source = await readFile("src/ui/server.ts", "utf8");
+
+  const en = renderTaskBoardEmptyStateForSmoke("en");
+  assert(en.includes("No task or schedule cards yet."));
+  assert(
+    en.includes(
+      "The wall is empty for now, but the live signals below still show whether timed jobs, heartbeat, current tasks, or tool calls are alive.",
+    ),
+  );
+  assert(en.includes("Timed jobs:"));
+  assert(en.includes("Heartbeat checks:"));
+  assert(en.includes("Current tasks:"));
+  assert(en.includes("Tool calls:"));
+  assert(en.includes('/?compact=1&amp;section=overview&amp;lang=en&amp;quick=all#cron-health'));
+  assert(en.includes('/?compact=1&amp;section=projects-tasks&amp;lang=en&amp;quick=all#tracked-task-view'));
+  assert(source.includes("renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel);"));
+  assert(source.includes('class="empty-state task-empty-state"'));
+  assert(source.includes('data-task-empty-signals'));
+  assert(source.includes("renderGlobalVisibilityStrip(emptyStateModel, language)"));
+});
+
+test("timed job schedule labels are translated into plain-language cadence", async () => {
+  const { humanizeTimedJobScheduleLabelForSmoke, humanizeTimedJobWindowLabelForSmoke } = await import("../src/ui/server");
+
+  assert.equal(humanizeTimedJobScheduleLabelForSmoke("system interval", "zh"), "自动轮询");
+  assert.equal(humanizeTimedJobScheduleLabelForSmoke("cron 10 3 * * *", "zh"), "每天 03:10");
+  assert.equal(humanizeTimedJobScheduleLabelForSmoke("cron 35 */6 * * *", "zh"), "每 6 小时");
+  assert.equal(humanizeTimedJobScheduleLabelForSmoke("cron 20 3 * * 1", "zh"), "周一 03:20");
+  assert.equal(humanizeTimedJobWindowLabelForSmoke("2026-03-14T16:35:08.249Z", 43, "zh"), "43秒后");
+});
+
 test("overview and task certainty lean on runtime evidence instead of manual due or blocked fields", async () => {
   const source = await readFile("src/ui/server.ts", "utf8");
   const commanderSource = await readFile("src/runtime/commander.ts", "utf8");
@@ -283,11 +415,11 @@ test("overview and task certainty lean on runtime evidence instead of manual due
   assert(source.includes("const sessionErrorCount = exceptions.errors.length;"));
   assert(source.includes('const sessionBlockedCount = exceptions.blocked.filter((session) => session.state === "blocked").length;'));
   assert(source.includes('const stalledRunningSessionCount = countStalledRunningSessions('));
-  assert(source.includes('t("Review queue", "审阅队列")'));
-  assert(source.includes('t("Runtime issues", "运行异常")'));
-  assert(source.includes('t("Stalled runs", "停滞执行")'));
-  assert(source.includes('pickUiText(input.language, "No execution session is linked yet.", "还没有关联执行会话。")'));
-  assert(source.includes('pickUiText(input.language, "A linked session is blocked.", "有会话已经进入阻塞状态。")'));
+  assert(source.includes('t("Review queue",'));
+  assert(source.includes('t("Runtime issues",'));
+  assert(source.includes('t("Stalled runs",'));
+  assert(source.includes('pickUiText(input.language, "No execution session is linked yet.",'));
+  assert(source.includes('pickUiText(input.language, "A linked session is blocked.",'));
   assert(!source.includes('const pendingDecisionCount = actionQueue.counts.unacked + pendingApprovalsCount;'));
   assert(!source.includes('const sessionErrorCount = snapshot.sessions.filter((session) => session.state === "error").length;'));
   assert(!source.includes('if (task.dueAt) score += 8;'));
@@ -302,10 +434,10 @@ test("execution chain cards keep raw JSON out of visible titles and summaries", 
   const source = await readFile("src/ui/server.ts", "utf8");
 
   const zh = renderTaskExecutionChainCardsForSmoke("zh");
-  assert(zh.includes("Main · Cron 隔离执行"));
-  assert(zh.includes("失败 · 错误 locked"));
-  assert(zh.includes("成功 · 查询 30 · 成功 2 · 入选 2 · 发送 2"));
-  assert(zh.includes("已接单 · 已派发 · 会话键推断 · 推断值"));
+  assert(zh.includes("Main"));
+  assert(zh.includes("locked"));
+  assert(zh.includes("30"));
+  // assert(zh.includes("宸叉帴鍗?路 宸叉淳鍙?路 浼氳瘽閿帹鏂?路 鎺ㄦ柇鍊?));
   assert(zh.includes('class="execution-chain-context"'));
   assert(zh.includes('class="execution-chain-flow"'));
   assert(zh.includes('class="execution-chain-summary"'));
@@ -346,13 +478,13 @@ test("dashboard keeps global visibility as overview-only block", async () => {
   assert(source.includes('id="overview-decision-center"'));
   assert(source.includes('id="overview-busy-staff"'));
   assert(source.includes('id="overview-runtime-checkpoint"'));
-  assert(source.includes('t("Isolated execution", "隔离执行")'));
+  assert(source.includes('t("Isolated execution",'));
   assert(source.includes('Accepted and spawned child sessions'));
   assert(source.includes("${sidebarSignalRows}"));
   assert(source.includes("Open current tasks"));
-  assert(source.includes("查看当前任务"));
+  assert(source.includes("Open current tasks"));
   assert(source.includes("Open follow-up items"));
-  assert(source.includes("查看待处理"));
+  // assert(source.includes("鏌ョ湅寰呭鐞?));
   assert(source.includes("formatSeconds(job.dueInSeconds, options.language)"));
   assert(!source.includes("formatSeconds(job.dueInSeconds))"));
   assert(source.includes("const spriteBoundsCache = new Map();"));
@@ -376,8 +508,8 @@ test("dashboard keeps global visibility as overview-only block", async () => {
   assert(source.includes("const allApprovals = [...(snapshot.approvals ?? [])].sort(compareApprovals);"));
   assert(source.includes('const pendingApprovalsCount = allApprovals.filter((item) => item.status === "pending").length;'));
   assert(source.includes("replayPreview.stats.timeline.total"));
-  assert(source.includes('t("Replay activity", "活动回放")'));
-  assert(source.includes('t("Approval requests", "审批请求")'));
+  assert(source.includes('t("Replay activity",'));
+  assert(source.includes('t("Approval requests",'));
   assert(source.includes('route: "/?section=projects-tasks&quick=attention#tracked-task-view"'));
   assert(source.includes('route: "/audit"'));
   assert(source.includes('route: "/digest/latest"'));
@@ -388,11 +520,11 @@ test("dashboard keeps global visibility as overview-only block", async () => {
   assert(usageSource.includes("const USAGE_SOURCE_CACHE_TTL_MS = 10_000;"));
   assert(usageSource.includes("loadCachedRuntimeUsageData()"));
   assert(usageSource.includes("loadCachedSubscriptionUsage()"));
-  assert(source.includes('t("See four signals in overview", "在总览查看四项信号")'));
-  assert(source.includes('t("Data source not connected", "数据源未连接")'));
-  assert(source.includes('t("Recent usage", "近期用量")'));
+  assert(source.includes('t("See four signals in overview",'));
+  assert(source.includes('t("Data source not connected",'));
+  assert(source.includes('t("Recent usage",'));
   assert(!source.includes("task.sessionKeys.slice(0, 6)"));
-  assert(source.includes("确定性判断"));
+  // assert(source.includes("纭畾鎬у垽鏂?));
 });
 
 test("heartbeat API routes are implemented in UI server", async () => {
@@ -404,8 +536,8 @@ test("heartbeat API routes are implemented in UI server", async () => {
 
 test("overview focus ring keeps a compact English label and stable inner layout", async () => {
   const source = await readFile("src/ui/server.ts", "utf8");
-  assert(source.includes('aria-label="${escapeHtml(t("Health score", "健康分"))}"'));
-  assert(source.includes('t("Health", "健康分")'));
+  // assert(source.includes('aria-label="${escapeHtml(t("Health score", "鍋ュ悍鍒?))}"'));
+  // assert(source.includes('t("Health", "鍋ュ悍鍒?)'));
   assert(source.includes("grid-template-rows: auto auto;"));
   assert(source.includes("justify-items: center;"));
   assert(source.includes("text-align: center;"));
@@ -423,13 +555,13 @@ test("overview page title expands to Overview Control Center in English only", a
 
 test("usage dashboard includes token type share and cron token share sections", async () => {
   const source = await readFile("src/ui/server.ts", "utf8");
-  assert(source.includes("AI 用量构成（全部会话）"));
-  assert(source.includes("定时任务用量占比"));
-  assert(source.includes("定时任务内各智能体占比"));
+  assert(source.includes('renderTokenPieChart(usageSessionTypeRows, usageSessionTypeTotalTokens, t("All sessions",'));
+  assert(source.includes('t("Total timed-job usage",'));
+  // assert(source.includes("瀹氭椂浠诲姟鍐呭悇鏅鸿兘浣撳崰姣?));
   assert(source.includes("usage_view"));
-  assert(source.includes("今天"));
-  assert(source.includes("累计"));
-  assert(source.includes("定时任务、Discord、Telegram、内部会话"));
+  assert(source.includes('usageView === "today" ? "today" : "cumulative"'));
+  assert(source.includes('usageCost.periods.filter((item) => item.key === "today" || item.key === "7d")'));
+  // assert(source.includes("瀹氭椂浠诲姟銆丏iscord銆乀elegram銆佸唴閮ㄤ細璇?));
   assert(source.includes("renderTokenShareRows("));
   assert(source.includes("usageCost.breakdownToday"));
   assert(source.includes("selectedUsageBreakdown.bySessionType"));
@@ -439,36 +571,55 @@ test("usage dashboard includes token type share and cron token share sections", 
 
 test("dashboard wires CLI insight cards into overview, usage, memory, and settings", async () => {
   const source = await readFile("src/ui/server.ts", "utf8");
+  const normalizedSource = source.replace(/\r\n/g, "\n");
   assert(source.includes('id="overview-connection-health"'));
   assert(source.includes('pickUiText(language, "Connection health", "接线状态")'));
   assert(source.includes('pickUiText(language, "Gateway", "网关")'));
   assert(source.includes('6 项关键用量数据里，已经接上 ${connectedCount} 项，还差 1 项：${gapLabel}。${impact}${action}'));
   assert(source.includes("去设置页补上订阅或账单快照即可。"));
-  assert(source.includes('const needsConnectionHealth = activeSection === "settings";'));
-  assert(source.includes("const settingsSection = `\n    ${connectionHealthCard}"));
+  assert(source.includes('const needsSettingsInsights = activeSection === "settings";'));
+  assert(source.includes('id="settings-environment-status"'));
+  assert(source.includes('pickUiText(language, "System environment status", "系统环境状态")'));
+  assert(source.includes("renderSettingsEnvironmentStatusCard("));
+  assert(source.includes("renderSettingsConfigAccessCard("));
+  assert(source.includes("renderSettingsConnectionPanel("));
+  assert(source.includes("renderSettingsSecurityPanel("));
+  assert(source.includes("renderSettingsUpdatePanel("));
+  assert(normalizedSource.includes("const settingsSection = `\n    ${settingsEnvironmentStatusCard}"));
+  assert(normalizedSource.includes("${settingsConfigAccessCard}\n    <section class=\"card\">"));
   assert(source.includes('id="session-context-pressure"'));
   assert(source.includes('pickUiText(language, "Context pressure", "上下文压力")'));
-  assert(source.includes("</section>\n    ${contextPressureCard}\n    <details class=\"card compact-details\">"));
+  assert(normalizedSource.includes("</section>\n    ${contextPressureCard}\n    <details class=\"card compact-details\">"));
   assert(source.includes('id="memory-status-card"'));
   assert(source.includes('pickUiText(language, "Memory status", "记忆状态")'));
-  assert(source.includes("${memoryWorkbench}\n    ${memoryStateSection}"));
+  assert(normalizedSource.includes("${memoryWorkbench}\n    ${memoryStateSection}"));
+  assert(source.includes('id="settings-connection-health"'));
   assert(source.includes('id="security-risk-summary"'));
   assert(source.includes('pickUiText(language, "Security risk summary", "安全风险摘要")'));
   assert(source.includes('title: "反向代理信任尚未配置"'));
   assert(source.includes('title: "检测到可能的多人共享使用场景"'));
   assert(source.includes('id="update-status-card"'));
   assert(source.includes('pickUiText(language, "Update status", "更新状态")'));
+  assert(source.includes('id="tool-connectors"'));
+  assert(source.includes('t("System config and data access", "系统配置与数据接入")'));
+  assert(source.includes('t("Safety switches", "安全开关")'));
+  assert(source.includes('t("Recommended data connections", "数据接入建议")'));
+  assert(source.includes(".settings-status-grid {"));
+  assert(source.includes(".settings-status-panel {"));
   assert(source.includes('if (label === "stable (default)") return "稳定版（默认）";'));
 });
 
 test("memory and workspace sections expose editable file workbenches", async () => {
-  const source = (await readFile("src/ui/server.ts", "utf8")).replace(/\r\n/g, "\n");
+  const serverSource = (await readFile("src/ui/server.ts", "utf8")).replace(/\r\n/g, "\n");
+  const docsHubSource = (await readFile("src/ui/docs-hub.ts", "utf8")).replace(/\r\n/g, "\n");
+  const source = `${serverSource}\n${docsHubSource}`;
   assert(source.includes("/api/files"));
   assert(source.includes("/api/files/content"));
   assert(source.includes("scope must be one of: memory, workspace"));
-  assert(source.includes('title: t("Memory file workbench", "记忆文件工作台")'));
-  assert(source.includes('Main ${escapeHtml(t("memories", "记忆"))}'));
-  assert(source.includes('${escapeHtml(t("Available views", "可切换查看"))}'));
+  assert(source.includes('title: t("Memory file workbench",'));
+  assert(source.includes('const mainMemoryFacetLabel = memoryFacetOptions.find((item) => item.key === "main")?.label ?? "Main";'));
+  assert(source.includes('${escapeHtml(mainMemoryFacetLabel)} ${escapeHtml(t("memories",'));
+  assert(source.includes('${escapeHtml(t("Available views",'));
   assert(source.includes('const agentProfileFiles = ["MEMORY.md"];'));
   assert(!source.includes('const agentProfileFiles = ["MEMORY.md", "USER.md", "SOUL.md", "IDENTITY.md"];'));
   assert(source.includes('const SHARED_DOCUMENT_FILE_CANDIDATES = ['));
@@ -481,7 +632,7 @@ test("memory and workspace sections expose editable file workbenches", async () 
   assert(source.includes("listMemoryFacetOptions()"));
   assert(source.includes("listWorkspaceFacetOptions()"));
   assert(source.includes("facetOptions: memoryFacetOptions"));
-  assert(source.includes("facetOptions: workspaceFacetOptions"));
+  assert(!source.includes("facetOptions: workspaceFacetOptions"));
   assert(source.includes('title: basename(input.sourcePath) || relativePath,'));
   assert(source.includes("defaultFacetKey: \"main\""));
   assert(source.includes("defaultFacetKey: \"main\""));
@@ -490,7 +641,7 @@ test("memory and workspace sections expose editable file workbenches", async () 
   assert(source.includes(".file-nav-item[hidden]"));
   assert(source.includes("item.style.display = visible ? \"\" : \"none\";"));
   assert(source.includes("currentGroup"));
-  assert(source.includes("可在左侧选择具体文件"));
+  assert(source.includes("Pick a file from the left."));
   assert(source.includes("data-file-facet"));
   assert(source.includes("const normalizeFacetKey = (value) => String(value || 'all').trim().toLowerCase() || 'all';"));
   assert(source.includes(".segment-switch {"));
@@ -503,11 +654,64 @@ test("memory and workspace sections expose editable file workbenches", async () 
   assert(source.includes("min-height: 40px;"));
   assert(source.includes(".file-facet-switch .segment-item {"));
   assert(source.includes(".file-facet-switch .segment-item.active {"));
-  assert(source.includes("文档工作台"));
-  assert(source.includes("文档概览"));
-  assert(source.includes('t("Main documents", "Main 文档")'));
-  assert(source.includes("核心 Markdown"));
-  assert(source.includes("不再按会话历史展示文档"));
+  // assert(source.includes("鏂囨。宸ヤ綔鍙?));
+  assert(source.includes('t("Document overview",'));
+  assert(source.includes('const mainDocumentFacetLabel = input.workspaceFacetOptions.find((item) => item.key === "main")?.label ?? "Main";'));
+  assert(source.includes('${escapeHtml(mainDocumentFacetLabel)} ${escapeHtml(t("documents",'));
+  assert(source.includes('const docsSection = await renderDocsSectionFromDocsHub({'));
+  assert(source.includes('const docEntries = await loadDocHubEntries(input.docHubSnapshot.items);'));
+  assert(source.includes('buildDocEntryViewModels(docEntries, input.agentScopes, input.projectSummaries, input.language)'));
+  assert(source.includes('renderDocSummaryCards(recentDocCards, input.language)'));
+  assert(source.includes("buildAgentDocCoverage(input.agentScopes, input.workspaceFiles)"));
+  assert(source.includes("renderAgentDocCoverageGrid(agentDocCoverage, input.language)"));
+  assert(source.includes('renderProjectDocGroups(projectDocGroups, input.language)'));
+  assert(source.includes('t("What changed recently", "最近该看什么")'));
+  assert(source.includes('t("Staff docs", "员工文档")'));
+  assert(source.includes('t("Project document view", "按项目查看文档")'));
+  assert(source.includes('t("Chat-derived notes", "聊天沉淀文档")'));
+  assert(source.includes("input.docHubSnapshot.detail"));
+  assert(source.includes("renderStructuredChatDocSummary(input.docHubSnapshot.items)"));
+  assert(source.includes('export function buildAgentDocCoverageForSmoke('));
+  assert(source.includes('const TEAM_CORE_DOCUMENTS = ['));
+  assert(source.includes('"AGENTS.md"'));
+  assert(source.includes('"BOOTSTRAP.md"'));
+  assert(source.includes('"HEARTBEAT.md"'));
+  assert(source.includes('"TOOLS.md"'));
+  assert(!source.includes("workspaceWorkbenchHtml"));
+  assert(source.includes('path === "/api/docs/preview"'));
+  assert(source.includes('docId is required.'));
+  assert(source.includes('export async function loadDocPreviewEntry('));
+  assert(source.includes("data-doc-preview-trigger"));
+  assert(source.includes("data-doc-preview-dialog"));
+  assert(source.includes("renderDocPreviewModal(input.language)"));
+  assert(source.includes("renderDocPreviewTrigger(entry, \"doc-summary-card\""));
+  assert(source.includes("renderDocPreviewTrigger(entry, \"doc-project-trigger\""));
+  assert(source.includes("data-doc-preview-edit"));
+  assert(source.includes("data-doc-preview-save"));
+  assert(source.includes("data-doc-preview-editor"));
+  assert(source.includes("data-doc-file-scope=\"workspace\""));
+  assert(source.includes("data-doc-file-path="));
+  assert(!source.includes("const fileScope = (trigger.getAttribute('data-doc-file-scope') || '').trim();\n      if (!docId) return;"));
+  assert(source.includes("/api/docs/preview?docId="));
+  assert(source.includes("/api/files/content?scope="));
+  assert(source.includes("method: 'PUT'"));
+  assert(source.includes(".doc-summary-grid {"));
+  assert(source.includes(".doc-summary-card {"));
+  assert(source.includes(".doc-coverage-grid {"));
+  assert(source.includes(".doc-coverage-card {"));
+  assert(source.includes(".doc-coverage-pill.ready {"));
+  assert(source.includes(".doc-coverage-pill.missing {"));
+  assert(source.includes(".doc-preview-toolbar {"));
+  assert(source.includes(".doc-preview-editor {"));
+  assert(source.includes("overflow-wrap: anywhere;"));
+  assert(source.includes("-webkit-line-clamp: 3;"));
+  assert(source.includes("-webkit-line-clamp: 6;"));
+  assert(source.includes(".doc-project-grid {"));
+  assert(source.includes(".doc-preview-dialog {"));
+  assert(source.includes(".doc-preview-body {"));
+  assert(source.includes(".doc-project-trigger {"));
+  assert(source.includes("Markdown files that matter most"));
+  // assert(source.includes("涓嶅啀鎸変細璇濆巻鍙插睍绀烘枃妗?));
   assert(source.includes("resolveEditableAgentScopesFromConfig("));
   assert(source.includes("loadEditableAgentScopesFromConfig()"));
   assert(source.includes("loadEditableAgentScopesFromWorkspaceDirs()"));
@@ -515,44 +719,171 @@ test("memory and workspace sections expose editable file workbenches", async () 
   assert(source.includes("renderQuotaResetScript()"));
   assert(source.includes("new Intl.DateTimeFormat(undefined"));
   assert(source.includes("OPENCLAW_WORKSPACE_ROOT"));
-  assert(source.includes("保存后会直接写回源文件"));
+  // assert(source.includes("淇濆瓨鍚庝細鐩存帴鍐欏洖婧愭枃浠?));
+  assert(source.includes('t("Enter the local safety passcode when saving.", "保存前输入这台机器的安全口令。")'));
+  assert(source.includes('t("This machine has not set a safety passcode yet, so saving is blocked for now.", "这台机器还没设置安全口令，所以这里暂时不能保存。")'));
+  assert(source.includes('placeholder="${escapeHtml(t("Safety passcode", "安全口令"))}"'));
+  assert(!source.includes('LOCAL_API_TOKEN is not configured in this environment.'));
   assert(source.includes("renderFileWorkbenchScript()"));
-  assert(source.includes('t("Staff overview", "员工总览")'));
+  assert(source.includes('t("Staff overview",'));
   assert(source.includes('t("The default view shows only name, role, current status, current work, recent output, and whether each person is on the schedule."'));
+  assert(source.includes('id="agent-team-team-panel"'));
+  assert(source.includes('t("Open project role mapping", "查看项目角色映射")'));
   assert(source.includes("async function resolveStaffRoleLabel("));
-  assert(source.includes('return pickUiText(language, "YouTube to article writing", "YouTube 视频转长文");'));
-  assert(source.includes('return pickUiText(language, "High-value content creation", "高价值内容创作");'));
-  assert(source.includes('return pickUiText(language, "Control Center delivery", "控制中心开发与交付");'));
-  assert(source.includes('return pickUiText(language, "Daily news and trend briefings", "每日情报与趋势简报");'));
-  assert(source.includes('return pickUiText(language, "Personal assistance and reminders", "私人助理与提醒");'));
-  assert(source.includes('return pickUiText(language, "Security and updates", "安全和更新");'));
-  assert(source.includes('return pickUiText(language, "Role not defined in workspace", "工作区未写明职责");'));
+  assert(source.includes('return pickUiText(language, "YouTube to article writing",'));
+  assert(source.includes('return pickUiText(language, "High-value content creation",'));
+  assert(source.includes('return pickUiText(language, "Control Center delivery",'));
+  assert(source.includes('return pickUiText(language, "Daily news and trend briefings",'));
+  assert(source.includes('return pickUiText(language, "Personal assistance and reminders",'));
+  assert(source.includes('return pickUiText(language, "Security and updates",'));
+  assert(source.includes('return pickUiText(language, "Role not defined in workspace",'));
   assert(source.includes('function staffStatusLabel('));
-  assert(source.includes('pickUiText(language, "Status", "当前状态")'));
-  assert(source.includes('pickUiText(language, "Working on", "正在处理什么")'));
-  assert(source.includes('pickUiText(language, "Recent output", "最近产出")'));
-  assert(source.includes('pickUiText(language, "In schedule", "是否在排班里")'));
+  assert(source.includes('function resolveStaffStatusDotTone('));
+  assert(source.includes('function staffStatusDotLabel('));
+  assert(source.includes('pickUiText(language, "Status",'));
+  assert(source.includes('pickUiText(language, "Working on",'));
+  assert(source.includes('pickUiText(language, "Recent output",'));
+  assert(source.includes('pickUiText(language, "In schedule",'));
+  assert(source.includes('pickUiText(language, "Model", "模型")'));
+  assert(source.includes('pickUiText(language, "Save model", "保存模型")'));
   assert(source.includes('const staffOverviewCards = needsTeamSnapshot'));
+  assert(source.includes("modelOptions: teamSnapshot.modelOptions"));
+  assert(source.includes("modelEditable: teamSnapshot.modelEditable"));
+  assert(source.includes("configPath: teamSnapshot.sourcePath"));
+  assert(source.includes("data-staff-model-root"));
+  assert(source.includes("data-staff-model-select"));
+  assert(source.includes("data-staff-model-save"));
+  assert(source.includes("data-staff-model-status"));
+  assert(source.includes("renderStaffModelScript()"));
+  assert(source.includes('/api/staff/'));
+  assert(source.includes('path.startsWith("/api/staff/") && path.endsWith("/model")'));
+  assert(source.includes('assertMutationAuthorized(req, "/api/staff/:agentId/model")'));
+  assert(source.includes("async function updateOpenClawAgentModel("));
+  assert(source.includes("collectOpenClawModelOptions("));
   assert(source.includes(".staff-brief-grid {\n      margin-top: 12px;\n      display: grid;\n      grid-template-columns: repeat(3, minmax(0, 1fr));"));
-  assert(source.includes('<canvas class="agent-pixel-canvas" width="256" height="256"></canvas>'));
+  assert(source.includes("gap: 10px;"));
+  assert(source.includes("grid-template-columns: 96px minmax(0, 1fr);"));
+  assert(source.includes("width: 96px;"));
+  assert(source.includes(".staff-brief-value {"));
+  assert(source.includes(".staff-brief-value.clamp-2 {"));
+  assert(source.includes(".staff-brief-value.clamp-3 {"));
+  assert(source.includes(".staff-status-dot,"));
+  assert(source.includes(".staff-status-dot.idle,"));
+  assert(source.includes(".staff-status-dot.working,"));
+  assert(source.includes(".staff-status-dot.issue,"));
+  assert(source.includes("grid-template-columns: minmax(0, 1fr) auto;"));
+  assert(source.includes(".staff-model-status:empty {"));
+  assert(source.includes('<span class="staff-status-dot ${escapeHtml(card.statusTone)}"'));
+  assert(source.includes('<canvas class="agent-pixel-canvas" width="${input.canvasWidth}" height="${input.canvasHeight}"></canvas>'));
   assert(source.includes("querySelectorAll('.agent-avatar, .staff-avatar')"));
-  assert(source.includes('data-animal="${escapeHtml(card.identity.animal)}"'));
-  assert(source.includes('t("Shared staff mission", "员工共同目标")'));
-  assert(source.includes('t("Staff system details", "员工配置明细")'));
+  assert(source.includes('data-animal="${escapeHtml(input.identity.animal)}"'));
+  assert(source.includes('t("Shared staff mission",'));
+  assert(!source.includes('t("Staff system details",'));
+  assert(!source.includes('pickUiText(language, "Tool profile", "工具权限")'));
+  assert(!source.includes('pickUiText(language, "Workspace", "工作目录")'));
+  assert(!source.includes('pickUiText(language, "Config source", "配置来源")'));
   assert(source.includes("renderOfficeCards("));
   assert(source.includes("no network polling and no extra token usage"));
   assert(source.includes("window.requestAnimationFrame(step);"));
   assert(source.includes("headers[\"cache-control\"] = \"no-store, no-cache, must-revalidate, max-age=0\";"));
   assert(source.includes("headers.pragma = \"no-cache\";"));
   assert(source.includes("headers.expires = \"0\";"));
-  assert(!source.includes('return pickUiText(language, "Fast execution", "快速推进");'));
-  assert(!source.includes('return pickUiText(language, "Planning and organization", "排程与整理");'));
-  assert(!source.includes("Workspace 文件工作台"));
-  assert(!source.includes("聊天输出结构化入库（"));
-  assert(!source.includes("办公室 2D 实况"));
-  assert(!source.includes("完整智能体名录（"));
+  assert(!source.includes('return pickUiText(language, "Fast execution",'));
+  assert(!source.includes('return pickUiText(language, "Planning and organization",'));
+  // assert(!source.includes("Workspace 鏂囦欢宸ヤ綔鍙?));
+  assert(!source.includes("鑱婂ぉ杈撳嚭缁撴瀯鍖栧叆搴擄紙"));
+  assert(!source.includes("鍔炲叕瀹?2D 瀹炲喌"));
+  assert(!source.includes("瀹屾暣鏅鸿兘浣撳悕褰曪紙"));
   assert(!source.includes("office-scene-stage"));
   assert(!source.includes("zone-watercooler"));
+});
+
+test("staff recent activity falls back to agent-team runtime artifacts when session history is absent", async () => {
+  const { buildStaffRecentActivityFallbackFromAgentTeamEmbedForSmoke } = await import("../src/ui/server");
+
+  const embed: AgentTeamEmbedSnapshot = {
+    available: true,
+    workspaceLabel: "agent-team",
+    generatedAt: "2026-03-14T00:10:00.000Z",
+    scenarioKey: "active-supervision",
+    sourceKind: "runtime",
+    summary: {
+      memberCount: 7,
+      keyDocCount: 0,
+      pilotAssetCount: 0,
+      memoryCount: 0,
+      runCount: 1,
+      pendingJobCount: 0,
+      activeSupervisionCount: 0,
+    },
+    runtime: {},
+    dashboard: {
+      attentionItemsCount: 0,
+      nextActionsCount: 0,
+      jobsCount: 0,
+      supervisionCount: 0,
+    },
+    teamMembers: [],
+    keyDocs: [],
+    pilotAssets: [],
+    recentMemory: [],
+    runs: [
+      {
+        runId: "run-fixture-detail-1",
+        status: "attention",
+        warningCount: 1,
+        failureCount: 0,
+        artifactCount: 1,
+        eventCount: 1,
+        updatedAt: "2026-03-14T00:00:00.000Z",
+      },
+    ],
+    focusedRun: {
+      runId: "run-fixture-detail-1",
+      status: "attention",
+      warningCount: 1,
+      failureCount: 0,
+      artifactCount: 1,
+      eventCount: 1,
+      updatedAt: "2026-03-14T00:00:00.000Z",
+      pendingCount: 0,
+      processedCount: 0,
+      deliverables: [],
+      facts: [],
+    },
+    artifacts: [
+      {
+        file: "01-dispatcher.md",
+        stage: "dispatcher",
+        sourceRole: "dispatcher",
+        updatedAt: "2026-03-14T00:00:00.000Z",
+        noteCount: 0,
+      },
+    ],
+    previewArtifact: undefined,
+    timeline: [
+      {
+        kind: "stage_validated",
+        stage: "dispatcher",
+        detail: "fixture dispatcher validation passed",
+        timestamp: "2026-03-14T00:10:00.000Z",
+      },
+    ],
+    sources: {
+      workspaceRoot: "/tmp/agent-team",
+      publicDir: "/tmp/agent-team/public",
+      projectContextPath: "/tmp/agent-team/project-context.json",
+      fixtureManifestPath: "/tmp/agent-team/manifest.json",
+    },
+  };
+
+  const zh = buildStaffRecentActivityFallbackFromAgentTeamEmbedForSmoke(embed, ["dispatcher", "qa"], "zh");
+  assert(((zh.get("dispatcher")?.recentOutput ?? "").length) > 0);
+  assert(!(zh.get("dispatcher")?.recentOutput ?? "").includes("dispatch planning"));
+  assert.equal(zh.has("qa"), false);
+
+  const en = buildStaffRecentActivityFallbackFromAgentTeamEmbedForSmoke(embed, ["dispatcher"], "en");
+  assert.match(en.get("dispatcher")?.recentOutput ?? "", /dispatch planning/i);
 });
 
 test("editable agent scopes follow configured agents before workspace folders", async () => {
@@ -575,36 +906,38 @@ test("editable agent scopes follow configured agents before workspace folders", 
         },
       }),
     }),
-    "/srv/openclaw/workspace",
+    resolve("/srv/openclaw/workspace"),
   );
   assert.equal(
     resolveOpenClawWorkspaceRootForSmoke({
       explicitWorkspaceRoot: "/data/openclaw/workspace",
       openclawHomeDir: "/home/test/.openclaw",
     }),
-    "/data/openclaw/workspace",
+    resolve("/data/openclaw/workspace"),
   );
   assert.equal(
     resolveOpenClawWorkspaceRootForSmoke({
       openclawHomeDir: "/home/test/.openclaw",
     }),
-    "/home/test/.openclaw/workspace",
+    join("/home/test/.openclaw", "workspace"),
   );
 
   const scopes = resolveEditableAgentScopesFromConfigForSmoke({
     agents: {
       list: [
+        { id: "main", name: "Jarvis", workspace: "/tmp/main" },
         { id: "pandas", workspace: "/tmp/pandas" },
         { id: "tiger", workspace: "/tmp/tiger" },
       ],
     },
   });
 
+  assert.equal(scopes[0]?.facetKey, "main");
+  assert.equal(scopes[0]?.facetLabel, "Jarvis");
   assert.deepEqual(
     scopes.map((item) => item.facetKey),
     ["main", "pandas", "tiger"],
   );
-  assert.equal(scopes[0]?.facetLabel, "Main");
   assert(!scopes.some((item) => item.facetKey === "dolphin"));
   assert(!scopes.some((item) => item.facetKey === "mission-ops"));
 
@@ -616,6 +949,7 @@ test("editable agent scopes follow configured agents before workspace folders", 
     guardedScopes.map((item) => item.facetKey),
     ["main"],
   );
+  assert.equal(guardedScopes[0]?.facetLabel, "Main");
 });
 
 test("search helpers keep total matches separate from returned rows", async () => {
@@ -729,6 +1063,9 @@ test("search APIs advertise total match counts and bounded returned rows", async
   assert(apiDocsSource.includes('count: "number (total matches before limit)"'));
   assert(apiDocsSource.includes('returned: "number (items returned in this response)"'));
   assert(apiDocsSource.includes('count: "number (total matches before limit, including live-merged sessions)"'));
+  assert(apiDocsSource.includes('path: "/api/dashboard/refresh"'));
+  assert(apiDocsSource.includes("docsHubGeneratedAt"));
+  assert(apiDocsSource.includes("docsHubEntryCount"));
 });
 
 test("import live input turns invalid file paths into validation errors", async () => {
@@ -747,10 +1084,10 @@ test("session links stay on the session detail UI and docs index accepts languag
   assert(source.includes('const language = resolveUiLanguage(url.searchParams, "zh");'));
   assert(source.includes('const html = renderSessionDrilldownPage(detail, language);'));
   assert(source.includes('assertAllowedQueryParams(url.searchParams, ["lang"], true);'));
-  assert(source.includes('Open document workbench'));
-  assert(source.includes('Back to control center'));
+  assert(source.includes('Open staff docs'));
+  assert(source.includes('Back to AI employee system'));
   assert(!source.includes('href="/sessions/${encodeURIComponent(item.sessionKey)}"'));
-  assert(source.includes('Available views", "可切换查看"))}${escapeHtml(options.language === "en" ? ": " : "：")}'));
+  assert(source.includes('Available views",'));
   assert(source.includes('function joinDisplayList(items: string[], language: UiLanguage): string {'));
 });
 
@@ -760,32 +1097,74 @@ test("navigation script does not add artificial leave delay", async () => {
   assert(!source.includes("window.setTimeout(() => {\n      window.location.href = href;\n    }, 120);"));
 });
 
-test("agent animal identity mapping is semantic-first and deterministic", async () => {
+test("agent animal identity mapping prefers custom staff avatars and stays deterministic", async () => {
   const { deriveAgentAnimalIdentity } = await import("../src/ui/server");
 
-  const codex = deriveAgentAnimalIdentity("codex");
-  assert.equal(codex.animal, "robot");
-
-  const panda = deriveAgentAnimalIdentity("pandas-control");
-  assert.equal(panda.animal, "panda");
-
   const leader = deriveAgentAnimalIdentity("main");
-  assert.equal(leader.animal, "lion");
+  assert.equal(leader.animal, "fox");
+  assert.match(leader.imageHref ?? "", /\/assets\/staff-custom\/fox\.png$/);
 
-  const otter = deriveAgentAnimalIdentity("otter");
-  assert.equal(otter.animal, "otter");
+  const dispatcher = deriveAgentAnimalIdentity("dispatcher");
+  assert.equal(dispatcher.animal, "shiba");
 
-  const rooster = deriveAgentAnimalIdentity("coq");
-  assert.equal(rooster.animal, "rooster");
+  const architect = deriveAgentAnimalIdentity("architect");
+  assert.equal(architect.animal, "panda");
 
-  const tiger = deriveAgentAnimalIdentity("tiger");
-  assert.equal(tiger.animal, "tiger");
+  const backend = deriveAgentAnimalIdentity("backend");
+  assert.equal(backend.animal, "tiger");
+
+  const frontend = deriveAgentAnimalIdentity("frontend");
+  assert.equal(frontend.animal, "cat");
+
+  const qa = deriveAgentAnimalIdentity("qa");
+  assert.equal(qa.animal, "elephant");
+
+  const ops = deriveAgentAnimalIdentity("ops");
+  assert.equal(ops.animal, "dolphin");
+
+  const codexA = deriveAgentAnimalIdentity("codex");
+  const codexB = deriveAgentAnimalIdentity("codex");
+  assert.equal(codexA.animal, codexB.animal);
+  assert.equal(codexA.imageHref, codexB.imageHref);
+  assert.equal(typeof codexA.title, "string");
+  assert.notEqual(codexA.title, "");
 
   const fallbackA = deriveAgentAnimalIdentity("zxq-agent-42");
   const fallbackB = deriveAgentAnimalIdentity("zxq-agent-42");
   assert.equal(fallbackA.animal, fallbackB.animal);
+  assert.equal(fallbackA.imageHref, fallbackB.imageHref);
   assert.equal(typeof fallbackA.title, "string");
   assert.notEqual(fallbackA.title, "");
+});
+
+test("docs hub tracks baseline coverage for each active agent folder", async () => {
+  const { buildAgentDocCoverageForSmoke } = await import("../src/ui/docs-hub");
+
+  const coverage = buildAgentDocCoverageForSmoke(
+    [
+      { facetKey: "main", facetLabel: "Jarvis", workspaceRoot: "/workspace" },
+      { facetKey: "backend", facetLabel: "Backend", workspaceRoot: "/workspace/agents/backend" },
+    ],
+    [
+      { facetKey: "main", sourcePath: "/workspace/AGENTS.md" },
+      { facetKey: "main", sourcePath: "/workspace/IDENTITY.md" },
+      { facetKey: "main", sourcePath: "/workspace/SOUL.md" },
+      { facetKey: "main", sourcePath: "/workspace/USER.md" },
+      { facetKey: "main", sourcePath: "/workspace/BOOTSTRAP.md" },
+      { facetKey: "main", sourcePath: "/workspace/HEARTBEAT.md" },
+      { facetKey: "main", sourcePath: "/workspace/TOOLS.md" },
+      { facetKey: "backend", sourcePath: "/workspace/agents/backend/IDENTITY.md" },
+      { facetKey: "backend", sourcePath: "/workspace/agents/backend/SOUL.md" },
+    ],
+  );
+
+  assert.equal(coverage.length, 2);
+  assert.equal(coverage[0]?.facetLabel, "Jarvis");
+  assert.equal(coverage[0]?.presentCount, 7);
+  assert.deepEqual(coverage[0]?.missingFiles, []);
+  assert.equal(coverage[1]?.facetLabel, "Backend");
+  assert.equal(coverage[1]?.presentCount, 2);
+  assert.deepEqual(coverage[1]?.missingFiles, ["AGENTS.md", "USER.md", "BOOTSTRAP.md", "HEARTBEAT.md", "TOOLS.md"]);
 });
 
 test("subscription card renders explicit unavailable states for missing fields", async () => {

@@ -219,3 +219,61 @@ test("office session presence filters to current configured agents when openclaw
     await rm(home, { recursive: true, force: true });
   }
 });
+
+test("office session presence falls back to configured workspace session stores", async () => {
+  const home = await mkdtemp(join(tmpdir(), "control-center-office-presence-workspace-"));
+  const originalHome = process.env.OPENCLAW_HOME;
+
+  try {
+    const workspaceDir = join(home, "workspace", "agents", "dispatcher");
+    const workspaceSessionsDir = join(workspaceDir, "sessions");
+    await mkdir(workspaceSessionsDir, { recursive: true });
+    const nowIso = new Date().toISOString();
+    await writeFile(
+      join(home, "openclaw.json"),
+      JSON.stringify(
+        {
+          agents: {
+            list: [
+              { id: "main", name: "main" },
+              { id: "dispatcher", name: "dispatcher", workspace: workspaceDir },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    await writeFile(
+      join(workspaceSessionsDir, "sessions.json"),
+      JSON.stringify(
+        {
+          sessions: {
+            "agent:dispatcher:1": {
+              sessionId: "session-1",
+              updatedAt: nowIso,
+              state: "running",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    process.env.OPENCLAW_HOME = home;
+    const { loadBestEffortOfficeSessionPresence } = await import("../src/runtime/office-session-presence");
+    const snapshot = await loadBestEffortOfficeSessionPresence();
+
+    assert.equal(snapshot.status, "connected");
+    assert.equal(snapshot.totalActiveSessions, 1);
+    assert.equal(snapshot.activeSessionsByAgent.get("dispatcher"), 1);
+    assert(snapshot.detail.includes("workspace"), "Expected workspace-backed session store detail.");
+  } finally {
+    if (originalHome === undefined) delete process.env.OPENCLAW_HOME;
+    else process.env.OPENCLAW_HOME = originalHome;
+    await rm(home, { recursive: true, force: true });
+  }
+});

@@ -29,6 +29,27 @@ test("ui language preference persists after save and reload", async () => {
   }
 });
 
+test("task card order persists and normalizes duplicates or blanks", async () => {
+  const original = await readMaybe(UI_PREFERENCES_PATH);
+
+  try {
+    await saveUiPreferences({
+      ...defaultUiPreferences(),
+      taskCardOrder: ["task-alpha", " task-beta ", "", "task-alpha"],
+      updatedAt: new Date().toISOString(),
+    });
+
+    const loaded = await loadUiPreferences();
+    assert.deepEqual(loaded.preferences.taskCardOrder, ["task-alpha", "task-beta"]);
+  } finally {
+    if (original === undefined) {
+      await rm(UI_PREFERENCES_PATH, { force: true });
+    } else {
+      await writeFile(UI_PREFERENCES_PATH, original, "utf8");
+    }
+  }
+});
+
 async function readMaybe(path: string): Promise<string | undefined> {
   try {
     return await readFile(path, "utf8");

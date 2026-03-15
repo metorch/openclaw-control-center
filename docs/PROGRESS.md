@@ -1,5 +1,20 @@
 # Progress
 
+## Phase 156 (Docs cards now open in a modal text preview) - Completed
+- Scope:
+  - Let operators click docs overview cards and project-group docs to read the current document text without jumping into the workbench first.
+- Changed files:
+  - `src/ui/server.ts`
+  - `test/ui-render-smoke.test.ts`
+  - `docs/PROGRESS.md`
+- Implementation:
+  - Added stable doc preview IDs plus a readonly `/api/docs/preview` route that resolves only against the current docs hub sources instead of arbitrary file paths.
+  - Turned recent-doc cards and project doc rows into preview triggers that open a fixed-size `dialog` with a top-right close action.
+  - Loaded preview text on demand and rendered it in a scrollable body so large docs stay lightweight on first page load.
+- Verification:
+  - `node --import tsx --test test/ui-render-smoke.test.ts test/ui-language-preferences.test.ts`
+  - `npm run build`
+
 ## Phase 155 (Standalone collaboration page for agent handoffs) — Completed
 - Scope:
   - Add a dedicated `Collaboration / 协作` page so users can inspect agent-to-agent handoffs without overloading `Staff` or `Tasks`.

@@ -68,6 +68,21 @@ let subscriptionUsageWithCodexInFlight: Promise<UsageSubscriptionStatus> | undef
 let subscriptionUsageWithoutCodexCache: TimedSourceCache<UsageSubscriptionStatus> | undefined;
 let subscriptionUsageWithoutCodexInFlight: Promise<UsageSubscriptionStatus> | undefined;
 
+export function invalidateUsageCostSourceCache(): void {
+  usageDigestsCache = undefined;
+  usageDigestsInFlight = undefined;
+  modelContextCatalogCache = undefined;
+  modelContextCatalogInFlight = undefined;
+  runtimeUsageDataCache = undefined;
+  runtimeUsageDataInFlight = undefined;
+  openclawCronJobNameMapCache = undefined;
+  openclawCronJobNameMapInFlight = undefined;
+  subscriptionUsageWithCodexCache = undefined;
+  subscriptionUsageWithCodexInFlight = undefined;
+  subscriptionUsageWithoutCodexCache = undefined;
+  subscriptionUsageWithoutCodexInFlight = undefined;
+}
+
 export interface UsagePeriodSummary {
   key: "today" | "7d" | "30d";
   label: string;

@@ -4,9 +4,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import path from "node:path";
 import os from "node:os";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 const ROOT = process.cwd();
-const TSX_BIN = path.join(ROOT, "node_modules", ".bin", "tsx");
+const TSX_EXECUTABLE = process.execPath;
+const TSX_IMPORT_ARGS = [
+  "--import",
+  pathToFileURL(path.join(ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href,
+];
 const MACOS_HOME_PATH_PATTERN = /\/Users\/[^/\s]+\//;
 const EMBEDDED_LOCAL_TOKEN_PATTERN = /LOCAL_API_TOKEN\s*[:=]\s*["'][^"']{8,}["']/;
 const PUBLIC_FILES = [
@@ -72,8 +77,9 @@ test("config loads LOCAL_API_TOKEN from cwd .env when env is not preloaded", () 
   try {
     writeFileSync(path.join(tempDir, ".env"), "LOCAL_API_TOKEN=from-dotenv\n", "utf8");
     const output = execFileSync(
-      TSX_BIN,
+      TSX_EXECUTABLE,
       [
+        ...TSX_IMPORT_ARGS,
         "--eval",
         `delete process.env.LOCAL_API_TOKEN; const mod = require(${JSON.stringify(path.join(ROOT, "src", "config.ts"))}); process.stdout.write(mod.LOCAL_API_TOKEN);`,
       ],
@@ -93,8 +99,9 @@ test("config keeps defaults when cwd .env is absent", () => {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-config-no-env-"));
   try {
     const output = execFileSync(
-      TSX_BIN,
+      TSX_EXECUTABLE,
       [
+        ...TSX_IMPORT_ARGS,
         "--eval",
         `delete process.env.LOCAL_API_TOKEN; delete process.env.GATEWAY_URL; const mod = require(${JSON.stringify(path.join(ROOT, "src", "config.ts"))}); process.stdout.write(JSON.stringify({ token: mod.LOCAL_API_TOKEN, gateway: mod.GATEWAY_URL }));`,
       ],

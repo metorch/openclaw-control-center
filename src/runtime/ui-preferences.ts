@@ -3,6 +3,8 @@ import { join } from "node:path";
 import type { TaskState } from "../types";
 
 export const UI_PREFERENCES_PATH = join(process.cwd(), "runtime", "ui-preferences.json");
+const UI_TASK_CARD_ORDER_MAX_ITEMS = 200;
+const UI_TASK_CARD_ID_MAX_LENGTH = 160;
 
 export type UiQuickFilter = "all" | "attention" | TaskState;
 export type UiLanguage = "en" | "zh";
@@ -26,6 +28,7 @@ export interface UiPreferences {
   compactStatusStrip: boolean;
   quickFilter: UiQuickFilter;
   taskFilters: UiPreferencesTaskFilters;
+  taskCardOrder: string[];
   updatedAt: string;
 }
 
@@ -41,6 +44,7 @@ export function defaultUiPreferences(now = new Date().toISOString()): UiPreferen
     compactStatusStrip: true,
     quickFilter: "all",
     taskFilters: {},
+    taskCardOrder: [],
     updatedAt: now,
   };
 }
@@ -143,6 +147,7 @@ function normalizeUiPreferences(input: unknown): { preferences: UiPreferences; i
   if (taskFilters.status === undefined && isTaskState(quickFilter)) {
     taskFilters.status = quickFilter;
   }
+  const taskCardOrder = normalizeTaskCardOrder(obj.taskCardOrder, issues);
 
   let updatedAt = now;
   if (typeof obj.updatedAt === "string" && !Number.isNaN(Date.parse(obj.updatedAt))) {
@@ -154,11 +159,12 @@ function normalizeUiPreferences(input: unknown): { preferences: UiPreferences; i
   return {
     preferences: {
       language,
-      compactStatusStrip,
-      quickFilter,
-      taskFilters,
-      updatedAt,
-    },
+        compactStatusStrip,
+        quickFilter,
+        taskFilters,
+        taskCardOrder,
+        updatedAt,
+      },
     issues,
   };
 }
@@ -194,6 +200,44 @@ function normalizeTaskFilters(
 
   const project = normalizeOptionalString(obj.project, "taskFilters.project", 120, issues);
   if (project) out.project = project;
+
+  return out;
+}
+
+function normalizeTaskCardOrder(input: unknown, issues: string[]): string[] {
+  if (input === undefined) return [];
+  if (!Array.isArray(input)) {
+    issues.push("taskCardOrder must be an array");
+    return [];
+  }
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const [index, entry] of input.entries()) {
+    if (typeof entry !== "string") {
+      issues.push(`taskCardOrder[${index}] must be a string`);
+      continue;
+    }
+
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    if (/[\u0000-\u001F\u007F]/.test(trimmed)) {
+      issues.push(`taskCardOrder[${index}] contains control characters`);
+      continue;
+    }
+    if (trimmed.length > UI_TASK_CARD_ID_MAX_LENGTH) {
+      issues.push(`taskCardOrder[${index}] must be <= ${UI_TASK_CARD_ID_MAX_LENGTH} characters`);
+      continue;
+    }
+    if (seen.has(trimmed)) continue;
+
+    out.push(trimmed);
+    seen.add(trimmed);
+    if (out.length >= UI_TASK_CARD_ORDER_MAX_ITEMS) {
+      issues.push(`taskCardOrder must contain <= ${UI_TASK_CARD_ORDER_MAX_ITEMS} items`);
+      break;
+    }
+  }
 
   return out;
 }

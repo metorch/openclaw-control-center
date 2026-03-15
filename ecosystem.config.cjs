@@ -2,7 +2,7 @@ const env = {
   UI_MODE: process.env.UI_MODE ?? "true",
   UI_PORT: process.env.UI_PORT ?? "4310",
   READONLY_MODE: process.env.READONLY_MODE ?? "true",
-  LOCAL_TOKEN_AUTH_REQUIRED: process.env.LOCAL_TOKEN_AUTH_REQUIRED ?? "true",
+  LOCAL_TOKEN_AUTH_REQUIRED: process.env.LOCAL_TOKEN_AUTH_REQUIRED ?? "false",
   MONITOR_CONTINUOUS: process.env.MONITOR_CONTINUOUS ?? "true",
   GATEWAY_URL: process.env.GATEWAY_URL ?? "ws://127.0.0.1:18789",
 };

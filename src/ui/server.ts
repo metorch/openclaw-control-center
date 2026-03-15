@@ -42,6 +42,7 @@ import {
 import {
   loadCachedOpenClawConnectionSummary,
   loadCachedOpenClawMemorySummary,
+  invalidateOpenClawCliInsightsCache,
   primeOpenClawCliInsights,
   loadCachedOpenClawSecuritySummary,
   loadCachedOpenClawUpdateSummary,
@@ -54,6 +55,7 @@ import {
 import { appendOperationAudit } from "../runtime/operation-audit";
 import { ApprovalActionService } from "../runtime/approval-action-service";
 import { buildActionQueueLinks } from "../runtime/action-queue-links";
+import { invalidateStructuredDocHubCache } from "../runtime/doc-hub";
 import { loadReplayIndex, writeExportSnapshot } from "../runtime/replay-index";
 import { buildNotificationPreview, loadNotificationPolicy } from "../runtime/notification-policy";
 import {
@@ -64,8 +66,12 @@ import {
   previewStaleAcksPrune,
 } from "../runtime/notification-center";
 import { buildPixelState } from "../runtime/pixel-state";
-import { buildUsageCostSnapshot, type UsageCostMode, type UsageCostSnapshot } from "../runtime/usage-cost";
-import { type StructuredChatDocEntry } from "../runtime/doc-hub";
+import {
+  buildUsageCostSnapshot,
+  invalidateUsageCostSourceCache,
+  type UsageCostMode,
+  type UsageCostSnapshot,
+} from "../runtime/usage-cost";
 import {
   PROJECT_STATES,
   PROJECTS_PATH,
@@ -109,10 +115,30 @@ import {
   type SessionInterSessionSignal,
 } from "../runtime/session-conversations";
 import { loadBestEffortAgentRoster, type AgentRosterEntry, type AgentRosterSnapshot } from "../runtime/agent-roster";
+import { agentHierarchyRank, compareAgentHierarchy } from "../runtime/team-hierarchy";
+import {
+  invalidateAgentTeamEmbedSnapshotCache,
+  loadAgentTeamEmbedSnapshot,
+  type AgentTeamEmbedArtifact,
+  type AgentTeamEmbedDeliverable,
+  type AgentTeamEmbedEntry,
+  type AgentTeamEmbedFact,
+  type AgentTeamEmbedFocusedRun,
+  type AgentTeamEmbedPreviewArtifact,
+  type AgentTeamEmbedRun,
+  type AgentTeamEmbedSnapshot,
+  type AgentTeamEmbedTimelineItem,
+} from "../runtime/agent-team-embed";
+import { refreshAgentTeamServeSessionSnapshot } from "../runtime/agent-team-refresh";
 import {
   loadBestEffortOfficeSessionPresence,
   type OfficeSessionPresenceSnapshot,
 } from "../runtime/office-session-presence";
+import {
+  loadDocPreviewEntry as loadDocPreviewEntryFromDocsHub,
+  loadStructuredDocHubSnapshot as loadStructuredDocHubSnapshotFromDocsHub,
+  renderDocsSection as renderDocsSectionFromDocsHub,
+} from "./docs-hub";
 import type {
   AgentRunState,
   BudgetEvaluation,
@@ -149,12 +175,6 @@ const LONG_TERM_MEMORY_FILE_CANDIDATES = [
   join(AGENT_ROOT_DIR, "IDENTITY.md"),
   join(OPENCLAW_HOME_DIR, "memory", "MEMORY.md"),
 ];
-const DOC_HUB_DIR_CANDIDATES = [
-  { dir: DOCS_DIR, category: "项目文档" },
-  { dir: join(process.cwd(), "runtime", "digests"), category: "日报文档" },
-  { dir: join(process.cwd(), "runtime", "evidence"), category: "证据报告" },
-];
-const DOC_HUB_CHAT_INDEX_PATH = join(process.cwd(), "runtime", "doc-hub-chat.json");
 const HTML_HEAVY_CACHE_TTL_MS = 3_000;
 const HTML_USAGE_CACHE_TTL_MS = 10_000;
 const HTML_SNAPSHOT_CACHE_TTL_MS = 10_000;
@@ -172,6 +192,9 @@ const OPENCLAW_WORKSPACE_ROOT = resolveOpenClawWorkspaceRoot({
   openclawHomeDir: OPENCLAW_HOME_DIR,
   configPath: OPENCLAW_CONFIG_PATH,
 });
+const CONTROL_CENTER_ROOT = resolve(process.cwd());
+const CUSTOM_STAFF_AVATAR_ROUTE_PREFIX = "/assets/staff-custom/";
+const CUSTOM_STAFF_AVATAR_DIR = join(CONTROL_CENTER_ROOT, "runtime", "assets", "staff-custom");
 const WORKSPACE_EDITABLE_SKIP_DIRS = new Set(["node_modules", ".git", "dist", "coverage"]);
 const WORKSPACE_EDITABLE_EXTENSIONS = new Set([".md", ".markdown"]);
 const MEMORY_EDITABLE_EXTENSIONS = new Set([".md", ".markdown", ".txt"]);
@@ -204,7 +227,11 @@ const AGENT_DOCUMENT_FILE_CANDIDATES = [
 ] as const;
 const STAFF_ROLE_EVIDENCE_FILE_CANDIDATES = [
   "IDENTITY.md",
+  "SOUL.md",
   "AGENTS.md",
+  "BOOTSTRAP.md",
+  "HEARTBEAT.md",
+  "TOOLS.md",
   "README.md",
   "MEMORY.md",
   "focus.md",
@@ -410,6 +437,39 @@ const ANIMAL_CATALOG = [
   },
 ] as const;
 const FALLBACK_ANIMAL_CATALOG = ANIMAL_CATALOG.filter((item) => item.key !== "robot");
+const CUSTOM_STAFF_AVATAR_CATALOG = [
+  { key: "fox", title: "Fox Lead", accent: "#ff8f4d", fileName: "fox.png" },
+  { key: "panda", title: "Panda Architect", accent: "#91bdd8", fileName: "panda.png" },
+  { key: "shiba", title: "Shiba Dispatcher", accent: "#f3ab5f", fileName: "shiba.png" },
+  { key: "cat", title: "Cat Frontend", accent: "#ffb783", fileName: "cat.png" },
+  { key: "tiger", title: "Tiger Backend", accent: "#ff985a", fileName: "tiger.png" },
+  { key: "elephant", title: "Elephant QA", accent: "#9aa7bf", fileName: "elephant.png" },
+  { key: "dolphin", title: "Dolphin Ops", accent: "#73c7f4", fileName: "dolphin.png" },
+  { key: "lion", title: "Lion Captain", accent: "#f1a35f", fileName: "lion.png" },
+  { key: "deer", title: "Deer Runner", accent: "#c89d67", fileName: "deer.png" },
+  { key: "bird", title: "Bird Scout", accent: "#d7d9df", fileName: "bird.png" },
+] as const;
+type CustomStaffAvatarKey = (typeof CUSTOM_STAFF_AVATAR_CATALOG)[number]["key"];
+const CUSTOM_STAFF_AVATAR_BY_KEY = new Map<
+  CustomStaffAvatarKey,
+  (typeof CUSTOM_STAFF_AVATAR_CATALOG)[number]
+>(CUSTOM_STAFF_AVATAR_CATALOG.map((item) => [item.key, item]));
+const CUSTOM_STAFF_AVATAR_FILE_NAMES = new Set<string>(CUSTOM_STAFF_AVATAR_CATALOG.map((item) => item.fileName));
+const CORE_STAFF_AVATAR_OVERRIDES = new Map<string, CustomStaffAvatarKey>([
+  ["main", "fox"],
+  ["jarvis", "fox"],
+  ["dispatcher", "shiba"],
+  ["productdispatcher", "shiba"],
+  ["product", "shiba"],
+  ["architect", "panda"],
+  ["architecture", "panda"],
+  ["backend", "tiger"],
+  ["frontend", "cat"],
+  ["qa", "elephant"],
+  ["quality", "elephant"],
+  ["ops", "dolphin"],
+  ["devops", "dolphin"],
+]);
 
 type DashboardSearchScope = (typeof DASHBOARD_SEARCH_SCOPES)[number];
 export type DashboardSection = (typeof DASHBOARD_SECTIONS)[number];
@@ -462,6 +522,7 @@ interface DashboardOptions {
   compactStatusStrip: boolean;
   usageView: UsageView;
   preferencesPath: string;
+  taskCardOrder: string[];
   search: DashboardSearchQuery;
 }
 
@@ -486,22 +547,18 @@ interface TeamMemberSnapshot {
   toolsProfile: string;
 }
 
+interface OpenClawModelOption {
+  value: string;
+  label: string;
+}
+
 interface TeamSnapshot {
   missionStatement: string;
   members: TeamMemberSnapshot[];
   sourcePath: string;
   detail: string;
-}
-
-interface DocEntry {
-  title: string;
-  excerpt: string;
-  category: string;
-  sourcePath: string;
-  updatedAt: string;
-  sourceType: "file" | "chat";
-  sourceSessionKey?: string;
-  sourceAgentId?: string;
+  modelOptions: OpenClawModelOption[];
+  modelEditable: boolean;
 }
 
 type EditableFileScope = "memory" | "workspace";
@@ -601,6 +658,49 @@ let renderLiveSessionsCache:
 let renderLiveSessionsInFlight: Promise<Awaited<ReturnType<ToolClient["sessionsList"]>>> | undefined;
 let renderReplayPreviewInFlight: Promise<Awaited<ReturnType<typeof loadReplayIndex>>> | undefined;
 
+interface DashboardRefreshResult {
+  refreshedAt: string;
+  fixtureDir: string;
+  statusPath: string;
+  dashboardPath: string;
+  command: string;
+  args: string[];
+  statusFileUpdatedAt?: string;
+  dashboardFileUpdatedAt?: string;
+  embeddedSourceKind: AgentTeamEmbedSnapshot["sourceKind"];
+  embeddedFreshnessState?: string;
+  embeddedUpdatedAt?: string;
+  snapshotGeneratedAt: string;
+  docsHubGeneratedAt: string;
+  docsHubEntryCount: number;
+  scopeLabels: string[];
+}
+
+function invalidateUiRenderCaches(): void {
+  renderSessionPreviewCache = undefined;
+  renderUsageCostSummaryCache = undefined;
+  renderUsageCostFullCache = undefined;
+  renderOfficePresenceCache = undefined;
+  renderReplayPreviewCache = undefined;
+  renderStaffRecentActivityCache = undefined;
+  renderTaskEvidenceCache = undefined;
+  renderSnapshotCache = undefined;
+  renderSnapshotInFlight = undefined;
+  renderUsageCostSummaryInFlight = undefined;
+  renderUsageCostFullInFlight = undefined;
+  renderLiveSessionsCache = undefined;
+  renderLiveSessionsInFlight = undefined;
+  renderReplayPreviewInFlight = undefined;
+}
+
+function invalidateDashboardRefreshCaches(): void {
+  invalidateUiRenderCaches();
+  invalidateAgentTeamEmbedSnapshotCache();
+  invalidateStructuredDocHubCache();
+  invalidateOpenClawCliInsightsCache();
+  invalidateUsageCostSourceCache();
+}
+
 type GlobalVisibilityTaskStatus = "done" | "not_done";
 
 interface GlobalVisibilityTaskRow {
@@ -667,11 +767,26 @@ interface OpenclawCronJobSummary {
   sourcePath: string;
 }
 
+interface CronBoardRow {
+  source: "openclaw" | "runtime";
+  sourceLabel: string;
+  jobId: string;
+  name: string;
+  owner: string;
+  purpose: string;
+  schedule: string;
+  status: string;
+  statusLabel: string;
+  nextRun: string;
+  dueInSeconds?: number;
+}
+
 interface AgentAnimalIdentity {
   animal: string;
   title: string;
   accent: string;
   sprite: string;
+  imageHref?: string;
 }
 
 interface OfficeSpaceCard {
@@ -701,11 +816,19 @@ interface StaffOverviewCard {
   displayName: string;
   identity: AgentAnimalIdentity;
   roleLabel: string;
+  statusTone: "idle" | "working" | "issue";
+  statusDotLabel: string;
   statusLabel: string;
   currentWorkLabel: string;
   currentWork: string;
   recentOutput: string;
   scheduledLabel: string;
+  model: string;
+  workspace: string;
+  toolsProfile: string;
+  modelOptions: OpenClawModelOption[];
+  modelEditable: boolean;
+  configPath: string;
 }
 
 interface StaffRecentActivity {
@@ -828,6 +951,33 @@ interface TaskCertaintyCard {
   detailHref: string;
 }
 
+interface TaskSpotlightCard {
+  cardId: string;
+  cardKind: "task" | "timed_job";
+  taskId: string;
+  title: string;
+  projectTitle: string;
+  taskStatus: TaskState | "scheduled";
+  ownerLabel: string;
+  statusTone: "idle" | "working" | "issue" | "scheduled";
+  statusLabel: string;
+  statusDotLabel: string;
+  priorityLabel: string;
+  boardStatusLabel: string;
+  boardStatusTone: string;
+  summary: string;
+  recentSignal: string;
+  nextStep: string;
+  dueLabel: string;
+  scheduleLabel: string;
+  updatedLabel: string;
+  detailHref: string;
+  priorityBucket: number;
+  dueSortValue: number;
+  updatedSortValue: number;
+  liveSignalCount: number;
+}
+
 interface TaskDetailSessionSignal {
   sessionKey: string;
   agentId?: string;
@@ -882,6 +1032,17 @@ interface LinkageGraph {
   };
 }
 
+function resolveCustomStaffAvatarAssetPath(pathname: string): string | undefined {
+  if (!pathname.startsWith(CUSTOM_STAFF_AVATAR_ROUTE_PREFIX)) {
+    return undefined;
+  }
+  const fileName = pathname.slice(CUSTOM_STAFF_AVATAR_ROUTE_PREFIX.length).trim();
+  if (!fileName || fileName !== basename(fileName) || !CUSTOM_STAFF_AVATAR_FILE_NAMES.has(fileName)) {
+    return undefined;
+  }
+  return join(CUSTOM_STAFF_AVATAR_DIR, fileName);
+}
+
 export function startUiServer(port: number, toolClient: ToolClient): Server {
   const approvalActions = new ApprovalActionService(toolClient);
 
@@ -895,6 +1056,18 @@ export function startUiServer(port: number, toolClient: ToolClient): Server {
       const path = url.pathname;
       const legacySection = resolveLegacyDashboardSection(path);
       const legacyAnchor = resolveLegacyDashboardAnchor(path);
+
+      if (method === "GET") {
+        const customStaffAvatarAssetPath = resolveCustomStaffAvatarAssetPath(path);
+        if (customStaffAvatarAssetPath) {
+          try {
+            const image = await readFile(customStaffAvatarAssetPath);
+            return writeBinary(res, 200, image, "image/png");
+          } catch {
+            return writeApiError(res, 404, "NOT_FOUND", "Staff avatar asset not found.");
+          }
+        }
+      }
 
       if (method === "GET" && (path === "/" || legacySection)) {
         const prefs = await loadUiPreferences();
@@ -923,6 +1096,7 @@ export function startUiServer(port: number, toolClient: ToolClient): Server {
 
         if (hasAnyQueryKey(url.searchParams, ["quick", "status", "owner", "project", "compact", "lang", "usage_view"])) {
           await saveUiPreferences({
+            ...prefs.preferences,
             language,
             compactStatusStrip,
             quickFilter: filters.quick ?? "all",
@@ -941,9 +1115,40 @@ export function startUiServer(port: number, toolClient: ToolClient): Server {
           compactStatusStrip,
           usageView,
           preferencesPath: prefs.path,
+          taskCardOrder: prefs.preferences.taskCardOrder,
           search,
         });
         return writeText(res, 200, html, "text/html; charset=utf-8");
+      }
+
+      if (method === "POST" && path === "/api/dashboard/refresh") {
+        assertAllowedQueryParams(url.searchParams, [], true);
+        try {
+          const refresh = await refreshDashboardSources(toolClient);
+          return writeJson(res, 200, {
+            ok: true,
+            refresh: {
+              refreshedAt: refresh.refreshedAt,
+              fixtureDir: refresh.fixtureDir,
+              statusPath: refresh.statusPath,
+              dashboardPath: refresh.dashboardPath,
+              command: refresh.command,
+              args: refresh.args,
+              statusFileUpdatedAt: refresh.statusFileUpdatedAt,
+              dashboardFileUpdatedAt: refresh.dashboardFileUpdatedAt,
+              embeddedSourceKind: refresh.embeddedSourceKind,
+              embeddedFreshnessState: refresh.embeddedFreshnessState,
+              embeddedUpdatedAt: refresh.embeddedUpdatedAt,
+              snapshotGeneratedAt: refresh.snapshotGeneratedAt,
+              docsHubGeneratedAt: refresh.docsHubGeneratedAt,
+              docsHubEntryCount: refresh.docsHubEntryCount,
+              scopes: refresh.scopeLabels,
+            },
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to refresh dashboard sources.";
+          return writeApiError(res, 500, "INTERNAL_ERROR", message);
+        }
       }
 
       if (method === "GET" && path === "/docs") {
@@ -955,7 +1160,8 @@ export function startUiServer(port: number, toolClient: ToolClient): Server {
         ).join("");
         const docsHref = buildHomeHref({ quick: "all" }, true, "docs", language);
         const homeHref = buildHomeHref({ quick: "all" }, true, "overview", language);
-        const html = `<!doctype html><html><head><meta charset="utf-8" /><title>${escapeHtml(t("OpenClaw Control Center Docs", "OpenClaw Control Center 文档"))}</title></head><body><h1>${escapeHtml(t("OpenClaw Control Center Docs", "OpenClaw Control Center 文档"))}</h1><ul>${links}</ul><p><a href="${escapeHtml(docsHref)}">${escapeHtml(t("Open document workbench", "打开文档工作台"))}</a> · <a href="${escapeHtml(homeHref)}">${escapeHtml(t("Back to control center", "返回控制中心"))}</a></p></body></html>`;
+        const docsTitle = pickUiText(language, "AI Employee System Docs", "AI员工系统文档");
+        const html = `<!doctype html><html><head><meta charset="utf-8" /><title>${escapeHtml(docsTitle)}</title></head><body><h1>${escapeHtml(docsTitle)}</h1><ul>${links}</ul><p><a href="${escapeHtml(docsHref)}">${escapeHtml(t("Open staff docs", "打开员工文档"))}</a> · <a href="${escapeHtml(homeHref)}">${escapeHtml(t("Back to AI employee system", "返回AI员工系统"))}</a></p></body></html>`;
         return writeText(res, 200, html, "text/html; charset=utf-8");
       }
 
@@ -1060,6 +1266,23 @@ export function startUiServer(port: number, toolClient: ToolClient): Server {
         });
       }
 
+      if (method === "GET" && path === "/api/docs/preview") {
+        assertAllowedQueryParams(url.searchParams, ["docId"], true);
+        const docId = normalizeQueryString(url.searchParams.get("docId"), "docId", 128, true);
+        if (!docId) {
+          throw new RequestValidationError("docId is required.", 400);
+        }
+        const snapshot = await readReadModelSnapshot();
+        const preview = await loadDocPreviewEntryFromDocsHub(snapshot, toolClient, docId);
+        if (!preview) {
+          return writeApiError(res, 404, "NOT_FOUND", "Document preview not found in current docs hub.");
+        }
+        return writeJson(res, 200, {
+          ok: true,
+          preview,
+        });
+      }
+
       if (method === "GET" && path === "/api/files") {
         assertAllowedQueryParams(url.searchParams, ["scope"], true);
         const scopeParam = normalizeQueryString(url.searchParams.get("scope"), "scope", 24, true);
@@ -1136,7 +1359,6 @@ export function startUiServer(port: number, toolClient: ToolClient): Server {
       }
 
       if (method === "PATCH" && path === "/api/ui/preferences") {
-        assertMutationAuthorized(req, "/api/ui/preferences");
         assertJsonContentType(req);
         const payload = expectObject(await readJsonBody(req), "ui preferences payload");
         const current = await loadUiPreferences();
@@ -1147,6 +1369,22 @@ export function startUiServer(port: number, toolClient: ToolClient): Server {
           path: saved.path,
           preferences: saved.preferences,
           issues: saved.issues,
+        });
+      }
+
+      if (method === "PATCH" && path.startsWith("/api/staff/") && path.endsWith("/model")) {
+        assertMutationAuthorized(req, "/api/staff/:agentId/model");
+        assertJsonContentType(req);
+        const agentId = decodeRouteParam(path, /^\/api\/staff\/([^/]+)\/model$/, "agentId");
+        const payload = expectObject(await readJsonBody(req), "staff model payload");
+        const model = requiredBoundedString(payload.model, "model", 240);
+        const saved = await updateOpenClawAgentModel(agentId, model);
+        if (!saved) {
+          return writeApiError(res, 404, "NOT_FOUND", "Staff member not found in openclaw.json.");
+        }
+        return writeJson(res, 200, {
+          ok: true,
+          member: saved,
         });
       }
 
@@ -1269,7 +1507,7 @@ export function startUiServer(port: number, toolClient: ToolClient): Server {
           ok: true,
           template: {
             subscription: {
-              planLabel: "OpenClaw Team Plan",
+              planLabel: "AI Employee Plan",
               unit: "USD",
               consumed: 120,
               remaining: 880,
@@ -2045,6 +2283,46 @@ async function readReadModelSnapshotWithLiveSessions(toolClient: ToolClient): Pr
   }
 }
 
+async function refreshDashboardSources(toolClient: ToolClient): Promise<DashboardRefreshResult> {
+  invalidateDashboardRefreshCaches();
+
+  const refresh = await refreshAgentTeamServeSessionSnapshot({
+    workspaceRoot: OPENCLAW_WORKSPACE_ROOT,
+  });
+
+  // Reset transient caches again so the follow-up reload reflects the freshly written files.
+  invalidateDashboardRefreshCaches();
+
+  const [embedded, snapshot] = await Promise.all([
+    loadAgentTeamEmbedSnapshot(),
+    readReadModelSnapshotWithLiveSessions(toolClient),
+  ]);
+  const docHubSnapshot = await loadStructuredDocHubSnapshotFromDocsHub(snapshot, toolClient);
+
+  return {
+    refreshedAt: refresh.refreshedAt,
+    fixtureDir: refresh.fixtureDir,
+    statusPath: refresh.statusPath,
+    dashboardPath: refresh.dashboardPath,
+    command: refresh.command,
+    args: refresh.args,
+    statusFileUpdatedAt: refresh.statusFileUpdatedAt,
+    dashboardFileUpdatedAt: refresh.dashboardFileUpdatedAt,
+    embeddedSourceKind: embedded.sourceKind,
+    embeddedFreshnessState: embedded.runtime.freshnessState,
+    embeddedUpdatedAt: embedded.runtime.updatedAt,
+    snapshotGeneratedAt: snapshot.generatedAt,
+    docsHubGeneratedAt: docHubSnapshot.generatedAt,
+    docsHubEntryCount: docHubSnapshot.items.length,
+    scopeLabels: [
+      "embedded agent-team snapshot",
+      "chat-derived docs hub",
+      "usage and status caches",
+      "live session snapshot",
+    ],
+  };
+}
+
 async function primeUiRenderCaches(toolClient: ToolClient): Promise<void> {
   try {
     const snapshot = await readReadModelSnapshotWithLiveSessions(toolClient);
@@ -2065,6 +2343,14 @@ async function readNotificationCenter(snapshot: ReadModelSnapshot): Promise<Noti
 
 function pickUiText(language: UiLanguage, en: string, zh: string): string {
   return language === "zh" ? zh : en;
+}
+
+function uiEmployeeBrand(language: UiLanguage): string {
+  return pickUiText(language, "AI Employees", "AI员工");
+}
+
+function uiEmployeeSystemBrand(language: UiLanguage): string {
+  return pickUiText(language, "AI Employee System", "AI员工系统");
 }
 
 function delay(ms: number): Promise<void> {
@@ -2279,6 +2565,140 @@ function displayCronScheduleLabel(scheduleLabel: string, language: UiLanguage): 
   if (normalized.startsWith("every") || normalized.startsWith("每 ")) return scheduleLabel;
   if (normalized === "system interval") return pickUiText(language, "System interval", "系统间隔");
   return safeTruncate(scheduleLabel, 18);
+}
+
+function parseCronExpressionParts(scheduleLabel: string): string[] | undefined {
+  const trimmed = scheduleLabel.trim();
+  if (!trimmed.toLowerCase().startsWith("cron ")) return undefined;
+  const expr = trimmed.slice(5).trim();
+  const parts = expr.split(/\s+/).filter(Boolean);
+  return parts.length === 5 ? parts : undefined;
+}
+
+function cronWeekdayLabel(day: string, language: UiLanguage): string | undefined {
+  const normalized = day.trim().toUpperCase();
+  const zhMap = new Map([
+    ["0", "周日"],
+    ["7", "周日"],
+    ["SUN", "周日"],
+    ["1", "周一"],
+    ["MON", "周一"],
+    ["2", "周二"],
+    ["TUE", "周二"],
+    ["3", "周三"],
+    ["WED", "周三"],
+    ["4", "周四"],
+    ["THU", "周四"],
+    ["5", "周五"],
+    ["FRI", "周五"],
+    ["6", "周六"],
+    ["SAT", "周六"],
+  ]);
+  const enMap = new Map([
+    ["0", "Sun"],
+    ["7", "Sun"],
+    ["SUN", "Sun"],
+    ["1", "Mon"],
+    ["MON", "Mon"],
+    ["2", "Tue"],
+    ["TUE", "Tue"],
+    ["3", "Wed"],
+    ["WED", "Wed"],
+    ["4", "Thu"],
+    ["THU", "Thu"],
+    ["5", "Fri"],
+    ["FRI", "Fri"],
+    ["6", "Sat"],
+    ["SAT", "Sat"],
+  ]);
+  return language === "zh" ? zhMap.get(normalized) : enMap.get(normalized);
+}
+
+function formatClockTime(hours: string, minutes: string): string {
+  return `${hours.padStart(2, "0")}:${minutes.padStart(2, "0")}`;
+}
+
+function humanizeTimedJobScheduleLabel(scheduleLabel: string, language: UiLanguage): string {
+  const normalized = scheduleLabel.trim().toLowerCase();
+  if (!normalized || normalized === "-") return pickUiText(language, "Not scheduled", "未排好");
+  if (normalized === "system interval") return pickUiText(language, "Auto loop", "自动轮询");
+  if (normalized.startsWith("every ")) {
+    const value = scheduleLabel.trim().replace(/^every\s+/i, "");
+    return pickUiText(language, `Every ${value}`, scheduleLabel.trim());
+  }
+  if (normalized.startsWith("每 ")) return scheduleLabel.trim();
+
+  const parts = parseCronExpressionParts(scheduleLabel);
+  if (!parts) return displayCronScheduleLabel(scheduleLabel, language);
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+
+  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    return pickUiText(language, `Daily ${formatClockTime(hour, minute)}`, `每天 ${formatClockTime(hour, minute)}`);
+  }
+
+  if (/^\d+$/.test(minute) && /^\*\/\d+$/.test(hour) && dayOfMonth === "*" && month === "*" && dayOfWeek === "*") {
+    const everyHours = hour.slice(2);
+    return pickUiText(language, `Every ${everyHours}h`, `每 ${everyHours} 小时`);
+  }
+
+  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dayOfMonth === "*" && month === "*" && dayOfWeek !== "*") {
+    const weekday = cronWeekdayLabel(dayOfWeek, language);
+    if (weekday) {
+      return language === "zh"
+        ? `${weekday} ${formatClockTime(hour, minute)}`
+        : `${weekday} ${formatClockTime(hour, minute)}`;
+    }
+  }
+
+  return displayCronScheduleLabel(scheduleLabel, language);
+}
+
+function humanizeTimedJobWindowLabel(
+  nextRun: string,
+  dueInSeconds: number | undefined,
+  language: UiLanguage,
+): string {
+  if (Number.isFinite(dueInSeconds)) {
+    const relative = formatSeconds(dueInSeconds, language);
+    return language === "zh" ? `${relative}后` : `In ${relative}`;
+  }
+
+  const parsed = toSortableMs(nextRun);
+  if (!parsed) return pickUiText(language, "Waiting for sync", "等待同步");
+
+  const date = new Date(parsed);
+  const now = new Date();
+  const sameDay = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  const isTomorrow =
+    date.getFullYear() === tomorrow.getFullYear() &&
+    date.getMonth() === tomorrow.getMonth() &&
+    date.getDate() === tomorrow.getDate();
+  const timeText = formatClockTime(String(date.getHours()), String(date.getMinutes()));
+
+  if (sameDay) return pickUiText(language, `Today ${timeText}`, `今天 ${timeText}`);
+  if (isTomorrow) return pickUiText(language, `Tomorrow ${timeText}`, `明天 ${timeText}`);
+  if (date.getFullYear() === now.getFullYear()) {
+    return language === "zh"
+      ? `${date.getMonth() + 1}月${date.getDate()}日 ${timeText}`
+      : `${date.toLocaleString("en-US", { month: "short" })} ${date.getDate()} ${timeText}`;
+  }
+  return language === "zh"
+    ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${timeText}`
+    : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${timeText}`;
+}
+
+export function humanizeTimedJobScheduleLabelForSmoke(scheduleLabel: string, language: UiLanguage): string {
+  return humanizeTimedJobScheduleLabel(scheduleLabel, language);
+}
+
+export function humanizeTimedJobWindowLabelForSmoke(
+  nextRun: string,
+  dueInSeconds: number | undefined,
+  language: UiLanguage,
+): string {
+  return humanizeTimedJobWindowLabel(nextRun, dueInSeconds, language);
 }
 
 function summarizeNames(items: string[], language: UiLanguage, emptyLabel: string): string {
@@ -3083,6 +3503,41 @@ function renderOpenClawConnectionCard(
     </article>`;
   }
 
+  const connectionState = buildOpenClawConnectionState(summary, usageCost, language);
+
+  return `<article class="card" id="overview-connection-health">
+    <div class="overview-command-head">
+      <div>
+        <h2>${escapeHtml(pickUiText(language, "Connection health", "接线状态"))}</h2>
+        <div class="meta">${escapeHtml(connectionState.headline)}</div>
+      </div>
+      <a class="btn" href="${escapeHtml(buildHomeHref({ quick: "all" }, true, "settings", language))}">${escapeHtml(
+        pickUiText(language, "Open settings", "查看设置"),
+      )}</a>
+    </div>
+    <div class="status-strip">
+      <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Healthy links", "已接通"))}</span><strong>${connectionState.connectedCount}/${connectionState.rows.length}</strong></div>
+      <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Updated", "更新"))}</span><strong>${escapeHtml(formatTimeAgoFromNow(summary.generatedAt, language))}</strong></div>
+    </div>
+    <div class="decision-list">${connectionState.rows
+      .map(
+        (item) => `<div class="decision-row">
+          <div class="decision-row-copy">
+            <strong>${escapeHtml(item.label)}</strong>
+            <div class="meta">${badge(item.status, insightStatusLabel(item.status, language))} ${escapeHtml(item.detail)}</div>
+          </div>
+          <div class="decision-row-value">${escapeHtml(item.value)}</div>
+        </div>`,
+      )
+      .join("")}</div>
+  </article>`;
+}
+
+function buildOpenClawConnectionState(
+  summary: OpenClawConnectionSummary,
+  usageCost: UsageCostSnapshot,
+  language: UiLanguage,
+) {
   const usageSourceSummary = connectorInsightStatus(usageCost, language);
   const rows = [
     ...summary.items.map((item) => ({
@@ -3104,36 +3559,56 @@ function renderOpenClawConnectionCard(
     },
   ];
   const connectedCount = rows.filter((item) => item.status === "ok").length;
-  const overallStatus =
-    summary.status === "blocked" || usageSourceSummary.status === "blocked"
-      ? "blocked"
-      : summary.status === "warn" || usageSourceSummary.status === "warn"
-        ? "warn"
-        : summary.status === "info"
-          ? "info"
-          : "ok";
+  const overallStatus = mergeInsightStatuses([summary.status, usageSourceSummary.status]);
   const headline =
     overallStatus === "ok"
       ? pickUiText(language, "Control Center is fully connected to this OpenClaw environment.", "控制中心已经完整接上这台 OpenClaw 环境。")
       : overallStatus === "blocked"
         ? pickUiText(language, "Some core links are still blocked.", "有核心接线还没有打通。")
         : pickUiText(language, "Control Center is usable, but some panels are still running in partial mode.", "控制中心已经可用，但有些面板仍处于部分接线状态。");
+  return {
+    rows,
+    connectedCount,
+    overallStatus,
+    headline,
+  };
+}
 
-  return `<article class="card" id="overview-connection-health">
+function mergeInsightStatuses(statuses: Array<OpenClawInsightStatus | undefined>): OpenClawInsightStatus {
+  if (statuses.some((status) => status === "blocked")) return "blocked";
+  if (statuses.some((status) => status === "warn")) return "warn";
+  if (statuses.some((status) => status === "info")) return "info";
+  return "ok";
+}
+
+function renderSettingsConnectionPanel(
+  summary: OpenClawConnectionSummary | undefined,
+  usageCost: UsageCostSnapshot,
+  language: UiLanguage,
+): string {
+  if (!summary) {
+    return `<section class="settings-status-panel" id="settings-connection-health">
+      <div class="overview-command-head">
+        <h3>${escapeHtml(pickUiText(language, "Connection health", "接线状态"))}</h3>
+        <div>${badge("info", pickUiText(language, "Loading", "读取中"))}</div>
+      </div>
+      <div class="empty-state">${escapeHtml(pickUiText(language, "Connection signals are loading.", "正在读取接线状态。"))}</div>
+    </section>`;
+  }
+  const connectionState = buildOpenClawConnectionState(summary, usageCost, language);
+  return `<section class="settings-status-panel" id="settings-connection-health">
     <div class="overview-command-head">
       <div>
-        <h2>${escapeHtml(pickUiText(language, "Connection health", "接线状态"))}</h2>
-        <div class="meta">${escapeHtml(headline)}</div>
+        <h3>${escapeHtml(pickUiText(language, "Connection health", "接线状态"))}</h3>
+        <div class="meta">${escapeHtml(connectionState.headline)}</div>
       </div>
-      <a class="btn" href="${escapeHtml(buildHomeHref({ quick: "all" }, true, "settings", language))}">${escapeHtml(
-        pickUiText(language, "Open settings", "查看设置"),
-      )}</a>
+      <div>${badge(connectionState.overallStatus, insightStatusLabel(connectionState.overallStatus, language))}</div>
     </div>
-    <div class="status-strip">
-      <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Healthy links", "已接通"))}</span><strong>${connectedCount}/${rows.length}</strong></div>
+    <div class="status-strip compact">
+      <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Healthy links", "已接通"))}</span><strong>${connectionState.connectedCount}/${connectionState.rows.length}</strong></div>
       <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Updated", "更新"))}</span><strong>${escapeHtml(formatTimeAgoFromNow(summary.generatedAt, language))}</strong></div>
     </div>
-    <div class="decision-list">${rows
+    <div class="decision-list">${connectionState.rows
       .map(
         (item) => `<div class="decision-row">
           <div class="decision-row-copy">
@@ -3144,20 +3619,22 @@ function renderOpenClawConnectionCard(
         </div>`,
       )
       .join("")}</div>
-  </article>`;
+  </section>`;
 }
 
-function renderOpenClawSecuritySection(
+function renderSettingsSecurityPanel(
   summary: OpenClawSecuritySummary | undefined,
   language: UiLanguage,
 ): string {
   if (!summary) {
-    return `<section class="card" id="security-risk-summary">
-      <h2>${escapeHtml(pickUiText(language, "Security risk summary", "安全风险摘要"))}</h2>
+    return `<section class="settings-status-panel" id="security-risk-summary">
+      <div class="overview-command-head">
+        <h3>${escapeHtml(pickUiText(language, "Security risk summary", "安全风险摘要"))}</h3>
+        <div>${badge("info", pickUiText(language, "Loading", "读取中"))}</div>
+      </div>
       <div class="empty-state">${escapeHtml(pickUiText(language, "Security audit is loading.", "正在读取安全审计。"))}</div>
     </section>`;
   }
-
   const headline =
     summary.status === "blocked"
       ? pickUiText(language, "There are critical security issues to address.", "当前有需要立刻处理的安全风险。")
@@ -3178,23 +3655,23 @@ function renderOpenClawSecuritySection(
               safeTruncate(normalizeInlineText(localized.detail), 200),
             )}</div>${
               localized.remediation
-                ? `<div class="meta">${escapeHtml(pickUiText(language, "Next step", "下一步"))}：${escapeHtml(
-                    safeTruncate(normalizeInlineText(localized.remediation), 180),
-                  )}</div>`
-                : ""
+              ? `<div class="meta">${escapeHtml(pickUiText(language, "Next step", "下一步"))}：${escapeHtml(
+                  safeTruncate(normalizeInlineText(localized.remediation), 180),
+                )}</div>`
+              : ""
             }</li>`;
           })
           .join("")}</ul>`;
 
-  return `<section class="card" id="security-risk-summary">
+  return `<section class="settings-status-panel" id="security-risk-summary">
     <div class="overview-command-head">
       <div>
-        <h2>${escapeHtml(pickUiText(language, "Security risk summary", "安全风险摘要"))}</h2>
+        <h3>${escapeHtml(pickUiText(language, "Security risk summary", "安全风险摘要"))}</h3>
         <div class="meta">${escapeHtml(headline)}</div>
       </div>
       <div>${badge(summary.status, insightStatusLabel(summary.status, language))}</div>
     </div>
-    <div class="status-strip">
+    <div class="status-strip compact">
       <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Critical", "高风险"))}</span><strong>${summary.counts.critical}</strong></div>
       <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Warnings", "需关注"))}</span><strong>${summary.counts.warn}</strong></div>
       <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Info", "提示"))}</span><strong>${summary.counts.info}</strong></div>
@@ -3203,13 +3680,16 @@ function renderOpenClawSecuritySection(
   </section>`;
 }
 
-function renderOpenClawUpdateSection(
+function renderSettingsUpdatePanel(
   summary: OpenClawUpdateSummary | undefined,
   language: UiLanguage,
 ): string {
   if (!summary) {
-    return `<section class="card" id="update-status-card">
-      <h2>${escapeHtml(pickUiText(language, "Update status", "更新状态"))}</h2>
+    return `<section class="settings-status-panel" id="update-status-card">
+      <div class="overview-command-head">
+        <h3>${escapeHtml(pickUiText(language, "Update status", "更新状态"))}</h3>
+        <div>${badge("info", pickUiText(language, "Loading", "读取中"))}</div>
+      </div>
       <div class="empty-state">${escapeHtml(pickUiText(language, "Update status is loading.", "正在读取更新状态。"))}</div>
     </section>`;
   }
@@ -3217,15 +3697,15 @@ function renderOpenClawUpdateSection(
   const headline = summary.updateAvailable
     ? pickUiText(language, "A newer OpenClaw version is available.", "发现了更新版本。")
     : pickUiText(language, "This OpenClaw runtime is already up to date.", "当前 OpenClaw 已是最新。");
-  return `<section class="card" id="update-status-card">
+  return `<section class="settings-status-panel" id="update-status-card">
     <div class="overview-command-head">
       <div>
-        <h2>${escapeHtml(pickUiText(language, "Update status", "更新状态"))}</h2>
+        <h3>${escapeHtml(pickUiText(language, "Update status", "更新状态"))}</h3>
         <div class="meta">${escapeHtml(headline)}</div>
       </div>
       <div>${badge(summary.status, insightStatusLabel(summary.status, language))}</div>
     </div>
-    <div class="status-strip">
+    <div class="status-strip compact">
       <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Current", "当前版本"))}</span><strong>${escapeHtml(localizeCurrentVersionValue(summary, language))}</strong></div>
       <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Latest", "最新版本"))}</span><strong>${escapeHtml(summary.latestVersion ?? "-")}</strong></div>
       <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Channel", "更新通道"))}</span><strong>${escapeHtml(localizeUpdateChannelLabel(summary.channelLabel, language))}</strong></div>
@@ -3233,6 +3713,72 @@ function renderOpenClawUpdateSection(
     <div class="meta">${escapeHtml(pickUiText(language, "Install method", "安装方式"))} ${escapeHtml(localizeUpdateInstallKind(summary.installKind, language))} · ${escapeHtml(
       pickUiText(language, "Package manager", "包管理器"),
     )} ${escapeHtml(summary.packageManager ?? "-")}</div>
+  </section>`;
+}
+
+function renderSettingsEnvironmentStatusCard(
+  connectionSummary: OpenClawConnectionSummary | undefined,
+  usageCost: UsageCostSnapshot,
+  securitySummary: OpenClawSecuritySummary | undefined,
+  updateSummary: OpenClawUpdateSummary | undefined,
+  language: UiLanguage,
+): string {
+  const overallStatus = mergeInsightStatuses([
+    connectionSummary ? buildOpenClawConnectionState(connectionSummary, usageCost, language).overallStatus : "info",
+    securitySummary?.status,
+    updateSummary?.status,
+  ]);
+  const headline =
+    overallStatus === "blocked"
+      ? pickUiText(language, "Some environment issues need action before you trust the whole system state.", "有环境问题需要先处理，再继续相信整套系统状态。")
+      : overallStatus === "warn"
+        ? pickUiText(language, "The environment is usable, but there are still a few items worth checking.", "当前环境已经可用，但还有几项值得顺手检查。")
+        : pickUiText(language, "Connection, security, and update state are now grouped in one place.", "接线、安全和更新状态现在收在同一处查看。");
+
+  return `<section class="card" id="settings-environment-status">
+    <div class="overview-command-head">
+      <div>
+        <h2>${escapeHtml(pickUiText(language, "System environment status", "系统环境状态"))}</h2>
+        <div class="meta">${escapeHtml(headline)}</div>
+      </div>
+      <div>${badge(overallStatus, insightStatusLabel(overallStatus, language))}</div>
+    </div>
+    <div class="settings-status-grid">
+      ${renderSettingsConnectionPanel(connectionSummary, usageCost, language)}
+      ${renderSettingsSecurityPanel(securitySummary, language)}
+      ${renderSettingsUpdatePanel(updateSummary, language)}
+    </div>
+  </section>`;
+}
+
+function renderSettingsConfigAccessCard(
+  importGuardRows: string,
+  usageConnectorTodos: string,
+  language: UiLanguage,
+): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  return `<section class="card" id="tool-connectors">
+    <div class="overview-command-head">
+      <div>
+        <h2>${escapeHtml(t("System config and data access", "系统配置与数据接入"))}</h2>
+        <div class="meta">${escapeHtml(t("Keep safety switches and recommended data connections in one place, so setup work does not split across multiple cards.", "把安全开关和建议接入放在一起看，减少设置页里同类信息来回跳。"))}</div>
+      </div>
+    </div>
+    <div class="settings-status-grid">
+      <section class="settings-status-panel" id="settings-safety-switches">
+        <h3>${escapeHtml(t("Safety switches", "安全开关"))}</h3>
+        <div class="meta">${escapeHtml(t("These controls decide which higher-risk write paths are allowed in the current environment.", "这些开关决定当前环境里哪些高风险写入路径可以放行。"))}</div>
+        <table>
+          <thead><tr><th>${escapeHtml(t("Item", "项目"))}</th><th>${escapeHtml(t("State", "状态"))}</th><th>${escapeHtml(t("Current value", "当前值"))}</th><th>${escapeHtml(t("Note", "说明"))}</th></tr></thead>
+          <tbody>${importGuardRows}</tbody>
+        </table>
+      </section>
+      <section class="settings-status-panel" id="settings-data-connections">
+        <h3>${escapeHtml(t("Recommended data connections", "数据接入建议"))}</h3>
+        <div class="meta">${escapeHtml(t("Use this list to finish the missing inputs that still keep some panels in partial mode.", "这里会集中提醒还没接上的数据输入，避免有些面板一直处于部分可用。"))}</div>
+        <ul class="story-list">${usageConnectorTodos}</ul>
+      </section>
+    </div>
   </section>`;
 }
 
@@ -3596,7 +4142,7 @@ function buildInformationCertaintyModel(input: {
       badgeStatus: "ok",
       badgeLabel: pickUiText(language, "High certainty", "高确定性"),
       headline: pickUiText(language, "This picture is trustworthy enough for day-to-day decisions.", "这张画面已经足够支撑日常判断。"),
-      summary: pickUiText(language, "Most key signals are connected, so you can judge OpenClaw from one screen with relatively high confidence.", "大部分关键信号都已连上，可以比较放心地用这一屏判断 OpenClaw 的当前状态。"),
+      summary: pickUiText(language, "Most key signals are connected, so you can judge the AI employee system from one screen with relatively high confidence.", "大部分关键信号都已连上，可以比较放心地用这一屏判断 AI 员工系统的当前状态。"),
       strengths,
       gaps,
       signals,
@@ -3637,7 +4183,7 @@ function renderInformationCertaintyCard(
       <div class="overview-command-head">
         <div>
           <h2>${escapeHtml(pickUiText(language, "Information certainty", "信息确定性"))}</h2>
-          <div class="meta">${escapeHtml(pickUiText(language, "This answers how much of OpenClaw you can confidently see right now.", "这块回答的是：你现在对 OpenClaw 的了解，有多少是可以放心相信的。"))}</div>
+          <div class="meta">${escapeHtml(pickUiText(language, "This answers how much of the AI employee system you can confidently see right now.", "这块回答的是：你现在对 AI 员工系统的了解，有多少是可以放心相信的。"))}</div>
         </div>
         <div>${badge(model.badgeStatus, model.badgeLabel)}</div>
       </div>
@@ -3702,6 +4248,846 @@ function formatTimeAgoFromNow(value: string | undefined, language: UiLanguage = 
   }
   const days = Math.max(1, Math.round(diffSeconds / 86400));
   return pickUiText(language, `${days}d ago`, `${days} 天前`);
+}
+
+function agentTeamSidebarLinks(
+  filters: TaskQueryFilters,
+  options: DashboardOptions,
+): Record<"team" | "docs" | "memory" | "projects" | "settings", string> {
+  return {
+    team: buildHomeHref(filters, options.compactStatusStrip, "team", options.language, options.usageView),
+    docs: buildHomeHref(filters, options.compactStatusStrip, "docs", options.language, options.usageView),
+    memory: buildHomeHref(filters, options.compactStatusStrip, "memory", options.language, options.usageView),
+    projects: buildHomeHref(filters, options.compactStatusStrip, "projects-tasks", options.language, options.usageView),
+    settings: buildHomeHref(filters, options.compactStatusStrip, "settings", options.language, options.usageView),
+  };
+}
+
+function agentTeamHumanizeToken(value: string | undefined): string {
+  if (!value) return "";
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function agentTeamPhaseLabel(value: string | undefined, language: UiLanguage): string {
+  if (!value) return pickUiText(language, "Not available", "暂无");
+  if (value === "max_ticks_reached") return pickUiText(language, "Tick limit reached", "达到轮询上限");
+  if (value === "idle") return pickUiText(language, "Idle", "空闲");
+  if (value === "running") return pickUiText(language, "Running", "运行中");
+  if (value === "paused") return pickUiText(language, "Paused", "已暂停");
+  if (value === "stopped") return pickUiText(language, "Stopped", "已停止");
+  return agentTeamHumanizeToken(value);
+}
+
+function agentTeamDecisionModeLabel(value: string | undefined, language: UiLanguage): string {
+  if (!value) return pickUiText(language, "Unknown", "未知");
+  if (value === "auto") return pickUiText(language, "Automatic", "自动");
+  if (value === "manual") return pickUiText(language, "Manual", "手动");
+  return agentTeamHumanizeToken(value);
+}
+
+function agentTeamFreshnessLabel(value: string | undefined, language: UiLanguage): string {
+  if (!value) return pickUiText(language, "Unknown", "未知");
+  if (value === "fresh") return pickUiText(language, "Fresh", "新鲜");
+  if (value === "aging") return pickUiText(language, "Aging", "渐旧");
+  if (value === "stale") return pickUiText(language, "Stale", "过旧");
+  return agentTeamHumanizeToken(value);
+}
+
+function agentTeamActionLabel(value: string | undefined, language: UiLanguage): string {
+  if (!value) return pickUiText(language, "No action suggested", "暂无建议动作");
+  if (value === "inspect-supervision") return pickUiText(language, "Inspect supervision", "查看监督项");
+  if (value === "inspect-status") return pickUiText(language, "Inspect runtime status", "查看运行状态");
+  if (value === "resume-runner") return pickUiText(language, "Resume runner", "恢复运行器");
+  if (value === "consume-queue") return pickUiText(language, "Consume queue", "处理队列");
+  if (value === "consume-controls") return pickUiText(language, "Consume controls", "处理控制请求");
+  return agentTeamHumanizeToken(value);
+}
+
+function agentTeamSourceKindLabel(value: AgentTeamEmbedSnapshot["sourceKind"], language: UiLanguage): string {
+  if (value === "runtime") {
+    return pickUiText(language, "Embedded serve-session snapshot", "嵌入 serve-session 快照");
+  }
+  return pickUiText(language, "Example fixture fallback", "示例夹具回退");
+}
+
+function agentTeamEmbeddedUpdatedLabel(model: AgentTeamEmbedSnapshot, language: UiLanguage): string | undefined {
+  if (!model.runtime.updatedAt) return undefined;
+  const relative = formatTimeAgoFromNow(model.runtime.updatedAt, language);
+  return pickUiText(
+    language,
+    `Last embedded update ${relative} (${model.runtime.updatedAt})`,
+    `最近一次嵌入快照更新时间：${relative}（${model.runtime.updatedAt}）`,
+  );
+}
+
+function agentTeamSnapshotRefreshHintLegacy(model: AgentTeamEmbedSnapshot, language: UiLanguage): string {
+  if (model.sourceKind === "runtime") {
+    return pickUiText(
+      language,
+      "Reloading the page only re-reads the embedded serve-session export. Use the dashboard refresh control to rebuild this snapshot from the latest persisted session state, then re-scan docs and related memory/info panels; the runtime itself must still run before new work appears here.",
+      "直接重载页面只会重新读取嵌入的 serve-session 导出。使用顶部刷新控件会基于最新持久化 session 重新构建这个快照，并顺带重新扫描文档以及相关记忆/信息面板；若要让新的任务进展出现在这里，仍然需要上游运行时继续执行。",
+    );
+    return pickUiText(
+      language,
+      "Reloading the page only re-reads the embedded serve-session export. Use the dashboard refresh control to rebuild this snapshot from the latest persisted session state; the runtime itself must still run before new work appears here.",
+      "直接重载页面只会重新读取嵌入的 serve-session 导出。使用面板里的刷新控件会基于最新持久化 session 重新打包这个快照；若要让新的任务进展出现在这里，仍然需要上游运行时继续执行。",
+    );
+  }
+  return pickUiText(
+    language,
+    "This panel is still using the example fixture bundle. The dashboard refresh control will keep checking for a real serve-session export and will still re-scan docs plus related memory/info panels in the meantime.",
+    "当前面板仍在使用示例夹具包；在真正的 serve-session 导出可用之前，刷新控件会持续检查上游输出，同时仍会重新扫描文档和相关记忆/信息面板。",
+  );
+  return pickUiText(
+    language,
+    "This panel is still using the example fixture bundle. The dashboard refresh control will keep reloading that bundle until a serve-session export becomes available.",
+    "当前面板仍在使用示例夹具包；在真正的 serve-session 导出可用之前，刷新控件也只能反复重载这一套示例数据。",
+  );
+}
+
+function agentTeamSnapshotRefreshHint(model: AgentTeamEmbedSnapshot, language: UiLanguage): string {
+  if (model.sourceKind === "runtime") {
+    return pickUiText(
+      language,
+      "Reloading the page only re-reads the embedded serve-session export. Use the dashboard refresh control to rebuild this snapshot from the latest persisted session state, then re-scan docs and related memory/info panels; the runtime itself must still run before new work appears here.",
+      "直接重载页面只会重新读取嵌入的 serve-session 导出。使用顶部刷新控件会基于最新持久化 session 重新构建这个快照，并顺带重新扫描文档以及相关记忆/信息面板；若要让新的任务进展出现在这里，仍然需要上游运行时继续执行。",
+    );
+  }
+  return pickUiText(
+    language,
+    "This panel is still using the example fixture bundle. The dashboard refresh control will keep checking for a real serve-session export and will still re-scan docs plus related memory/info panels in the meantime.",
+    "当前面板仍在使用示例夹具包；在真正的 serve-session 导出可用之前，刷新控件会持续检查上游输出，同时仍会重新扫描文档和相关记忆/信息面板。",
+  );
+}
+
+function agentTeamSuggestedPanelHref(
+  model: AgentTeamEmbedSnapshot,
+  links: Record<"team" | "docs" | "memory" | "projects" | "settings", string>,
+): string {
+  const pageKey = (model.runtime.primaryActionPage ?? "").trim().toLowerCase();
+  if (pageKey.includes("run")) return links.projects;
+  if (pageKey.includes("supervision")) return links.team;
+  if (pageKey.includes("runner")) return links.settings;
+  return links.projects;
+}
+
+function agentTeamRunStatusLabel(value: string | undefined, language: UiLanguage): string {
+  if (!value) return pickUiText(language, "Unknown", "未知");
+  if (value === "attention") return pickUiText(language, "Needs attention", "需要关注");
+  if (value === "completed") return pickUiText(language, "Completed", "已完成");
+  if (value === "running") return pickUiText(language, "Running", "运行中");
+  if (value === "blocked") return pickUiText(language, "Blocked", "已阻塞");
+  return agentTeamHumanizeToken(value);
+}
+
+function agentTeamFinalActionLabel(value: string | undefined, language: UiLanguage): string {
+  if (!value) return pickUiText(language, "Not recorded", "未记录");
+  if (value === "completed") return pickUiText(language, "Completed", "已完成");
+  if (value === "retry") return pickUiText(language, "Retry", "重试");
+  if (value === "blocked") return pickUiText(language, "Blocked", "阻塞");
+  return agentTeamHumanizeToken(value);
+}
+
+function agentTeamFreshnessTone(value: string | undefined): string {
+  if (value === "fresh") return "ok";
+  if (value === "aging") return "warn";
+  if (value === "stale") return "blocked";
+  return "info";
+}
+
+function agentTeamRunTone(run: AgentTeamEmbedRun): string {
+  if (run.failureCount > 0 || run.status === "blocked") return "blocked";
+  if (run.warningCount > 0 || run.status === "attention") return "warn";
+  if (run.finalAction === "completed" || run.status === "completed") return "ok";
+  return "info";
+}
+
+function agentTeamRuntimeSummaryLegacy(model: AgentTeamEmbedSnapshot, language: UiLanguage): string {
+  if (!model.available) {
+    return pickUiText(
+      language,
+      "Embedded agent-team data is not available yet.",
+      "暂未读取到嵌入的 Agent Team 数据。",
+    );
+  }
+  if (model.summary.activeSupervisionCount > 0) {
+    return pickUiText(
+      language,
+      `${model.summary.activeSupervisionCount} supervision item(s) still need attention.`,
+      `还有 ${model.summary.activeSupervisionCount} 个监督事项待处理。`,
+    );
+  }
+  if (model.summary.pendingJobCount > 0) {
+    return pickUiText(
+      language,
+      `${model.summary.pendingJobCount} queued job(s) are still waiting to run.`,
+      `还有 ${model.summary.pendingJobCount} 个排队任务等待执行。`,
+    );
+  }
+  if (model.runtime.freshnessState === "stale") {
+    const updatedLabel = agentTeamEmbeddedUpdatedLabel(model, language);
+    return pickUiText(
+      language,
+      updatedLabel
+        ? `Embedded serve-session snapshot is stale, so docs and memory highlights may lag. ${updatedLabel}.`
+        : "Embedded serve-session snapshot is stale, so docs and memory highlights may lag.",
+      updatedLabel
+        ? `嵌入的 serve-session 快照已经偏旧，文档与记忆摘要可能会滞后。${updatedLabel}。`
+        : "嵌入的 serve-session 快照已经偏旧，文档与记忆摘要可能会滞后。",
+    );
+    return pickUiText(
+      language,
+      updatedLabel
+        ? `Embedded serve-session snapshot is stale. ${updatedLabel}.`
+        : "Embedded serve-session snapshot is stale.",
+      updatedLabel
+        ? `嵌入的 serve-session 快照已经偏旧，${updatedLabel}。`
+        : "嵌入的 serve-session 快照已经偏旧。",
+    );
+  }
+  return pickUiText(
+    language,
+    "The embedded team runtime looks ready for the next operator action.",
+    "嵌入的团队运行态已经整理好，可以继续执行下一步操作。",
+  );
+}
+
+function agentTeamRuntimeSummary(model: AgentTeamEmbedSnapshot, language: UiLanguage): string {
+  if (!model.available) {
+    return pickUiText(
+      language,
+      "Embedded agent-team data is not available yet.",
+      "暂未读取到嵌入的 Agent Team 数据。",
+    );
+  }
+  if (model.summary.activeSupervisionCount > 0) {
+    return pickUiText(
+      language,
+      `${model.summary.activeSupervisionCount} supervision item(s) still need attention.`,
+      `还有 ${model.summary.activeSupervisionCount} 个监督事项待处理。`,
+    );
+  }
+  if (model.summary.pendingJobCount > 0) {
+    return pickUiText(
+      language,
+      `${model.summary.pendingJobCount} queued job(s) are still waiting to run.`,
+      `还有 ${model.summary.pendingJobCount} 个排队任务等待执行。`,
+    );
+  }
+  if (model.runtime.freshnessState === "stale") {
+    const updatedLabel = agentTeamEmbeddedUpdatedLabel(model, language);
+    return pickUiText(
+      language,
+      updatedLabel
+        ? `Embedded serve-session snapshot is stale, so docs and memory highlights may lag. ${updatedLabel}.`
+        : "Embedded serve-session snapshot is stale, so docs and memory highlights may lag.",
+      updatedLabel
+        ? `嵌入的 serve-session 快照已经偏旧，文档与记忆摘要可能会滞后。${updatedLabel}。`
+        : "嵌入的 serve-session 快照已经偏旧，文档与记忆摘要可能会滞后。",
+    );
+  }
+  return pickUiText(
+    language,
+    "The embedded team runtime looks ready for the next operator action.",
+    "嵌入的团队运行态已经整理好，可以继续执行下一步操作。",
+  );
+}
+
+function agentTeamFileLabel(file: string): string {
+  if (file.length <= 56) return file;
+  return `...${file.slice(-56)}`;
+}
+
+function renderAgentTeamContextList(
+  items: AgentTeamEmbedEntry[],
+  language: UiLanguage,
+  kind: "team" | "docs" | "memory" | "assets",
+): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (items.length === 0) {
+    return `<div class="empty-state">${escapeHtml(t("No embedded items yet.", "还没有嵌入条目。"))}</div>`;
+  }
+  return `<ul class="story-list">${items
+    .slice(0, 8)
+    .map((item) => {
+      const primaryMeta =
+        kind === "team"
+          ? item.role ?? item.id ?? t("Team role", "团队角色")
+          : item.section ?? t("Project record", "项目记录");
+      const updatedMeta = item.updatedAt
+        ? `${t("Updated", "更新")} ${formatTimeAgoFromNow(item.updatedAt, language)}`
+        : t("Time unavailable", "时间未知");
+      const secondaryMeta =
+        kind === "team"
+          ? `${updatedMeta} 路 ${agentTeamFileLabel(item.file)}`
+          : `${primaryMeta} 路 ${updatedMeta}`;
+      return `<li>
+        <strong>${escapeHtml(item.name ?? item.title)}</strong>
+        <div class="meta">${escapeHtml(primaryMeta)}</div>
+        <div class="meta">${escapeHtml(secondaryMeta)}</div>
+      </li>`;
+    })
+    .join("")}</ul>`;
+}
+
+function renderAgentTeamRunList(runs: AgentTeamEmbedRun[], language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (runs.length === 0) {
+    return `<div class="empty-state">${escapeHtml(t("No persisted runtime bundles were found yet.", "暂未发现持久化运行包。"))}</div>`;
+  }
+  return `<ul class="story-list">${runs
+    .slice(0, 6)
+    .map((run) => {
+      const label = run.pipeline ?? run.jobId ?? run.runId;
+      const counts = [
+        `${run.artifactCount} ${t("artifacts", "工件")}`,
+        `${run.eventCount} ${t("events", "事件")}`,
+        `${run.warningCount} ${t("warnings", "警告")}`,
+      ].join(" 路 ");
+      const meta = [
+        run.finalAction ? `${t("Final action", "最终动作")} ${agentTeamFinalActionLabel(run.finalAction, language)}` : "",
+        run.updatedAt ? `${t("Updated", "更新")} ${formatTimeAgoFromNow(run.updatedAt, language)}` : "",
+        run.jobId ? `${t("Job", "任务")} ${run.jobId}` : "",
+      ]
+        .filter(Boolean)
+        .join(" 路 ");
+      return `<li>
+        <div class="group-item-head"><strong>${escapeHtml(label)}</strong>${badge(
+          agentTeamRunTone(run),
+          agentTeamRunStatusLabel(run.status, language),
+        )}</div>
+        <div class="meta">${escapeHtml(counts)}</div>
+        <div class="meta">${escapeHtml(meta)}</div>
+      </li>`;
+    })
+    .join("")}</ul>`;
+}
+
+function renderAgentTeamArtifactList(artifacts: AgentTeamEmbedArtifact[], language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (artifacts.length === 0) {
+    return `<div class="empty-state">${escapeHtml(t("No embedded artifacts yet.", "暂未发现嵌入工件。"))}</div>`;
+  }
+  return `<ul class="story-list">${artifacts
+    .slice(0, 5)
+    .map((artifact) => {
+      const identity = [
+        artifact.stage ? agentTeamHumanizeToken(artifact.stage) : t("Stage unknown", "阶段未知"),
+        artifact.schema ?? t("Schema unknown", "结构未知"),
+      ].join(" 路 ");
+      const detail = [
+        artifact.mode ? agentTeamHumanizeToken(artifact.mode) : "",
+        artifact.noteCount > 0 ? `${artifact.noteCount} ${t("notes", "注记")}` : "",
+        artifact.updatedAt ? `${t("Updated", "更新")} ${formatTimeAgoFromNow(artifact.updatedAt, language)}` : "",
+      ]
+        .filter(Boolean)
+        .join(" 路 ");
+      return `<li>
+        <strong>${escapeHtml(artifact.file)}</strong>
+        <div class="meta">${escapeHtml(identity)}</div>
+        <div class="meta">${escapeHtml(detail)}</div>
+      </li>`;
+    })
+    .join("")}</ul>`;
+}
+
+function renderAgentTeamTimelineList(items: AgentTeamEmbedTimelineItem[], language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (items.length === 0) {
+    return `<div class="empty-state">${escapeHtml(t("No embedded timeline events yet.", "暂未发现嵌入时间线事件。"))}</div>`;
+  }
+  return `<ul class="story-list">${items
+    .slice(0, 6)
+    .map((item) => {
+      const headline = agentTeamHumanizeToken(item.kind) || t("Runtime event", "运行事件");
+      const meta = [
+        item.stage ? agentTeamHumanizeToken(item.stage) : t("Runtime", "运行态"),
+        item.source ? agentTeamHumanizeToken(item.source) : "",
+        item.timestamp ? formatTimeAgoFromNow(item.timestamp, language) : "",
+      ]
+        .filter(Boolean)
+        .join(" 路 ");
+      return `<li>
+        <strong>${escapeHtml(headline)}</strong>
+        <div class="meta">${escapeHtml(item.detail ?? t("No further detail yet.", "暂未提供更多细节。"))}</div>
+        <div class="meta">${escapeHtml(meta)}</div>
+      </li>`;
+    })
+    .join("")}</ul>`;
+}
+
+function renderAgentTeamSidebarCard(
+  model: AgentTeamEmbedSnapshot,
+  language: UiLanguage,
+  links: Record<"team" | "docs" | "memory" | "projects" | "settings", string>,
+): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (!model.available) {
+    return "";
+  }
+  return `
+    <section class="card" style="margin-top:10px;" id="agent-team-sidebar">
+      <h2>${escapeHtml(t("Agent team", "Agent 团队"))}</h2>
+      <div class="meta">${escapeHtml(agentTeamRuntimeSummary(model, language))}</div>
+      <div class="status-strip compact">
+        <div class="status-chip"><span>${escapeHtml(t("Members", "成员"))}</span><strong>${formatInt(model.summary.memberCount)}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Docs", "文档"))}</span><strong>${formatInt(model.summary.keyDocCount)}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Memory", "记忆"))}</span><strong>${formatInt(model.summary.memoryCount)}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Runs", "运行"))}</span><strong>${formatInt(model.summary.runCount)}</strong></div>
+      </div>
+      <div class="meta">${escapeHtml(t("Source", "来源"))} ${escapeHtml(agentTeamSourceKindLabel(model.sourceKind, language))} 路 ${escapeHtml(t("Mode", "模式"))} ${escapeHtml(agentTeamDecisionModeLabel(model.runtime.decisionMode, language))}${model.scenarioKey ? ` 路 ${escapeHtml(t("Scenario", "场景"))} ${escapeHtml(model.scenarioKey)}` : ""}</div>
+      <div class="meta">${escapeHtml(agentTeamSnapshotRefreshHint(model, language))}</div>
+      ${
+        model.focusedRun
+          ? `<div class="meta">${escapeHtml(t("Focus run", "聚焦运行"))} ${escapeHtml(model.focusedRun.pipeline ?? model.focusedRun.jobId ?? model.focusedRun.runId)} 路 ${badge(
+              agentTeamRunTone(model.focusedRun),
+              agentTeamRunStatusLabel(model.focusedRun.status, language),
+            )}</div>`
+          : ""
+      }
+      <div class="meta"><a href="${escapeHtml(links.team)}">${escapeHtml(t("Open team", "打开团队"))}</a> 路 <a href="${escapeHtml(links.docs)}">${escapeHtml(t("Open docs", "打开文档"))}</a></div>
+      <div class="meta"><a href="${escapeHtml(links.memory)}">${escapeHtml(t("Open memory", "打开记忆"))}</a> 路 <a href="${escapeHtml(links.projects)}">${escapeHtml(t("Open runs", "打开运行"))}</a></div>
+    </section>
+  `;
+}
+
+function renderAgentTeamOverviewBlock(
+  model: AgentTeamEmbedSnapshot,
+  language: UiLanguage,
+  links: Record<"team" | "docs" | "memory" | "projects" | "settings", string>,
+): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (!model.available) {
+    return "";
+  }
+  const suggestedActionKind = model.runtime.primaryActionKind ?? model.dashboard.primaryActionKind;
+  const suggestedReason =
+    model.dashboard.primaryActionReason ??
+    model.runtime.reasonSummary ??
+    t("The runtime is ready for the next visible operator action.", "运行状态已经整理好，可以继续执行下一步可见操作。");
+  const suggestedHref = agentTeamSuggestedPanelHref(model, links);
+  const sourceLabel = agentTeamSourceKindLabel(model.sourceKind, language);
+  const embeddedUpdatedLabel = agentTeamEmbeddedUpdatedLabel(model, language);
+  const refreshHint = agentTeamSnapshotRefreshHint(model, language);
+  return `
+    <section class="overview-decision-grid" id="agent-team-overview">
+      <article class="card">
+        <div class="overview-command-head">
+          <h2>${escapeHtml(t("Agent team runtime", "Agent Team 运行概况"))}</h2>
+          <div>${badge(agentTeamFreshnessTone(model.runtime.freshnessState), agentTeamFreshnessLabel(model.runtime.freshnessState, language))}</div>
+        </div>
+        <div class="meta">${escapeHtml(agentTeamRuntimeSummary(model, language))}</div>
+        <div class="status-strip compact">
+          <div class="status-chip"><span>${escapeHtml(t("Runner phase", "运行阶段"))}</span><strong>${escapeHtml(agentTeamPhaseLabel(model.runtime.phase, language))}</strong></div>
+          <div class="status-chip"><span>${escapeHtml(t("Decision mode", "决策模式"))}</span><strong>${escapeHtml(agentTeamDecisionModeLabel(model.runtime.decisionMode, language))}</strong></div>
+          <div class="status-chip"><span>${escapeHtml(t("Supervision", "监督项"))}</span><strong>${formatInt(model.summary.activeSupervisionCount)}</strong></div>
+          <div class="status-chip"><span>${escapeHtml(t("Persisted runs", "持久化运行"))}</span><strong>${formatInt(model.summary.runCount)}</strong></div>
+        </div>
+        <div class="meta">${escapeHtml(t("Suggested next action", "建议下一步"))} ${escapeHtml(agentTeamActionLabel(suggestedActionKind, language))}</div>
+        <div class="mission-banner">${escapeHtml(agentTeamActionLabel(suggestedActionKind, language))} · ${escapeHtml(suggestedReason)}</div>
+        <div class="overview-quick-links">
+          <a class="btn" href="${escapeHtml(suggestedHref)}">${escapeHtml(t("Open suggested panel", "打开建议面板"))}</a>
+          <a class="btn" href="${escapeHtml(links.projects)}">${escapeHtml(t("Open runs", "查看运行"))}</a>
+          <a class="btn" href="${escapeHtml(links.team)}">${escapeHtml(t("Open team", "查看团队"))}</a>
+        </div>
+      </article>
+      <article class="card overview-context-card">
+        <div class="overview-command-head">
+          <h2>${escapeHtml(t("Project context snapshot", "项目上下文快照"))}</h2>
+          <a class="btn" href="${escapeHtml(links.docs)}">${escapeHtml(t("Open docs", "查看文档"))}</a>
+        </div>
+        <div class="status-strip compact">
+          <div class="status-chip"><span>${escapeHtml(t("Members", "成员"))}</span><strong>${formatInt(model.summary.memberCount)}</strong></div>
+          <div class="status-chip"><span>${escapeHtml(t("Key docs", "核心文档"))}</span><strong>${formatInt(model.summary.keyDocCount)}</strong></div>
+          <div class="status-chip"><span>${escapeHtml(t("Pilot assets", "试运行资料"))}</span><strong>${formatInt(model.summary.pilotAssetCount)}</strong></div>
+          <div class="status-chip"><span>${escapeHtml(t("Recent memory", "近期记忆"))}</span><strong>${formatInt(model.summary.memoryCount)}</strong></div>
+        </div>
+        <div class="overview-context-note">
+          <strong>${escapeHtml(t("Snapshot source", "快照来源"))}</strong>
+          <div class="meta">${escapeHtml(sourceLabel)}${model.scenarioKey ? ` · ${escapeHtml(t("Scenario", "场景"))} ${escapeHtml(model.scenarioKey)}` : ""}</div>
+          ${embeddedUpdatedLabel ? `<div class="meta">${escapeHtml(embeddedUpdatedLabel)}</div>` : ""}
+        </div>
+        <div class="overview-context-note">
+          <strong>${escapeHtml(t("Refresh behavior", "刷新方式"))}</strong>
+          <div class="meta">${escapeHtml(refreshHint)}</div>
+        </div>
+        <div class="overview-context-links">
+          <a class="btn" href="${escapeHtml(links.docs)}">${escapeHtml(t("Open docs", "查看文档"))}</a>
+          <a class="btn" href="${escapeHtml(links.memory)}">${escapeHtml(t("Open memory", "查看记忆"))}</a>
+          <a class="btn" href="${escapeHtml(links.projects)}">${escapeHtml(t("Open runs", "查看运行"))}</a>
+        </div>
+        <div class="meta">${escapeHtml(t("Workspace", "工作区"))} ${escapeHtml(model.workspaceLabel)}</div>
+        <div class="meta">${escapeHtml(t("Generated", "生成时间"))} ${escapeHtml(model.generatedAt ?? t("Not available", "暂无"))}</div>
+      </article>
+    </section>
+  `;
+}
+
+function renderAgentTeamTeamBlock(model: AgentTeamEmbedSnapshot, language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (!model.available) {
+    return "";
+  }
+  return `
+    <details class="compact-table-details" id="agent-team-team-panel" style="margin-top:12px;">
+      <summary>${escapeHtml(t("Open project role mapping", "查看项目角色映射"))}</summary>
+      <div class="fold-body">
+        <div class="meta">${escapeHtml(t("These roles come from the agent-team project context and are merged into the native staff view instead of replacing it.", "这些角色来自 agent team 项目上下文，已合并进当前原生团队视图，而不是替换原有员工视图。"))}</div>
+        ${renderAgentTeamContextList(model.teamMembers, language, "team")}
+      </div>
+    </details>
+  `;
+}
+
+function renderAgentTeamMemoryBlock(model: AgentTeamEmbedSnapshot, language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (!model.available) {
+    return "";
+  }
+  return `
+    <section class="card" id="agent-team-memory-panel">
+      <h2>${escapeHtml(t("Project memory feed", "项目记忆流"))}</h2>
+      <div class="meta">${escapeHtml(t("Recent team memory from the agent-team workspace, surfaced here in the native memory panel.", "这里展示的是 agent team 工作区的近期项目记忆，并且直接合并到原生记忆面板中。"))}</div>
+      ${renderAgentTeamContextList(model.recentMemory, language, "memory")}
+    </section>
+  `;
+}
+
+function renderAgentTeamDocsBlock(model: AgentTeamEmbedSnapshot, language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (!model.available) {
+    return "";
+  }
+  return `
+    <section class="task-hub-grid" id="agent-team-docs-panel">
+      <section class="card">
+        <h2>${escapeHtml(t("Key project docs", "核心项目文档"))}</h2>
+        <div class="meta">${escapeHtml(t("The most important handoff and runtime docs from the agent-team mainline.", "来自 agent team 主线的关键交接文档与运行文档。"))}</div>
+        ${renderAgentTeamContextList(model.keyDocs, language, "docs")}
+      </section>
+      <section class="card">
+        <h2>${escapeHtml(t("Pilot assets", "试运行资料"))}</h2>
+        <div class="meta">${escapeHtml(t("These pilot packets and playbooks stay close to the docs view so they can be used while operating the system.", "这些试运行包与演练说明会与文档视图放在一起，便于边操作系统边引用。"))}</div>
+        ${renderAgentTeamContextList(model.pilotAssets, language, "assets")}
+      </section>
+    </section>
+  `;
+}
+
+function renderAgentTeamProjectsBlock(model: AgentTeamEmbedSnapshot, language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (!model.available) {
+    return "";
+  }
+  return `
+    <section class="task-hub-grid" id="agent-team-runs-panel">
+      <section class="card">
+        <h2>${escapeHtml(t("Persisted runtime bundles", "持久化运行包"))}</h2>
+        <div class="meta">${escapeHtml(t("This merges the agent-team runtime bundle inventory into the native task/work panel.", "这里把 agent team 的运行包清单并入原生任务工作面板中。"))}</div>
+        ${renderAgentTeamRunList(model.runs, language)}
+      </section>
+      <section class="card">
+        <h2>${escapeHtml(t("Latest deliverables", "最新交付物"))}</h2>
+        <div class="meta">${escapeHtml(t("Artifact previews are simplified for operators here; raw payloads stay behind the control surfaces.", "这里给操作员展示的是简化后的交付物摘要，底层原始内容仍然留在控制面后方。"))}</div>
+        ${renderAgentTeamArtifactList(model.artifacts, language)}
+      </section>
+    </section>
+    <details class="card compact-details" id="agent-team-run-timeline">
+      <summary>${escapeHtml(t("Agent team execution timeline", "Agent Team 执行时间线"))}</summary>
+      <div class="fold-body">
+        <div class="meta">${escapeHtml(t("Recent runtime events from the embedded agent-team run.", "这里展示的是嵌入的 agent team 运行最近事件。"))}</div>
+        ${renderAgentTeamTimelineList(model.timeline, language)}
+      </div>
+    </details>
+  `;
+}
+
+function renderAgentTeamSettingsBlock(model: AgentTeamEmbedSnapshot, language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (!model.available) {
+    return "";
+  }
+  const sourceExplanation =
+    model.sourceKind === "runtime"
+      ? t(
+          "The open-source shell remains intact. Agent-team panels read the current team_runtime serve-session export first and only fall back to example fixtures when that embedded export is missing.",
+          "开源项目原有框架保持不变。当前 Agent Team 面板会优先读取 team_runtime 的 serve-session 嵌入导出，只有在这份导出不存在时才会回退到示例夹具。",
+        )
+      : t(
+          "The open-source shell remains intact. Agent-team panels are currently using the example fixture bundle because a serve-session export is not available yet.",
+          "开源项目原有框架保持不变。当前 Agent Team 面板仍在使用示例夹具包，因为 serve-session 导出暂时不可用。",
+        );
+  const rows = [
+    [t("Workspace root", "工作区根目录"), model.sources.workspaceRoot],
+    [t("Source kind", "数据源类型"), agentTeamSourceKindLabel(model.sourceKind, language)],
+    [t("Snapshot updated", "快照更新时间"), agentTeamEmbeddedUpdatedLabel(model, language) ?? t("Not available", "暂无")],
+    [t("Active snapshot root", "当前快照根目录"), model.sources.publicDir],
+    [t("Project context", "项目上下文"), model.sources.projectContextPath],
+    [t("Snapshot manifest", "快照清单"), model.sources.fixtureManifestPath],
+    [t("Scenario", "场景"), model.scenarioKey ?? t("Not available", "暂无")],
+    [t("Status payload", "状态载荷"), model.sources.statusPath ?? t("Not available", "暂无")],
+    [t("Runs payload", "运行清单载荷"), model.sources.runsDashboardPath ?? t("Not available", "暂无")],
+    [t("Run detail payload", "运行详情载荷"), model.sources.runDetailPath ?? t("Not available", "暂无")],
+    [t("Artifact preview payload", "工件预览载荷"), model.sources.runArtifactPath ?? t("Not available", "暂无")],
+  ];
+  return `
+    <section class="card" id="agent-team-settings-panel">
+      <h2>${escapeHtml(t("Agent team embedding", "Agent Team 嵌入信息"))}</h2>
+      <div class="meta">${escapeHtml(sourceExplanation)}</div>
+      <table>
+        <thead><tr><th>${escapeHtml(t("Item", "项目"))}</th><th>${escapeHtml(t("Current value", "当前值"))}</th></tr></thead>
+        <tbody>${rows
+          .map(
+            ([label, value]) =>
+              `<tr><td>${escapeHtml(label)}</td><td><code>${escapeHtml(value)}</code></td></tr>`,
+          )
+          .join("")}</tbody>
+      </table>
+    </section>
+  `;
+}
+
+function renderAgentTeamInspectorSummary(model: AgentTeamEmbedSnapshot, language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (!model.available) {
+    return "";
+  }
+  return `
+    <div class="meta">${escapeHtml(t("Agent team runner", "Agent Team 运行器"))} ${badge(
+      agentTeamFreshnessTone(model.runtime.freshnessState),
+      agentTeamPhaseLabel(model.runtime.phase, language),
+    )}</div>
+    <div class="meta">${escapeHtml(t("Decision", "决策"))} ${escapeHtml(agentTeamDecisionModeLabel(model.runtime.decisionMode, language))} 路 ${escapeHtml(t("Supervision", "监督"))} ${formatInt(model.summary.activeSupervisionCount)}</div>
+    <div class="meta">${escapeHtml(t("Persisted runs", "持久化运行"))} ${formatInt(model.summary.runCount)} 路 ${escapeHtml(t("Suggested action", "建议动作"))} ${escapeHtml(agentTeamActionLabel(model.runtime.primaryActionKind, language))}</div>
+  `;
+}
+
+function agentTeamFactLabel(key: string, language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  switch (key.trim().toLowerCase()) {
+    case "goal":
+      return t("Goal", "目标");
+    case "pipeline":
+      return t("Pipeline", "流水线");
+    case "stop_reason":
+      return t("Stop reason", "停止原因");
+    case "mode":
+      return t("Mode", "模式");
+    case "tick_count":
+      return t("Ticks", "执行轮次");
+    case "remaining_job_ids":
+      return t("Remaining jobs", "剩余任务");
+    case "processed_count":
+      return t("Processed controls", "已处理控制");
+    default:
+      return agentTeamHumanizeToken(key) || key;
+  }
+}
+
+function agentTeamPreviewSourceLabel(value: string | undefined, language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "embedded_payload":
+      return t("Embedded payload", "嵌入载荷");
+    case "artifact_file":
+      return t("Artifact file", "工件文件");
+    default:
+      return agentTeamHumanizeToken(value) || t("Preview source", "预览来源");
+  }
+}
+
+function agentTeamPreviewExcerpt(value: string | undefined, language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (!value) {
+    return t("No preview content is ready yet.", "暂时还没有可展示的预览内容。");
+  }
+  const lines = value
+    .split(/\r?\n/g)
+    .map((line) => line.replace(/^[#>*`\-\s]+/g, "").trim())
+    .filter((line) => line !== "");
+  if (lines.length === 0) {
+    return t("No preview content is ready yet.", "暂时还没有可展示的预览内容。");
+  }
+  return safeTruncate(lines.slice(0, 3).join(" / "), 220);
+}
+
+function renderAgentTeamFactList(
+  items: AgentTeamEmbedFact[],
+  language: UiLanguage,
+  emptyText: string,
+): string {
+  if (items.length === 0) {
+    return `<div class="empty-state">${escapeHtml(emptyText)}</div>`;
+  }
+  return `<ul class="story-list">${items
+    .slice(0, 6)
+    .map(
+      (item) =>
+        `<li><strong>${escapeHtml(agentTeamFactLabel(item.key, language))}</strong><div class="meta">${escapeHtml(item.value)}</div></li>`,
+    )
+    .join("")}</ul>`;
+}
+
+function renderAgentTeamDeliverableList(
+  items: AgentTeamEmbedDeliverable[],
+  language: UiLanguage,
+  emptyText: string,
+): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (items.length === 0) {
+    return `<div class="empty-state">${escapeHtml(emptyText)}</div>`;
+  }
+  return `<ul class="story-list">${items
+    .slice(0, 5)
+    .map((item) => {
+      const meta = [
+        agentTeamFactLabel(item.key, language),
+        item.schema ? agentTeamHumanizeToken(item.schema) || item.schema : "",
+        item.file ? `${t("File", "文件")} ${agentTeamFileLabel(item.file)}` : "",
+      ]
+        .filter(Boolean)
+        .join(" 路 ");
+      return `<li><strong>${escapeHtml(item.label)}</strong><div class="meta">${escapeHtml(meta)}</div></li>`;
+    })
+    .join("")}</ul>`;
+}
+
+function renderAgentTeamInspectorCard(model: AgentTeamEmbedSnapshot, language: UiLanguage): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  if (!model.available) {
+    return "";
+  }
+  const topRun = model.focusedRun ?? model.runs[0];
+  const topTimeline = model.timeline[0];
+  const previewArtifact = model.previewArtifact;
+  return `
+    <div class="card" style="margin-top:10px;" id="agent-team-inspector">
+      <h2>${escapeHtml(t("Agent team focus", "Agent Team 焦点"))}</h2>
+      <div class="meta">${escapeHtml(agentTeamRuntimeSummary(model, language))}</div>
+      ${
+        topRun
+          ? `<div class="meta">${escapeHtml(t("Latest run", "最近运行"))} ${escapeHtml(topRun.pipeline ?? topRun.jobId ?? topRun.runId)} 路 ${badge(
+              agentTeamRunTone(topRun),
+              agentTeamRunStatusLabel(topRun.status, language),
+            )}</div>`
+          : ""
+      }
+      ${
+        model.focusedRun?.goal
+          ? `<div class="meta">${escapeHtml(t("Current goal", "当前目标"))} ${escapeHtml(model.focusedRun.goal)}</div>`
+          : ""
+      }
+      ${
+        previewArtifact
+          ? `<div class="meta">${escapeHtml(t("Focused artifact", "聚焦工件"))} ${escapeHtml(agentTeamFileLabel(previewArtifact.file))} 路 ${escapeHtml(
+              agentTeamPreviewSourceLabel(previewArtifact.previewSource, language),
+            )}</div>`
+          : ""
+      }
+      ${
+        topTimeline
+          ? `<div class="meta">${escapeHtml(t("Latest event", "最近事件"))} ${escapeHtml(agentTeamHumanizeToken(topTimeline.kind) || t("Runtime event", "运行事件"))} 路 ${escapeHtml(topTimeline.timestamp ? formatTimeAgoFromNow(topTimeline.timestamp, language) : t("time unavailable", "时间未知"))}</div>`
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderAgentTeamRunSummaryCard(
+  model: AgentTeamEmbedSnapshot,
+  language: UiLanguage,
+): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  const run = model.focusedRun;
+  if (!model.available || !run) {
+    return "";
+  }
+  const primaryLabel = run.pipeline ?? run.jobId ?? run.runId;
+  return `
+    <section class="card" style="margin-top:10px;" id="agent-team-run-summary">
+      <h2>${escapeHtml(t("Run summary", "运行摘要"))}</h2>
+      <div class="meta">${escapeHtml(t("This keeps the selected runtime bundle readable for operators without exposing the raw payload by default.", "这里把当前运行包整理成便于操作员理解的摘要，不默认暴露底层原始载荷。"))}</div>
+      <div class="status-strip compact">
+        <div class="status-chip"><span>${escapeHtml(t("Pipeline", "流水线"))}</span><strong>${escapeHtml(primaryLabel)}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Warnings", "警告"))}</span><strong>${formatInt(run.warningCount)}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Failures", "失败"))}</span><strong>${formatInt(run.failureCount)}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Control queue", "控制队列"))}</span><strong>${formatInt(run.pendingCount)}</strong></div>
+      </div>
+      <div class="meta">${escapeHtml(t("Final action", "最终动作"))} ${escapeHtml(agentTeamFinalActionLabel(run.finalAction, language))} 路 ${escapeHtml(t("Updated", "更新时间"))} ${escapeHtml(run.updatedAt ? formatTimeAgoFromNow(run.updatedAt, language) : t("time unavailable", "时间未知"))}</div>
+      ${
+        run.goal
+          ? `<div class="meta">${escapeHtml(t("Current goal", "当前目标"))} ${escapeHtml(run.goal)}</div>`
+          : ""
+      }
+      <div class="meta" style="margin-top:10px;">${escapeHtml(t("Deliverables", "交付物"))}</div>
+      ${renderAgentTeamDeliverableList(
+        run.deliverables,
+        language,
+        t("No deliverables were extracted from the focused bundle yet.", "当前聚焦运行包里还没有提取出交付物。"),
+      )}
+      <div class="meta" style="margin-top:10px;">${escapeHtml(t("Key facts", "关键信息"))}</div>
+      ${renderAgentTeamFactList(
+        run.facts,
+        language,
+        t("No additional run facts are ready yet.", "当前还没有更多可展示的运行关键信息。"),
+      )}
+    </section>
+  `;
+}
+
+function renderAgentTeamArtifactPreviewCard(
+  model: AgentTeamEmbedSnapshot,
+  language: UiLanguage,
+): string {
+  const t = (en: string, zh: string): string => pickUiText(language, en, zh);
+  const artifact = model.previewArtifact;
+  if (!model.available || !artifact) {
+    return "";
+  }
+  const artifactFacts: AgentTeamEmbedFact[] = [];
+  if (artifact.stage) {
+    artifactFacts.push({ key: "stage", value: agentTeamHumanizeToken(artifact.stage) || artifact.stage });
+  }
+  if (artifact.schema) {
+    artifactFacts.push({ key: "schema", value: artifact.schema });
+  }
+  if (artifact.mode) {
+    artifactFacts.push({ key: "mode", value: agentTeamHumanizeToken(artifact.mode) || artifact.mode });
+  }
+  if (artifact.sourceRole) {
+    artifactFacts.push({ key: "source_role", value: agentTeamHumanizeToken(artifact.sourceRole) || artifact.sourceRole });
+  }
+  return `
+    <section class="card" style="margin-top:10px;" id="agent-team-artifact-preview">
+      <h2>${escapeHtml(t("Artifact preview", "工件预览"))}</h2>
+      <div class="meta">${escapeHtml(t("A simplified evidence excerpt is pinned here so the operator can keep context while switching center panels.", "这里固定展示简化后的证据摘录，便于操作员在切换中间工作区时保持上下文。"))}</div>
+      <div class="meta">${escapeHtml(t("Artifact", "工件"))} ${escapeHtml(agentTeamFileLabel(artifact.file))}</div>
+      <div class="status-strip compact">
+        <div class="status-chip"><span>${escapeHtml(t("Source", "来源"))}</span><strong>${escapeHtml(agentTeamPreviewSourceLabel(artifact.previewSource, language))}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Lines", "行数"))}</span><strong>${formatInt(artifact.previewLineCount ?? 0)}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Characters", "字符"))}</span><strong>${formatInt(artifact.previewCharacterCount ?? 0)}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Notes", "注记"))}</span><strong>${formatInt(artifact.noteCount)}</strong></div>
+      </div>
+      <div class="mission-banner">${escapeHtml(agentTeamPreviewExcerpt(artifact.previewContent, language))}</div>
+      <div class="meta">${escapeHtml(t("Updated", "更新时间"))} ${escapeHtml(artifact.updatedAt ? formatTimeAgoFromNow(artifact.updatedAt, language) : t("time unavailable", "时间未知"))} 路 ${escapeHtml(t("Stored", "已落库"))} ${escapeHtml(artifact.exists ? t("Yes", "是") : t("No", "否"))}</div>
+      <div class="meta">${escapeHtml(t("Input bundle", "输入包"))} ${escapeHtml(artifact.hasInputBundle ? t("Included", "已包含") : t("Not included", "未包含"))} 路 ${escapeHtml(t("Embedded content", "嵌入内容"))} ${escapeHtml(artifact.hasEmbeddedContent ? t("Available", "可用") : t("Unavailable", "不可用"))}</div>
+      <div class="meta" style="margin-top:10px;">${escapeHtml(t("Artifact facts", "工件信息"))}</div>
+      ${renderAgentTeamFactList(
+        artifactFacts,
+        language,
+        t("No additional artifact facts are ready yet.", "当前还没有更多可展示的工件信息。"),
+      )}
+      ${
+        artifact.previewTruncated
+          ? `<div class="meta">${escapeHtml(t("The preview is truncated for readability; the full artifact stays behind the runtime surface.", "为了便于阅读，当前预览已做截断；完整工件仍保留在运行时表面后方。"))}</div>`
+          : ""
+      }
+    </section>
+  `;
 }
 
 function pickLatestTimestamp(values: Array<string | undefined>): string | undefined {
@@ -3989,7 +5375,7 @@ function renderTaskCertaintySection(
   if (cards.length === 0) {
     return `<section class="card" id="task-certainty-board">
         <h2>${escapeHtml(pickUiText(language, "Execution certainty", "执行确定性"))}</h2>
-        <div class="meta">${escapeHtml(pickUiText(language, "This answers whether OpenClaw is really carrying a task, not just whether the task exists on the board.", "这块回答的不是任务有没有写在看板上，而是 OpenClaw 是否真的把它接住并推进了。"))}</div>
+        <div class="meta">${escapeHtml(pickUiText(language, "This answers whether the AI employee system is really carrying a task, not just whether the task exists on the board.", "这块回答的不是任务有没有写在看板上，而是 AI 员工系统是否真的把它接住并推进了。"))}</div>
         <div class="empty-state">${escapeHtml(pickUiText(language, "There is no in-flight task under the current filter.", "当前筛选下没有需要判断执行确定性的进行中任务。"))}</div>
       </section>`;
   }
@@ -4001,7 +5387,7 @@ function renderTaskCertaintySection(
       <div class="overview-command-head">
         <div>
           <h2>${escapeHtml(pickUiText(language, "Execution certainty", "执行确定性"))}</h2>
-          <div class="meta">${escapeHtml(pickUiText(language, "This answers whether OpenClaw is really carrying a task, not just whether the task exists on the board.", "这块回答的不是任务有没有写在看板上，而是 OpenClaw 是否真的把它接住并推进了。"))}</div>
+          <div class="meta">${escapeHtml(pickUiText(language, "This answers whether the AI employee system is really carrying a task, not just whether the task exists on the board.", "这块回答的不是任务有没有写在看板上，而是 AI 员工系统是否真的把它接住并推进了。"))}</div>
         </div>
         <div>${badge(weakCount > 0 ? "warn" : "ok", weakCount > 0 ? pickUiText(language, "Needs follow-up", "需要跟进") : pickUiText(language, "Clear enough", "比较清楚"))}</div>
       </div>
@@ -4038,6 +5424,525 @@ function renderTaskCertaintySection(
         )
         .join("")}</div>
     </section>`;
+}
+
+function buildTaskSpotlightCards(input: {
+  tasks: TaskListItem[];
+  certaintyCards: TaskCertaintyCard[];
+  sessions: ReadModelSnapshot["sessions"];
+  sessionItems: SessionConversationListItem[];
+  approvals: ReadModelSnapshot["approvals"];
+  manualOrder: string[];
+  language: UiLanguage;
+}): TaskSpotlightCard[] {
+  const certaintyByTaskId = new Map(input.certaintyCards.map((item) => [item.taskId, item]));
+  const previewByKey = new Map(input.sessionItems.map((item) => [item.sessionKey, item]));
+  const snapshotByKey = new Map(input.sessions.map((session) => [session.sessionKey, session]));
+  const manualOrderByTaskId = buildTaskCardManualOrderLookup(input.manualOrder);
+  const pendingApprovalSessionKeys = new Set(
+    input.approvals
+      .filter((item) => item.status === "pending" && typeof item.sessionKey === "string" && item.sessionKey.trim())
+      .map((item) => item.sessionKey!.trim()),
+  );
+  const nowMs = Date.now();
+
+  return input.tasks
+    .map((task): TaskSpotlightCard => {
+      const certainty = certaintyByTaskId.get(task.taskId);
+      const linkedSessionKeys = [...new Set(task.sessionKeys.map((item) => item.trim()).filter(Boolean))];
+      let liveSessionCount = 0;
+      let blockedSessionCount = 0;
+      let errorSessionCount = 0;
+      let waitingApprovalSessionCount = 0;
+      let recentActivityCount = 0;
+      let latestSignalAt: string | undefined;
+      let latestSignalSnippet: string | undefined;
+
+      for (const sessionKey of linkedSessionKeys) {
+        const preview = previewByKey.get(sessionKey);
+        const snapshotSession = snapshotByKey.get(sessionKey);
+        const state = preview?.state ?? snapshotSession?.state;
+        if (state === "running") liveSessionCount += 1;
+        if (state === "blocked") blockedSessionCount += 1;
+        if (state === "error") errorSessionCount += 1;
+        if (state === "waiting_approval") waitingApprovalSessionCount += 1;
+        const signalAt = preview?.latestHistoryAt ?? preview?.lastMessageAt ?? snapshotSession?.lastMessageAt;
+        if (hasFreshRuntimeTimestamp(signalAt, nowMs, TASK_RUNTIME_ACTIVITY_WINDOW_MS)) {
+          recentActivityCount += 1;
+        }
+        if (toSortableMs(signalAt) >= toSortableMs(latestSignalAt)) {
+          latestSignalAt = signalAt;
+          latestSignalSnippet = preview?.latestSnippet;
+        }
+      }
+
+      const pendingApprovals = linkedSessionKeys.filter((sessionKey) => pendingApprovalSessionKeys.has(sessionKey)).length;
+      const dueAtMs = toSortableMs(task.dueAt);
+      const overdue = task.status !== "done" && dueAtMs > 0 && dueAtMs <= nowMs;
+      const dueSoon = task.status !== "done" && dueAtMs > nowMs && dueAtMs - nowMs <= 24 * 60 * 60 * 1000;
+      const statusTone = resolveTaskSpotlightTone({
+        task,
+        certainty,
+        liveSessionCount,
+        blockedSessionCount,
+        errorSessionCount,
+        waitingApprovalSessionCount,
+        pendingApprovals,
+        recentActivityCount,
+      });
+      const priorityBucket = resolveTaskSpotlightPriorityBucket({
+        task,
+        statusTone,
+        overdue,
+        dueSoon,
+      });
+      const ownerLabel = humanizeOperatorLabel(task.owner);
+
+      return {
+        cardId: task.taskId,
+        cardKind: "task",
+        taskId: task.taskId,
+        title: task.title,
+        projectTitle: task.projectTitle,
+        taskStatus: task.status,
+        ownerLabel,
+        statusTone,
+        statusLabel: taskSpotlightStatusLabel(
+          {
+            task,
+            statusTone,
+            errorSessionCount,
+            blockedSessionCount,
+            waitingApprovalSessionCount,
+            pendingApprovals,
+          },
+          input.language,
+        ),
+        statusDotLabel: taskSpotlightStatusDotLabel(
+          {
+            task,
+            statusTone,
+            errorSessionCount,
+            blockedSessionCount,
+            waitingApprovalSessionCount,
+            pendingApprovals,
+          },
+          input.language,
+        ),
+        priorityLabel: taskSpotlightPriorityLabel(priorityBucket, input.language),
+        boardStatusLabel: taskStateLabel(task.status, input.language),
+        boardStatusTone:
+          task.status === "done"
+            ? "done"
+            : task.status === "in_progress"
+              ? "in_progress"
+              : task.status === "blocked"
+                ? "blocked"
+                : "enabled",
+        summary: taskSpotlightSummary(
+          {
+            task,
+            statusTone,
+            certainty,
+            liveSessionCount,
+            blockedSessionCount,
+            errorSessionCount,
+            waitingApprovalSessionCount,
+            pendingApprovals,
+            overdue,
+            recentActivityCount,
+          },
+          input.language,
+        ),
+        recentSignal: taskSpotlightRecentSignal(
+          {
+            task,
+            latestSignalAt,
+            latestSignalSnippet,
+          },
+          input.language,
+        ),
+        nextStep: taskSpotlightNextStep(
+          {
+            task,
+            certainty,
+            errorSessionCount,
+            blockedSessionCount,
+            waitingApprovalSessionCount,
+            pendingApprovals,
+            overdue,
+          },
+          input.language,
+        ),
+        scheduleLabel: task.dueAt
+          ? pickUiText(input.language, "Due date set", "已设截止")
+          : pickUiText(input.language, "No due date", "未设截止"),
+        dueLabel: taskSpotlightDueLabel(task, dueAtMs, nowMs, input.language),
+        updatedLabel: task.updatedAt
+          ? pickUiText(input.language, `Updated ${formatTimeAgoFromNow(task.updatedAt, input.language)}`, `更新于 ${formatTimeAgoFromNow(task.updatedAt, input.language)}`)
+          : pickUiText(input.language, "Update time unavailable", "更新时间未知"),
+        detailHref: buildTaskDetailHref(task.taskId, input.language),
+        priorityBucket,
+        dueSortValue: dueAtMs > 0 ? dueAtMs : Number.POSITIVE_INFINITY,
+        updatedSortValue: toSortableMs(task.updatedAt),
+        liveSignalCount: liveSessionCount + recentActivityCount,
+      };
+    })
+    .sort((left, right) => compareTaskSpotlightCardsWithManualOrder(left, right, manualOrderByTaskId));
+}
+
+function resolveTaskSpotlightTone(input: {
+  task: TaskListItem;
+  certainty: TaskCertaintyCard | undefined;
+  liveSessionCount: number;
+  blockedSessionCount: number;
+  errorSessionCount: number;
+  waitingApprovalSessionCount: number;
+  pendingApprovals: number;
+  recentActivityCount: number;
+}): TaskSpotlightCard["statusTone"] {
+  if (
+    input.task.status === "blocked" ||
+    input.certainty?.tone === "blocked" ||
+    input.errorSessionCount > 0 ||
+    input.blockedSessionCount > 0 ||
+    input.waitingApprovalSessionCount > 0 ||
+    input.pendingApprovals > 0
+  ) {
+    return "issue";
+  }
+  if (
+    input.task.status === "in_progress" ||
+    input.certainty?.tone === "ok" ||
+    input.liveSessionCount > 0 ||
+    input.recentActivityCount > 0
+  ) {
+    return "working";
+  }
+  return "idle";
+}
+
+function resolveTaskSpotlightPriorityBucket(input: {
+  task: TaskListItem;
+  statusTone: TaskSpotlightCard["statusTone"];
+  overdue: boolean;
+  dueSoon: boolean;
+}): number {
+  if (input.statusTone === "issue" && input.overdue) return 0;
+  if (input.statusTone === "issue") return 1;
+  if (input.statusTone === "working" && (input.overdue || input.dueSoon)) return 2;
+  if (input.statusTone === "working") return 3;
+  if (input.task.status === "done") return 6;
+  if (input.dueSoon) return 4;
+  return 5;
+}
+
+function taskSpotlightStatusLabel(
+  input: {
+    task: TaskListItem;
+    statusTone: TaskSpotlightCard["statusTone"];
+    errorSessionCount: number;
+    blockedSessionCount: number;
+    waitingApprovalSessionCount: number;
+    pendingApprovals: number;
+  },
+  language: UiLanguage,
+): string {
+  if (input.task.status === "done") return pickUiText(language, "Completed", "已完成");
+  if (input.statusTone === "issue") {
+    if (input.errorSessionCount > 0) return pickUiText(language, "Failed and needs fixing", "失败待修复");
+    if (input.blockedSessionCount > 0 || input.task.status === "blocked") {
+      return pickUiText(language, "Blocked and unresolved", "阻塞待处理");
+    }
+    if (input.waitingApprovalSessionCount > 0 || input.pendingApprovals > 0) {
+      return pickUiText(language, "Waiting on review", "等待处理");
+    }
+    return pickUiText(language, "Needs attention", "需要处理");
+  }
+  if (input.statusTone === "working") return pickUiText(language, "In progress", "工作中");
+  return pickUiText(language, "Queued", "排队中");
+}
+
+function taskSpotlightStatusDotLabel(
+  input: {
+    task: TaskListItem;
+    statusTone: TaskSpotlightCard["statusTone"];
+    errorSessionCount: number;
+    blockedSessionCount: number;
+    waitingApprovalSessionCount: number;
+    pendingApprovals: number;
+  },
+  language: UiLanguage,
+): string {
+  if (input.task.status === "done") return pickUiText(language, "Completed", "已完成");
+  if (input.statusTone === "working") return pickUiText(language, "Working now", "工作中");
+  if (input.statusTone === "issue") {
+    if (input.errorSessionCount > 0) return pickUiText(language, "Failure not resolved", "报错未解决");
+    if (input.blockedSessionCount > 0 || input.task.status === "blocked") {
+      return pickUiText(language, "Blocked and unresolved", "阻塞未解决");
+    }
+    if (input.waitingApprovalSessionCount > 0 || input.pendingApprovals > 0) {
+      return pickUiText(language, "Waiting on decision", "等待决策");
+    }
+    return pickUiText(language, "Issue detected", "出现问题");
+  }
+  return pickUiText(language, "Queued", "排队中");
+}
+
+function taskSpotlightPriorityLabel(priorityBucket: number, language: UiLanguage): string {
+  switch (priorityBucket) {
+    case 0:
+      return pickUiText(language, "Immediate", "立即处理");
+    case 1:
+      return pickUiText(language, "High priority", "高优先级");
+    case 2:
+      return pickUiText(language, "Follow closely", "重点跟进");
+    case 3:
+      return pickUiText(language, "Moving", "持续推进");
+    case 4:
+      return pickUiText(language, "Start soon", "准备启动");
+    case 6:
+      return pickUiText(language, "Completed", "已完成");
+    default:
+      return pickUiText(language, "Queued", "排队中");
+  }
+}
+
+function taskSpotlightSummary(
+  input: {
+    task: TaskListItem;
+    statusTone: TaskSpotlightCard["statusTone"];
+    certainty: TaskCertaintyCard | undefined;
+    liveSessionCount: number;
+    blockedSessionCount: number;
+    errorSessionCount: number;
+    waitingApprovalSessionCount: number;
+    pendingApprovals: number;
+    overdue: boolean;
+    recentActivityCount: number;
+  },
+  language: UiLanguage,
+): string {
+  if (input.task.status === "done") {
+    return pickUiText(language, "This task is complete and kept here for quick review.", "这项任务已完成，保留在这里便于快速回看。");
+  }
+  if (input.statusTone === "issue") {
+    if (input.errorSessionCount > 0) {
+      return pickUiText(language, "A linked execution is failing, so the task has not closed the loop yet.", "关联执行已经报错，这项任务目前还没有闭环。");
+    }
+    if (input.blockedSessionCount > 0 || input.task.status === "blocked") {
+      return pickUiText(language, "The task is blocked and needs the obstacle removed before work can continue.", "任务已经被阻塞，先解除问题后才能继续推进。");
+    }
+    if (input.waitingApprovalSessionCount > 0 || input.pendingApprovals > 0) {
+      return pickUiText(language, "The task is waiting for approval or a manual decision before it can continue.", "任务正在等待审批或人工决定，暂时不能继续。");
+    }
+    if (input.overdue) {
+      return pickUiText(language, "The task is already overdue and still does not have a stable execution path.", "任务已经逾期，而且还没有形成稳定的执行路径。");
+    }
+    return (
+      input.certainty?.summary ??
+      pickUiText(language, "This task still needs manual follow-up before it can move safely.", "这项任务还需要人工跟进后，才能继续安全推进。")
+    );
+  }
+  if (input.statusTone === "working") {
+    if (input.liveSessionCount > 0) {
+      return pickUiText(language, "Live runtime signals show that an employee is actively carrying this task.", "实时运行信号显示，这项任务正在被员工实际处理。");
+    }
+    if (input.recentActivityCount > 0) {
+      return pickUiText(language, "Recent runtime traces show this task is still moving.", "最近的运行痕迹表明，这项任务还在持续推进。");
+    }
+    return (
+      input.certainty?.summary ??
+      pickUiText(language, "The task has already started and now needs steady follow-through.", "这项任务已经启动，接下来需要持续跟进。")
+    );
+  }
+  return pickUiText(language, "The task is already in the queue and is waiting to be started.", "这项任务已经进入队列，正在等待启动。");
+}
+
+function taskSpotlightRecentSignal(
+  input: {
+    task: TaskListItem;
+    latestSignalAt: string | undefined;
+    latestSignalSnippet: string | undefined;
+  },
+  language: UiLanguage,
+): string {
+  if (input.latestSignalSnippet?.trim()) {
+    return summarizeVisibleSessionSnippet(input.latestSignalSnippet, language, 88);
+  }
+  if (input.latestSignalAt) {
+    return pickUiText(
+      language,
+      `Latest runtime signal ${formatTimeAgoFromNow(input.latestSignalAt, language)}.`,
+      `最近运行信号：${formatTimeAgoFromNow(input.latestSignalAt, language)}。`,
+    );
+  }
+  if (input.task.updatedAt) {
+    return pickUiText(
+      language,
+      `Latest board update ${formatTimeAgoFromNow(input.task.updatedAt, language)}.`,
+      `最近看板更新：${formatTimeAgoFromNow(input.task.updatedAt, language)}。`,
+    );
+  }
+  return pickUiText(language, "No recent signal yet.", "还没有最近信号。");
+}
+
+function taskSpotlightNextStep(
+  input: {
+    task: TaskListItem;
+    certainty: TaskCertaintyCard | undefined;
+    errorSessionCount: number;
+    blockedSessionCount: number;
+    waitingApprovalSessionCount: number;
+    pendingApprovals: number;
+    overdue: boolean;
+  },
+  language: UiLanguage,
+): string {
+  if (input.task.status === "done") {
+    return pickUiText(language, "Open the detail page if you want to review the sessions or deliverables.", "如果要复盘会话或交付物，可以打开详情页。");
+  }
+  if (input.errorSessionCount > 0) {
+    return input.certainty?.gaps[0] ?? pickUiText(language, "Repair the failing execution first.", "先修复已经失败的执行。");
+  }
+  if (input.blockedSessionCount > 0 || input.task.status === "blocked") {
+    return input.certainty?.gaps[0] ?? pickUiText(language, "Clear the blocker before asking the employee to continue.", "先解除阻塞，再让员工继续。");
+  }
+  if (input.waitingApprovalSessionCount > 0 || input.pendingApprovals > 0) {
+    return input.certainty?.gaps[0] ?? pickUiText(language, "Handle the approval or manual decision first.", "先处理审批或人工确认。");
+  }
+  if (input.overdue) {
+    return pickUiText(language, "Confirm whether to continue now or reset the due time.", "先确认是否立即继续，或重新安排截止时间。");
+  }
+  if (input.task.status === "todo") {
+    return pickUiText(language, "Assign and launch the work when the owner is ready.", "在负责人准备好后分派并启动执行。");
+  }
+  if (input.certainty?.gaps[0]) return input.certainty.gaps[0];
+  return pickUiText(language, "Keep the progress moving and update the result as it lands.", "继续推进任务，并及时更新结果。");
+}
+
+function taskSpotlightDueLabel(
+  task: TaskListItem,
+  dueAtMs: number,
+  nowMs: number,
+  language: UiLanguage,
+): string {
+  if (task.status === "done") return pickUiText(language, "Completed", "已完成");
+  if (!dueAtMs) return pickUiText(language, "No due time", "未设置截止");
+  const diffMs = dueAtMs - nowMs;
+  if (diffMs <= 0) return pickUiText(language, "Past due", "已逾期");
+  if (diffMs <= 60 * 60 * 1000) return pickUiText(language, "Due within 1 hour", "1 小时内截止");
+  if (diffMs <= 24 * 60 * 60 * 1000) return pickUiText(language, "Due today", "今天截止");
+  if (diffMs <= 48 * 60 * 60 * 1000) return pickUiText(language, "Due tomorrow", "明天截止");
+  return pickUiText(language, "Due later", "后续截止");
+}
+
+function compareTaskSpotlightCards(a: TaskSpotlightCard, b: TaskSpotlightCard): number {
+  return compareTaskSpotlightCardsWithManualOrder(a, b);
+}
+
+function compareTaskSpotlightCardsWithManualOrder(
+  a: TaskSpotlightCard,
+  b: TaskSpotlightCard,
+  manualOrderByTaskId?: ReadonlyMap<string, number>,
+): number {
+  const aManualIndex = manualOrderByTaskId?.get(a.cardId);
+  const bManualIndex = manualOrderByTaskId?.get(b.cardId);
+  if (aManualIndex !== undefined || bManualIndex !== undefined) {
+    if (aManualIndex !== undefined && bManualIndex !== undefined) return aManualIndex - bManualIndex;
+    return aManualIndex !== undefined ? -1 : 1;
+  }
+  if (a.priorityBucket !== b.priorityBucket) return a.priorityBucket - b.priorityBucket;
+  if (a.dueSortValue !== b.dueSortValue) return a.dueSortValue - b.dueSortValue;
+  if (b.liveSignalCount !== a.liveSignalCount) return b.liveSignalCount - a.liveSignalCount;
+  if (b.updatedSortValue !== a.updatedSortValue) return b.updatedSortValue - a.updatedSortValue;
+  return a.cardId.localeCompare(b.cardId);
+}
+
+function buildTaskCardManualOrderLookup(taskIds: string[]): Map<string, number> {
+  const lookup = new Map<string, number>();
+  taskIds.forEach((taskId, index) => {
+    const normalized = taskId.trim();
+    if (!normalized || lookup.has(normalized)) return;
+    lookup.set(normalized, index);
+  });
+  return lookup;
+}
+
+function buildTimedJobSpotlightCards(input: { jobs: CronBoardRow[]; language: UiLanguage }): TaskSpotlightCard[] {
+  return input.jobs
+    .map((job): TaskSpotlightCard => {
+      const scheduleLabel = humanizeTimedJobScheduleLabel(job.schedule, input.language);
+      const dueSortValue = toSortableMs(job.nextRun);
+      const dueLabel =
+        job.nextRun && job.nextRun !== "-"
+          ? humanizeTimedJobWindowLabel(job.nextRun, job.dueInSeconds, input.language)
+          : pickUiText(input.language, "Waiting for sync", "等待同步");
+      const dueInLabel = Number.isFinite(job.dueInSeconds)
+        ? pickUiText(
+            input.language,
+            `Due in ${formatSeconds(job.dueInSeconds!, input.language)}`,
+            `${formatSeconds(job.dueInSeconds!, input.language)}后执行`,
+          )
+        : pickUiText(input.language, "Waiting for next runtime update", "等待下一次运行时更新");
+      const nextStep =
+        job.status === "disabled"
+          ? pickUiText(input.language, "Enable or adjust this timed job before it can run again.", "启用或调整后，这个定时任务才会再次执行。")
+          : pickUiText(input.language, "Watch the next scheduled run and confirm the employee picks it up.", "关注下一次执行时间，并确认对应员工已接手。");
+      return {
+        cardId: `cron:${job.jobId}`,
+        cardKind: "timed_job",
+        taskId: job.jobId,
+        title: job.name,
+        projectTitle: job.sourceLabel,
+        taskStatus: "scheduled",
+        ownerLabel: job.owner,
+        statusTone: "scheduled",
+        statusLabel: pickUiText(input.language, "Timed job", "定时任务"),
+        statusDotLabel: pickUiText(input.language, "Timed job schedule", "定时任务排程"),
+        priorityLabel:
+          job.status === "disabled"
+            ? pickUiText(input.language, "Paused", "已暂停")
+            : Number.isFinite(job.dueInSeconds) && job.dueInSeconds! <= 60 * 60
+              ? pickUiText(input.language, "Run soon", "即将执行")
+              : pickUiText(input.language, "Scheduled", "已排程"),
+        boardStatusLabel: job.statusLabel,
+        boardStatusTone:
+          job.status === "disabled"
+            ? "blocked"
+            : job.status === "ok" || job.status === "enabled"
+              ? "ok"
+              : "warn",
+        summary: sanitizeCronPurposeText(job.purpose, input.language, 120),
+        recentSignal: `${job.sourceLabel} · ${job.statusLabel}`,
+        nextStep,
+        scheduleLabel,
+        dueLabel,
+        updatedLabel: dueInLabel,
+        detailHref: buildCronDetailHref(job.jobId, input.language),
+        priorityBucket:
+          job.status === "disabled"
+            ? 6
+            : Number.isFinite(job.dueInSeconds) && job.dueInSeconds! <= 60 * 60
+              ? 3
+              : 4,
+        dueSortValue: dueSortValue > 0 ? dueSortValue : Number.POSITIVE_INFINITY,
+        updatedSortValue: Number.isFinite(job.dueInSeconds) ? -Math.max(0, job.dueInSeconds ?? 0) : 0,
+        liveSignalCount: job.status === "ok" || job.status === "enabled" ? 1 : 0,
+      };
+    })
+    .sort(compareTaskSpotlightCards);
+}
+
+function buildUnifiedTaskBoardCards(input: {
+  taskCards: TaskSpotlightCard[];
+  timedJobCards: TaskSpotlightCard[];
+  manualOrder: string[];
+}): TaskSpotlightCard[] {
+  const manualOrderByTaskId = buildTaskCardManualOrderLookup(input.manualOrder);
+  return [...input.taskCards, ...input.timedJobCards].sort((left, right) =>
+    compareTaskSpotlightCardsWithManualOrder(left, right, manualOrderByTaskId),
+  );
 }
 
 function mergeSessionConversationItems(
@@ -4489,8 +6394,8 @@ async function renderHtml(
           )
       : activeSection === "projects-tasks"
         ? t(
-            "Start with schedule and cron execution. Staff can be active from cron or ad-hoc sessions even when there is no tracked task row yet.",
-            "先看排程和 Cron 执行。员工显示在工作，可能只是 Cron 或临时会话在跑，不一定已经落成可跟踪的任务条目。",
+            "Start with the task and schedule card wall. It now merges tracked tasks, due times, and timed jobs into one place before you drill into execution detail.",
+            "先看任务与排程卡片墙。现在会先把跟踪任务、截止时间和定时任务合到一起，再往下钻执行细节。",
           )
         : sectionMeta.blurb;
   const needsSessionPreview =
@@ -4504,6 +6409,10 @@ async function renderHtml(
   const needsUpdateSummary = activeSection === "settings";
   const needsMemoryState = activeSection === "memory";
   const needsCollaborationThreads = activeSection === "collaboration";
+  // Preserve local aliases used by the employee-system custom docs/memory refresh flow.
+  const needsMemorySection = needsMemoryFiles;
+  const needsDocsHub = needsWorkspaceFiles;
+  const needsSettingsInsights = activeSection === "settings";
   markRenderPhase("snapshot");
   const exceptions = commanderExceptions(snapshot);
   const exceptionsFeed = commanderExceptionsFeed(snapshot);
@@ -4543,16 +6452,30 @@ async function renderHtml(
         };
   const sessionRows = renderSessionPreviewRows(sessionPreview.items, options.language);
   markRenderPhase("session-preview");
-  const [cronOverview, openclawCronJobs, replayPreview, usageCost, officeRoster, officePresence] = await Promise.all([
+  const [cronOverview, openclawCronJobs, replayPreview, usageCost, officeRoster, officePresence, agentTeamEmbed] = await Promise.all([
     buildCronOverview(snapshot, POLLING_INTERVALS_MS.cron),
     loadOpenclawCronCatalog(options.language),
     loadCachedReplayPreview(),
     loadCachedUsageCost(snapshot, usageCostMode),
     loadBestEffortAgentRoster(),
     loadCachedOfficeSessionPresence(),
+    loadAgentTeamEmbedSnapshot(),
   ]);
   markRenderPhase("shared-data");
-  const [teamSnapshot, memoryFiles, memoryFacetOptions, workspaceFiles, workspaceFacetOptions, taskEvidenceItems, connectionHealthSummary, securitySummary, updateSummary, memoryStateSummary] = await Promise.all([
+  const [
+    teamSnapshot,
+    memoryFiles,
+    memoryFacetOptions,
+    workspaceFiles,
+    workspaceFacetOptions,
+    workspaceAgentScopes,
+    docHubSnapshot,
+    taskEvidenceItems,
+    connectionHealthSummary,
+    securitySummary,
+    updateSummary,
+    memoryStateSummary,
+  ] = await Promise.all([
     needsTeamSnapshot
       ? loadTeamSnapshot(officeRoster)
       : Promise.resolve<TeamSnapshot>({
@@ -4560,11 +6483,22 @@ async function renderHtml(
           members: [],
           sourcePath: OPENCLAW_CONFIG_PATH,
           detail: t("Loaded on the staff page only.", "仅在员工页加载。"),
+          modelOptions: [],
+          modelEditable: false,
         }),
-    needsMemoryFiles ? listEditableFiles("memory") : Promise.resolve<EditableFileEntry[]>([]),
-    needsMemoryFiles ? listMemoryFacetOptions() : Promise.resolve<Array<{ key: string; label: string }>>([]),
-    needsWorkspaceFiles ? listEditableFiles("workspace") : Promise.resolve<EditableFileEntry[]>([]),
-    needsWorkspaceFiles ? listWorkspaceFacetOptions() : Promise.resolve<Array<{ key: string; label: string }>>([]),
+    needsMemorySection ? listEditableFiles("memory") : Promise.resolve<EditableFileEntry[]>([]),
+    needsMemorySection ? listMemoryFacetOptions() : Promise.resolve<Array<{ key: string; label: string }>>([]),
+    needsDocsHub ? listEditableFiles("workspace") : Promise.resolve<EditableFileEntry[]>([]),
+    needsDocsHub ? listWorkspaceFacetOptions() : Promise.resolve<Array<{ key: string; label: string }>>([]),
+    needsDocsHub ? loadEditableAgentScopes() : Promise.resolve<EditableAgentScope[]>([]),
+    needsDocsHub
+      ? loadStructuredDocHubSnapshotFromDocsHub(snapshot, toolClient)
+      : Promise.resolve({
+          generatedAt: snapshot.generatedAt,
+          sourcePath: join(process.cwd(), "runtime", "doc-hub-chat.json"),
+          detail: t("Loaded on the docs page only.", "仅在文档页加载。"),
+          items: [],
+        }),
     needsTaskEvidence
       ? loadCachedTaskEvidenceSessions(
           snapshot,
@@ -4573,10 +6507,10 @@ async function renderHtml(
           24,
         )
       : Promise.resolve<SessionConversationListItem[]>([]),
-    needsConnectionHealth ? loadCachedOpenClawConnectionSummary() : Promise.resolve<OpenClawConnectionSummary | undefined>(undefined),
-    needsSecuritySummary ? loadCachedOpenClawSecuritySummary() : Promise.resolve<OpenClawSecuritySummary | undefined>(undefined),
-    needsUpdateSummary ? loadCachedOpenClawUpdateSummary() : Promise.resolve<OpenClawUpdateSummary | undefined>(undefined),
-    needsMemoryState ? loadCachedOpenClawMemorySummary() : Promise.resolve<OpenClawMemorySummary | undefined>(undefined),
+    needsSettingsInsights ? loadCachedOpenClawConnectionSummary() : Promise.resolve<OpenClawConnectionSummary | undefined>(undefined),
+    needsSettingsInsights ? loadCachedOpenClawSecuritySummary() : Promise.resolve<OpenClawSecuritySummary | undefined>(undefined),
+    needsSettingsInsights ? loadCachedOpenClawUpdateSummary() : Promise.resolve<OpenClawUpdateSummary | undefined>(undefined),
+    needsMemorySection ? loadCachedOpenClawMemorySummary() : Promise.resolve<OpenClawMemorySummary | undefined>(undefined),
   ]);
   markRenderPhase("section-assets");
   const usageToday = usageCost.periods.find((item) => item.key === "today");
@@ -4640,6 +6574,15 @@ async function renderHtml(
     sessions: snapshot.sessions,
     sessionItems: taskSignalItems,
     approvals: snapshot.approvals,
+    language: options.language,
+  });
+  const taskSpotlightCards = buildTaskSpotlightCards({
+    tasks,
+    certaintyCards: taskCertaintyCards,
+    sessions: snapshot.sessions,
+    sessionItems: taskSignalItems,
+    approvals: snapshot.approvals,
+    manualOrder: options.taskCardOrder,
     language: options.language,
   });
   const taskCertaintyStrongCount = taskCertaintyCards.filter((item) => item.tone === "ok").length;
@@ -4725,7 +6668,7 @@ async function renderHtml(
   const currentTaskHealthHref = `${buildHomeHref({ quick: "all" }, true, "projects-tasks", options.language, options.usageView)}#tracked-task-view`;
   const runtimeCronById = new Map(cronOverview.jobs.map((job) => [job.jobId, job]));
   const catalogMatchedRuntimeIds = new Set<string>();
-  const catalogCronRows = openclawCronJobs.map((job) => {
+  const catalogCronRows: CronBoardRow[] = openclawCronJobs.map((job): CronBoardRow => {
     const runtimeJob = runtimeCronById.get(job.jobId);
     if (runtimeJob) catalogMatchedRuntimeIds.add(job.jobId);
     const status = runtimeJob ? runtimeJob.health : job.enabled ? "enabled" : "disabled";
@@ -4749,9 +6692,9 @@ async function renderHtml(
       dueInSeconds: runtimeJob?.dueInSeconds,
     };
   });
-  const runtimeOnlyCronRows = cronOverview.jobs
+  const runtimeOnlyCronRows: CronBoardRow[] = cronOverview.jobs
     .filter((job) => !catalogMatchedRuntimeIds.has(job.jobId))
-    .map((job) => ({
+    .map((job): CronBoardRow => ({
       source: "runtime",
       sourceLabel: t("Runtime monitor", "系统监控"),
       jobId: job.jobId,
@@ -4765,6 +6708,12 @@ async function renderHtml(
       dueInSeconds: job.dueInSeconds,
     }));
   const allCronRows = [...catalogCronRows, ...runtimeOnlyCronRows];
+  const timedJobSpotlightCards = buildTimedJobSpotlightCards({ jobs: allCronRows, language: options.language });
+  const taskBoardCards = buildUnifiedTaskBoardCards({
+    taskCards: taskSpotlightCards,
+    timedJobCards: timedJobSpotlightCards,
+    manualOrder: options.taskCardOrder,
+  });
   const cronRows =
     allCronRows
       .slice(0, 20)
@@ -4782,7 +6731,7 @@ async function renderHtml(
           .slice(0, 40)
           .map(
             (item) =>
-              `<tr><td>${escapeHtml(item.sourceLabel)}</td><td><div>${escapeHtml(item.name)}</div><div class="meta">${escapeHtml(item.jobId)}</div></td><td>${escapeHtml(item.owner)}</td><td>${escapeHtml(sanitizeCronPurposeText(item.purpose, options.language, 48))}</td><td>${escapeHtml(displayCronScheduleLabel(item.schedule, options.language))}</td><td>${escapeHtml(item.nextRun)}</td><td>${badge(item.status, item.statusLabel)}</td></tr>`,
+              `<tr><td>${escapeHtml(item.sourceLabel)}</td><td><div>${escapeHtml(item.name)}</div><div class="meta">${escapeHtml(item.jobId)}</div></td><td>${escapeHtml(item.owner)}</td><td>${escapeHtml(sanitizeCronPurposeText(item.purpose, options.language, 48))}</td><td>${escapeHtml(humanizeTimedJobScheduleLabel(item.schedule, options.language))}</td><td>${escapeHtml(item.nextRun)}</td><td>${badge(item.status, item.statusLabel)}</td></tr>`,
           )
           .join("");
   const toolSessions = sessionPreview.items
@@ -4806,37 +6755,37 @@ async function renderHtml(
   const importGuardRows = [
     {
       label: "只读保护",
-      value: String(READONLY_MODE),
+      value: READONLY_MODE ? "开启" : "关闭",
       note: READONLY_MODE ? "当前只允许安全演练，不会写入真实变更。" : "允许真实写入，请确认后使用。",
       status: READONLY_MODE ? "enabled" : "warn",
     },
     {
-      label: "关键操作身份验证",
-      value: String(LOCAL_TOKEN_AUTH_REQUIRED),
-      note: LOCAL_TOKEN_AUTH_REQUIRED ? "已开启，关键操作需要身份验证。" : "未开启，建议在生产环境开启。",
+      label: "关键写入保护",
+      value: LOCAL_TOKEN_AUTH_REQUIRED ? "开启" : "关闭",
+      note: LOCAL_TOKEN_AUTH_REQUIRED ? "会改数据的操作需要先过一层保护。" : "当前没有额外保护，建议只在测试环境这样用。",
       status: LOCAL_TOKEN_AUTH_REQUIRED ? "enabled" : "warn",
     },
     {
-      label: "身份验证配置",
-      value: String(importGuard.localTokenConfigured),
-      note: importGuard.localTokenConfigured ? "已配置完成。" : "尚未配置，关键操作将被拦截。",
+      label: "安全口令配置",
+      value: importGuard.localTokenConfigured ? "已设置" : "未设置",
+      note: importGuard.localTokenConfigured ? "这台机器已经设置了保护口令。" : "这台机器还没设置保护口令，所以高风险写入会被拦住。",
       status: importGuard.localTokenConfigured ? "enabled" : "blocked",
     },
     {
-      label: "身份验证状态",
+      label: "当前保护状态",
       value: tokenGateStatus === "armed" ? "已就绪" : tokenGateStatus === "blocked_no_token" ? "未配置" : "未开启",
-      note: "用于保护关键写入操作。",
+      note: "只影响会改数据的操作，不影响普通查看。",
       status: tokenGateStatus === "armed" ? "enabled" : tokenGateStatus === "blocked_no_token" ? "blocked" : "disabled",
     },
     {
       label: "变更写入开关",
-      value: String(IMPORT_MUTATION_ENABLED),
+      value: IMPORT_MUTATION_ENABLED ? "开启" : "关闭",
       note: IMPORT_MUTATION_ENABLED ? "允许写入导入变更。" : "已关闭导入写入。",
       status: IMPORT_MUTATION_ENABLED ? "warn" : "disabled",
     },
     {
       label: "审批写入开关",
-      value: String(APPROVAL_ACTIONS_ENABLED),
+      value: APPROVAL_ACTIONS_ENABLED ? "开启" : "关闭",
       note: APPROVAL_ACTIONS_ENABLED ? "允许执行审批写入。" : "已关闭审批写入。",
       status: APPROVAL_ACTIONS_ENABLED ? "warn" : "disabled",
     },
@@ -4981,7 +6930,7 @@ async function renderHtml(
                 const detailHref = buildCronDetailHref(item.jobId, options.language);
                 return `<li class="group-item">
                   <div class="group-item-head"><strong>${escapeHtml(item.name)}</strong>${badge(item.status, item.statusLabel)}</div>
-                  <div class="meta"><code>${escapeHtml(item.jobId)}</code> · ${escapeHtml(displayCronScheduleLabel(item.schedule, options.language))}</div>
+                  <div class="meta"><code>${escapeHtml(item.jobId)}</code> · ${escapeHtml(humanizeTimedJobScheduleLabel(item.schedule, options.language))}</div>
                   <div class="meta">${escapeHtml(sanitizeCronPurposeText(item.purpose, options.language, 80))}</div>
                   <div class="meta"><a href="${escapeHtml(detailHref)}">${escapeHtml(t("Open task detail", "查看任务详情页"))}</a></div>
                 </li>`;
@@ -4992,7 +6941,7 @@ async function renderHtml(
           .join("")}</div>`;
 
   const exceptionsItems = renderExceptionsList(exceptionsFeed);
-  const taskBoard = renderTaskBoard(tasks, options.language);
+  const taskBoard = renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel);
   const projectBoard = renderProjectBoard(snapshot.projectSummaries, options.language);
   const actionQueueItems = renderActionQueue(actionQueue);
   const effectiveQuick = filters.quick ?? "all";
@@ -5126,6 +7075,9 @@ async function renderHtml(
         officeCards,
         executionAgentSummaries,
         language: options.language,
+        modelOptions: teamSnapshot.modelOptions,
+        modelEditable: teamSnapshot.modelEditable,
+        configPath: teamSnapshot.sourcePath,
       })
     : [];
   const staffOverviewCardsHtml = renderStaffOverviewCards(staffOverviewCards, options.language);
@@ -5137,6 +7089,18 @@ async function renderHtml(
     return `<a class="nav-link${activeClass}" href="${escapeHtml(href)}"${current}><span>${escapeHtml(item.label)}</span><small>${escapeHtml(item.blurb)}</small></a>`;
   }).join("");
   const languageToggle = renderLanguageToggle(filters, options);
+  const dashboardRefreshControls = renderDashboardRefreshControls(options.language);
+  const agentTeamLinks = agentTeamSidebarLinks(filters, options);
+  const agentTeamSidebarCard = renderAgentTeamSidebarCard(agentTeamEmbed, options.language, agentTeamLinks);
+  const agentTeamOverviewBlock = renderAgentTeamOverviewBlock(agentTeamEmbed, options.language, agentTeamLinks);
+  const agentTeamMemoryBlock = renderAgentTeamMemoryBlock(agentTeamEmbed, options.language);
+  const agentTeamDocsBlock = renderAgentTeamDocsBlock(agentTeamEmbed, options.language);
+  const agentTeamProjectsBlock = renderAgentTeamProjectsBlock(agentTeamEmbed, options.language);
+  const agentTeamSettingsBlock = renderAgentTeamSettingsBlock(agentTeamEmbed, options.language);
+  const agentTeamInspectorSummary = renderAgentTeamInspectorSummary(agentTeamEmbed, options.language);
+  const agentTeamInspectorCard = renderAgentTeamInspectorCard(agentTeamEmbed, options.language);
+  const agentTeamRunSummaryCard = renderAgentTeamRunSummaryCard(agentTeamEmbed, options.language);
+  const agentTeamArtifactPreviewCard = renderAgentTeamArtifactPreviewCard(agentTeamEmbed, options.language);
   const replayMomentsRows =
     replayMoments.length === 0
       ? `<li>${escapeHtml(t("No timeline events yet.", "暂无时间线事件。"))}</li>`
@@ -5358,11 +7322,63 @@ async function renderHtml(
             return `<article class="cron-owner-card"><div class="cron-owner-head"><h3>${escapeHtml(owner)}</h3><span class="meta">${jobs.length} ${escapeHtml(t("jobs", "个任务"))}</span></div><div class="meta">${escapeHtml(t("Healthy", "健康"))} ${healthyCount} · ${escapeHtml(t("Attention", "关注"))} ${unhealthyCount}</div><ul class="cron-job-list">${jobRows}</ul>${moreLabel}</article>`;
           })
           .join("")}</div>`;
+  const cronExecutionCardsHtml =
+    allCronRows.length === 0
+      ? `<div class="empty-state">${escapeHtml(t("No timed jobs yet. They will appear as execution cards here once configured.", "暂无定时任务。配置完成后，这里会显示执行卡片。"))}</div>`
+      : `<div class="cron-run-grid">${allCronRows
+          .slice()
+          .sort((a, b) => {
+            const aIssue = a.status !== "ok" && a.status !== "enabled" ? 1 : 0;
+            const bIssue = b.status !== "ok" && b.status !== "enabled" ? 1 : 0;
+            if (bIssue !== aIssue) return bIssue - aIssue;
+            const aSort = toSortableMs(a.nextRun);
+            const bSort = toSortableMs(b.nextRun);
+            if (aSort !== bSort) return aSort - bSort;
+            return a.name.localeCompare(b.name, "zh-Hans-CN");
+          })
+          .slice(0, 18)
+          .map((item) => {
+            const dueIn = Number.isFinite(item.dueInSeconds) ? formatSeconds(item.dueInSeconds!, options.language) : t("Unknown", "未知");
+            const nextStep =
+              item.status === "disabled"
+                ? t("Currently paused. Enable it before the next cycle.", "当前已暂停，启用后才会进入下一轮。")
+                : t("Watch the next execution window and confirm the assigned employee starts work.", "关注下一次执行窗口，并确认对应员工开始工作。");
+            return `<article class="cron-run-card">
+              <div class="cron-run-head">
+                <div>
+                  <div class="meta">${escapeHtml(item.sourceLabel)}</div>
+                  <h3>${escapeHtml(item.name)}</h3>
+                </div>
+                <div>${badge(item.status, item.statusLabel)}</div>
+              </div>
+              <div class="cron-run-pills">
+                ${badge("enabled", item.owner)}
+                ${badge(item.status === "disabled" ? "blocked" : "ok", item.schedule)}
+              </div>
+              <dl class="cron-run-list">
+                <div class="cron-run-row"><dt>${escapeHtml(t("Purpose", "用途"))}</dt><dd>${escapeHtml(sanitizeCronPurposeText(item.purpose, options.language, 120))}</dd></div>
+                <div class="cron-run-row"><dt>${escapeHtml(t("Next run", "下次执行"))}</dt><dd>${escapeHtml(item.nextRun)}</dd></div>
+                <div class="cron-run-row"><dt>${escapeHtml(t("Countdown", "倒计时"))}</dt><dd>${escapeHtml(dueIn)}</dd></div>
+                <div class="cron-run-row"><dt>${escapeHtml(t("Next step", "下一步"))}</dt><dd>${escapeHtml(nextStep)}</dd></div>
+              </dl>
+              <div class="cron-run-actions">
+                <div class="meta"><code>${escapeHtml(item.jobId)}</code></div>
+                <a class="btn" href="${escapeHtml(buildCronDetailHref(item.jobId, options.language))}">${escapeHtml(t("Open detail", "查看详情"))}</a>
+              </div>
+            </article>`;
+          })
+          .join("")}</div>`;
   const subscriptionSidebarRows = renderSubscriptionSidebarSummary(usageCost.subscription, options.language);
   const usageDetailHref = buildHomeHref({ quick: "all" }, options.compactStatusStrip, "usage-cost", options.language, options.usageView);
-  const connectionHealthCard = renderOpenClawConnectionCard(connectionHealthSummary, usageCost, options.language);
-  const securityRiskSection = renderOpenClawSecuritySection(securitySummary, options.language);
-  const updateStatusSection = renderOpenClawUpdateSection(updateSummary, options.language);
+  const agentTeamTeamBlock = renderAgentTeamTeamBlock(agentTeamEmbed, options.language);
+  const settingsEnvironmentStatusCard = renderSettingsEnvironmentStatusCard(
+    connectionHealthSummary,
+    usageCost,
+    securitySummary,
+    updateSummary,
+    options.language,
+  );
+  const settingsConfigAccessCard = renderSettingsConfigAccessCard(importGuardRows, usageConnectorTodos, options.language);
   const contextPressureCard = renderContextPressureCard(usageCost, options.language);
   const memoryStateSection = renderMemoryStateSection(memoryStateSummary, options.language);
   const overviewUsagePeriods = isTodayUsageView
@@ -5635,6 +7651,7 @@ async function renderHtml(
       </article>
       ${overviewTopMetricHtml}
     </section>
+    ${agentTeamOverviewBlock}
     <section class="overview-decision-grid" id="overview-primary-section">
       <article class="card" id="overview-decision-center">
         <div class="overview-command-head">
@@ -5783,11 +7800,11 @@ async function renderHtml(
             return `<article class="calendar-day"><h3>${escapeHtml(day)}</h3><div class="meta">${events.length} ${escapeHtml(t("scheduled items", "条排程"))}</div><ul class="calendar-event-list">${rows}</ul></article>`;
           })
           .join("")}</div>`;
-  const calendarSection = `
+  const legacyCalendarSection = `
     <section class="card" id="calendar-board">
       <div id="task-timeline">
         <h2>${escapeHtml(t("Today and next schedule", "今日与下一批排程"))}</h2>
-        <div class="meta">${escapeHtml(t("See timed jobs and due dates together so you can confirm OpenClaw actually scheduled them, instead of only saying it did in chat.", "把定时任务和任务截止放在一起看，确认 OpenClaw 真的排上了，而不是只在对话里说“已安排”。"))}</div>
+        <div class="meta">${escapeHtml(t("See timed jobs and due dates together so you can confirm the AI employee system actually scheduled them, instead of only saying it did in chat.", "把定时任务和任务截止放在一起看，确认 AI 员工系统真的排上了，而不是只在对话里说“已安排”。"))}</div>
         <div class="timeline-summary-strip">
           <div class="timeline-stat"><span>${escapeHtml(t("Timed jobs", "定时任务"))}</span><strong>${allCronRows.length}</strong><small>${escapeHtml(t("Catalog total", "名录总数"))}</small></div>
           <div class="timeline-stat"><span>${escapeHtml(t("Enabled", "启用"))}</span><strong>${enabledCronCount}</strong><small>${escapeHtml(t("Ready to run", "已准备执行"))}</small></div>
@@ -5801,7 +7818,7 @@ async function renderHtml(
       </details>
     </section>
   `;
-  const cronExecutionSection = `
+  const legacyCronExecutionSection = `
     <section class="card" id="cron-execution-board">
       <div class="overview-command-head">
         <h2>${escapeHtml(t("Cron execution board", "Cron 执行看板"))}</h2>
@@ -5827,20 +7844,12 @@ async function renderHtml(
       ${taskExecutionChainHtml}
     </section>
   `;
-  const teamMembersTableRows =
-    teamSnapshot.members.length === 0
-      ? `<tr><td colspan="5">${escapeHtml(t("No staff found.", "暂无员工。"))}</td></tr>`
-      : teamSnapshot.members
-          .map(
-            (member) =>
-              `<tr><td>${escapeHtml(member.displayName)}</td><td><code>${escapeHtml(member.agentId)}</code></td><td>${escapeHtml(member.model)}</td><td>${escapeHtml(member.toolsProfile)}</td><td>${escapeHtml(member.workspace)}</td></tr>`,
-          )
-          .join("");
   const teamSection = `
     <section class="card">
       <h2>${escapeHtml(t("Staff overview", "员工总览"))}</h2>
       <div class="meta">${escapeHtml(t("The default view shows only name, role, current status, current work, recent output, and whether each person is on the schedule.", "默认视图只显示员工名字、角色定位、当前状态、正在处理什么、最近产出，以及是否在排班里。"))}</div>
       ${staffOverviewCardsHtml}
+      ${agentTeamTeamBlock}
     </section>
     <details class="card compact-details">
       <summary>${escapeHtml(t("Shared staff mission", "员工共同目标"))}</summary>
@@ -5848,15 +7857,6 @@ async function renderHtml(
         <div class="mission-banner">${escapeHtml(teamSnapshot.missionStatement)}</div>
         <div class="meta">${escapeHtml(t("Source", "来源"))}：${escapeHtml(teamSnapshot.sourcePath)}</div>
         <div class="meta">${escapeHtml(teamSnapshot.detail)}</div>
-      </div>
-    </details>
-    <details class="card compact-details">
-      <summary>${escapeHtml(t("Staff system details", "员工配置明细"))}</summary>
-      <div class="fold-body">
-        <table>
-          <thead><tr><th>${escapeHtml(t("Name", "名称"))}</th><th>agentId</th><th>${escapeHtml(t("Model", "模型"))}</th><th>${escapeHtml(t("Tool profile", "工具权限"))}</th><th>${escapeHtml(t("Workspace", "工作目录"))}</th></tr></thead>
-          <tbody>${teamMembersTableRows}</tbody>
-        </table>
       </div>
     </details>
   `;
@@ -5921,12 +7921,12 @@ async function renderHtml(
     </section>
   `;
   const memoryMainCount = memoryFiles.filter((entry) => entry.facetKey === "main").length;
-  const memoryWorkbench = needsMemoryFiles
+  const memoryWorkbench = needsMemorySection
     ? await renderEditableFileWorkbench({
         scope: "memory",
         language: options.language,
         title: t("Memory file workbench", "记忆文件工作台"),
-        description: t("Browse and edit OpenClaw memory files directly. Saving writes back to the source files.", "直接浏览和修改 OpenClaw 的记忆文件。保存后会写回原文件。"),
+        description: t("Browse and edit AI employee system memory files directly. Saving writes back to the source files.", "直接浏览和修改 AI 员工系统的记忆文件。保存后会写回原文件。"),
         entries: memoryFiles,
         emptyMessage: t("There are no editable memory files right now.", "当前没有可编辑的记忆文件。"),
         defaultFacetKey: "main",
@@ -5934,43 +7934,29 @@ async function renderHtml(
         facetOptions: memoryFacetOptions,
       })
     : "";
-  const memoryViewsLabel = joinDisplayList(["Main", ...memoryFacetOptions.filter((item) => item.key !== "main").map((item) => item.label)], options.language);
+  const mainMemoryFacetLabel = memoryFacetOptions.find((item) => item.key === "main")?.label ?? "Main";
+  const memoryViewsLabel = joinDisplayList(memoryFacetOptions.map((item) => item.label), options.language);
   const memorySection = `
     <section class="card">
       <h2>${escapeHtml(t("Memory overview", "记忆概览"))}</h2>
-      <div class="meta">Main ${escapeHtml(t("memories", "记忆"))} ${memoryMainCount} ${escapeHtml(t("files", "份"))} · ${escapeHtml(t("Agents found", "已发现智能体"))} ${Math.max(0, memoryFacetOptions.filter((item) => item.key !== "main").length)} ${escapeHtml(t("items", "个"))}</div>
+      <div class="meta">${escapeHtml(mainMemoryFacetLabel)} ${escapeHtml(t("memories", "记忆"))} ${memoryMainCount} ${escapeHtml(t("files", "份"))} · ${escapeHtml(t("Agents found", "已发现智能体"))} ${Math.max(0, memoryFacetOptions.filter((item) => item.key !== "main").length)} ${escapeHtml(t("items", "个"))}</div>
       <div class="meta">${escapeHtml(t("Available views", "可切换查看"))}${escapeHtml(options.language === "en" ? ": " : "：")}${escapeHtml(memoryViewsLabel)}</div>
       <div class="meta">${escapeHtml(t("Only memory-related files are kept here: root MEMORY.md, memory/, and each agent's own MEMORY.md and memory/.", "这里只保留记忆相关文件：根目录 MEMORY.md、memory/，以及各智能体自己的 MEMORY.md 与 memory/。"))}</div>
-      <div class="meta">${escapeHtml(t("Edits here sync directly back to the real memory files on the OpenClaw machine.", "这里的编辑会直接同步到 OpenClaw 机器上的真实记忆文件。"))}</div>
+      <div class="meta">${escapeHtml(t("Edits here sync directly back to the real memory files on the machine running the AI employee system.", "这里的编辑会直接同步到运行 AI 员工系统的机器上的真实记忆文件。"))}</div>
     </section>
     ${memoryWorkbench}
     ${memoryStateSection}
+    ${agentTeamMemoryBlock}
   `;
-  const mainDocumentCount = workspaceFiles.filter((entry) => entry.facetKey === "main").length;
-  const workspaceWorkbench = needsWorkspaceFiles
-    ? await renderEditableFileWorkbench({
-        scope: "workspace",
-        language: options.language,
-        title: t("Document workbench", "文档工作台"),
-        description: t("Keep only Main documents and each active agent's most useful core Markdown files. Saving writes back to the source files.", "只保留 Main 文档，以及当前启用智能体最有用、最应该调整的核心 Markdown。保存后会直接写回源文件。"),
-        entries: workspaceFiles,
-        emptyMessage: t("No editable Main documents or core agent documents were found.", "当前没有发现可编辑的 Main 文档或智能体核心文档。"),
-        defaultFacetKey: "main",
-        includeAllFacet: false,
-        facetOptions: workspaceFacetOptions,
-      })
-    : "";
-  const documentViewsLabel = joinDisplayList(["Main", ...workspaceFacetOptions.filter((item) => item.key !== "main").map((item) => item.label)], options.language);
-  const docsSection = `
-    <section class="card">
-      <h2>${escapeHtml(t("Document overview", "文档概览"))}</h2>
-      <div class="meta">${escapeHtml(t("Main documents", "Main 文档"))} ${mainDocumentCount} ${escapeHtml(t("files", "份"))} · ${escapeHtml(t("Agents found", "已发现智能体"))} ${Math.max(0, workspaceFacetOptions.filter((item) => item.key !== "main").length)} ${escapeHtml(t("items", "个"))}</div>
-      <div class="meta">${escapeHtml(t("Available views", "可切换查看"))}${escapeHtml(options.language === "en" ? ": " : "：")}${escapeHtml(documentViewsLabel)}</div>
-      <div class="meta">${escapeHtml(t("This keeps only Main documents plus the small set of Markdown files that matter most for each active agent.", "这里只保留 Main 文档，以及当前启用智能体最常用、最值得调整的那几份 Markdown。"))}</div>
-      <div class="meta">${escapeHtml(t("Documents are no longer shown by chat history. They are archived by Main or by active agent.", "不再按会话历史展示文档，统一按 Main / 当前启用智能体归档。"))}</div>
-    </section>
-    ${workspaceWorkbench}
-  `;
+  const docsSection = await renderDocsSectionFromDocsHub({
+    language: options.language,
+    workspaceFiles,
+    workspaceFacetOptions,
+    projectSummaries: snapshot.projectSummaries,
+    agentScopes: workspaceAgentScopes,
+    docHubSnapshot,
+    agentTeamDocsBlockHtml: agentTeamDocsBlock,
+  });
   const usageSection = `
     <section class="card">
       <h2>${escapeHtml(t("Measurement scope", "统计口径"))}</h2>
@@ -6080,7 +8066,7 @@ async function renderHtml(
     </details>
   `;
   const teamUnifiedSection = teamSection;
-  const hasTrackedTaskPanels = tasks.length > 0 || pendingDecisionCount > 0 || taskCertaintyCards.length > 0;
+  const hasTrackedTaskPanels = true;
   const trackedTaskDetailsOpen = pendingDecisionCount > 0 || taskCertaintyCards.length > 0;
   const trackedTaskSummaryText = hasTrackedTaskPanels
     ? t(
@@ -6102,7 +8088,7 @@ async function renderHtml(
           "There is no tracked task row visible right now. Start here only when you actually use the task store.",
           "当前还没有可见的跟踪任务条目。只有真正使用任务库时，这里才会出现内容。",
         );
-  const trackedTaskDetailsBody = hasTrackedTaskPanels
+  const legacyTrackedTaskDetailsBody = hasTrackedTaskPanels
     ? `
       <section class="task-hub-shell" id="task-hub">
         <article class="card task-hub-primary" id="task-hub-primary">
@@ -6138,15 +8124,20 @@ async function renderHtml(
       ${taskExecutionChainSection}
       <section class="task-hub-grid task-hub-board-grid">
         <section class="card" id="task-lane">
-          <h2>${escapeHtml(t("Task lanes", "任务泳道"))}</h2>
-          <div class="meta">${escapeHtml(t("Current focus", "当前关注"))}：${escapeHtml(quickFilterLabel(effectiveQuick, options.language))}</div>
-          ${
-            controlCenterMappingTasks.length > 0
-              ? `<div class="meta">${escapeHtml(t(`${controlCenterMappingTasks.length} board-only mapping examples are hidden because they are not real execution tasks.`, `已隐藏 ${controlCenterMappingTasks.length} 个看板映射样例（非真实执行任务）。`))}</div>`
-              : ""
-          }
+          <h2>${escapeHtml(t("Task cards", "任务卡片"))}</h2>
+          <div class="meta task-top-intro">${escapeHtml(t("Sorted by priority so unresolved items stay on top and active work stays easy to scan.", "按优先级排序，未解决项会排在最前，正在推进的工作也能一眼看清。"))}</div>
+          <div class="meta task-top-intro">${escapeHtml(t("Yellow = in progress, green = queued, red = failed, blocked, or still unresolved.", "黄色表示进行中，绿色表示排队中，红色表示失败、阻塞或仍未解决。"))}</div>
+          <div class="task-top-meta-row">
+            <div class="meta task-top-meta">${escapeHtml(t("Current focus", "当前关注"))}：${escapeHtml(quickFilterLabel(effectiveQuick, options.language))}</div>
+            ${
+              controlCenterMappingTasks.length > 0
+                ? `<div class="meta task-top-meta">${escapeHtml(t(`${controlCenterMappingTasks.length} board-only mapping examples are hidden because they are not real execution tasks.`, `已隐藏 ${controlCenterMappingTasks.length} 个看板映射样例（非真实执行任务）。`))}</div>`
+                : ""
+            }
+          </div>
+          <div class="task-top-controls">
           <div class="quick-filters">${quickFilters}</div>
-          <form method="GET" action="/" class="filters">
+          <form method="GET" action="/" class="filters task-top-filters">
             <input type="hidden" name="section" value="${escapeHtml(options.section)}" />
             <input type="hidden" name="lang" value="${escapeHtml(options.language)}" />
             <input type="hidden" name="quick" value="${escapeHtml(effectiveQuick)}" />
@@ -6184,6 +8175,7 @@ async function renderHtml(
               <a href="${escapeHtml(clearHref)}">${escapeHtml(t("Clear filters", "清空筛选"))}</a>
             </div>
           </form>
+          </div>
           ${taskBoard}
           <div style="height:10px;"></div>
           <h3 style="margin:0 0 6px 0;">${escapeHtml(t("Task groups (native view)", "任务分组列表（原生视图）"))}</h3>
@@ -6209,7 +8201,7 @@ async function renderHtml(
           </section>
           <section class="card" id="task-live-feed">
             <h2>${escapeHtml(t("Live activity feed", "实时活动流"))}</h2>
-            <div class="meta">${escapeHtml(t("Use this to confirm what OpenClaw and its sub-agents are doing right now.", "用于确认 OpenClaw 与子智能体当前正在执行什么。"))}</div>
+            <div class="meta">${escapeHtml(t("Use this to confirm what the AI employee system and each employee are doing right now.", "用于确认 AI 员工系统与各员工当前正在执行什么。"))}</div>
             <ul class="story-list">${replayMomentsRows}</ul>
           </section>
         </div>
@@ -6225,11 +8217,169 @@ async function renderHtml(
       </details>
     `
     : `<div class="meta">${escapeHtml(trackedTaskExplanation)}</div>`;
+  const trackedTaskDetailsBody = hasTrackedTaskPanels
+    ? `
+      <section class="task-hub-shell" id="task-hub">
+        <article class="card task-hub-primary" id="task-hub-primary">
+          <div class="overview-command-head">
+            <div>
+              <h2>${escapeHtml(t("Task follow-up center", "任务跟进中心"))}</h2>
+              <div class="meta">${escapeHtml(t("Use this lower panel for decisions, execution trace, and raw detail only after the top card wall has helped you set the working order.", "上方卡片墙先帮你确定工作顺序，这一层只保留决策、执行链和原始明细。"))}</div>
+            </div>
+            <div>${overviewPrimaryStatus}</div>
+          </div>
+          ${taskHubStatCardsHtml}
+          <div class="overview-task-strip">
+            <div>
+              <div class="meta">${escapeHtml(t("Current follow-up", "当前跟进"))}</div>
+              <div class="overview-task-metric">${badge(currentTaskHealth)} ${escapeHtml(t("Confirmed live", "已确认在跑"))} ${taskCertaintyStrongCount} · ${escapeHtml(t("Need follow-up", "需跟进"))} ${taskCertaintyFollowupCount} · ${escapeHtml(t("Needs inspection", "需排查"))} ${taskCertaintyWeakCount}</div>
+              ${mappingTaskHint ? `<div class="meta">${escapeHtml(mappingTaskHint)}</div>` : ""}
+            </div>
+            <div class="overview-quick-links">
+              <a class="btn" href="${escapeHtml(currentTaskHealthHref)}">${escapeHtml(t("Jump to card wall", "返回卡片墙"))}</a>
+              <a class="btn" href="${escapeHtml(focusHref)}">${escapeHtml(t("Open follow-up items", "查看待处理项"))}</a>
+            </div>
+          </div>
+        </article>
+        <article class="card" id="task-decision-center">
+          <div class="overview-command-head">
+            <h2>${escapeHtml(t("Waiting for your decision", "等待你的决策"))}</h2>
+            <div>${badge(pendingDecisionCount > 0 ? "warn" : "ok", pendingDecisionCount > 0 ? t("Queue active", "队列活跃") : t("Clear", "已清空"))}</div>
+          </div>
+          <div class="meta">${escapeHtml(t("Pending decisions", "待处理事项"))} ${pendingDecisionCount} · ${escapeHtml(t("Approvals", "审批"))} ${pendingApprovalsCount} · ${escapeHtml(t("Unacked alerts", "未确认告警"))} ${actionQueue.counts.unacked}</div>
+          ${taskDecisionPreviewHtml}
+        </article>
+      </section>
+      ${taskExecutionChainSection}
+      <section class="task-hub-grid">
+        <section class="card" id="project-lane">
+          <h2>${escapeHtml(t("Project lanes", "项目泳道"))}</h2>
+          ${projectBoard}
+        </section>
+        <section class="card" id="task-live-feed">
+          <h2>${escapeHtml(t("Live activity feed", "实时活动流"))}</h2>
+          <div class="meta">${escapeHtml(t("Use this to confirm what the AI employee system and each employee are doing right now.", "用来确认 AI 员工系统和每位员工此刻正在做什么。"))}</div>
+          <ul class="story-list">${replayMomentsRows}</ul>
+        </section>
+      </section>
+      <section class="card" id="task-groups">
+        <h2>${escapeHtml(t("Task groups", "任务分组"))}</h2>
+        <div class="meta">${escapeHtml(t("Keep the raw native grouping here for cross-checking after you reorder the main card wall.", "主卡片墙用于操作，这里保留原生分组，方便你后续交叉核对。"))}</div>
+        ${taskGroupedListHtml}
+        ${
+          controlCenterMappingTasks.length === 0
+            ? ""
+            : `<details class="compact-table-details" style="margin-top:12px;">
+                 <summary>${escapeHtml(t("Open board mapping examples (non-executing)", "查看看板映射样例（不执行任务）"))}</summary>
+                 <div class="fold-body">
+                   <table>
+                     <thead><tr><th>${escapeHtml(t("Example task", "样例任务"))}</th><th>${escapeHtml(t("Label", "标签"))}</th><th>${escapeHtml(t("Status", "状态"))}</th></tr></thead>
+                     <tbody>${mappingTaskRows}</tbody>
+                   </table>
+                 </div>
+               </details>`
+        }
+      </section>
+      <details class="card compact-details" id="task-table">
+        <summary>${escapeHtml(t(`Task table (raw detail, ${tasks.length}/${allTasks.length})`, `任务表格（原始明细，${tasks.length}/${allTasks.length}）`))}</summary>
+        <div class="fold-body">
+          <table>
+            <thead><tr><th>${escapeHtml(t("Project", "项目"))}</th><th>${escapeHtml(t("Task", "任务"))}</th><th>${escapeHtml(t("Title", "标题"))}</th><th>${escapeHtml(t("Status", "状态"))}</th><th>${escapeHtml(t("Agent", "员工"))}</th><th>${escapeHtml(t("Due", "截止"))}</th><th>${escapeHtml(t("Updated", "更新时间"))}</th></tr></thead>
+            <tbody>${taskRows}</tbody>
+          </table>
+        </div>
+      </details>
+    `
+    : `<div class="meta">${escapeHtml(trackedTaskExplanation)}</div>`;
+  const calendarSection = `
+    <section class="card" id="calendar-board">
+      <div id="task-timeline">
+        <h2>${escapeHtml(t("Task and schedule cards", "任务与排程卡片"))}</h2>
+        <div class="meta task-top-intro">${escapeHtml(t("Put tracked tasks, due times, and timed jobs into one draggable card pool so the work queue and schedule stay in the same place.", "把跟踪任务、截止时间和定时任务合并到同一组可拖拽卡片里，让工作队列和排程放在同一个地方。"))}</div>
+        <div class="timeline-summary-strip">
+          <div class="timeline-stat"><span>${escapeHtml(t("Tracked tasks", "跟踪任务"))}</span><strong>${tasks.length}</strong><small>${escapeHtml(t("Current filtered list", "当前筛选结果"))}</small></div>
+          <div class="timeline-stat"><span>${escapeHtml(t("Timed jobs", "定时任务"))}</span><strong>${allCronRows.length}</strong><small>${escapeHtml(t("Included in card pool", "已并入卡片池"))}</small></div>
+          <div class="timeline-stat"><span>${escapeHtml(t("Upcoming due", "即将截止"))}</span><strong>${upcomingTaskDueCount}</strong><small>${escapeHtml(t("Tasks with due dates", "带截止时间的任务"))}</small></div>
+          <div class="timeline-stat"><span>${escapeHtml(t("Enabled", "已启用"))}</span><strong>${enabledCronCount}</strong><small>${escapeHtml(t("Ready to run", "可进入下一轮"))}</small></div>
+        </div>
+      </div>
+      <div class="task-top-meta-row">
+        <div class="meta task-top-meta">${escapeHtml(t("Current focus", "当前关注"))}：${escapeHtml(quickFilterLabel(effectiveQuick, options.language))}</div>
+        ${
+          controlCenterMappingTasks.length > 0
+            ? `<div class="meta task-top-meta">${escapeHtml(t(`${controlCenterMappingTasks.length} board-only mapping examples are hidden because they are not real execution tasks.`, `已隐藏 ${controlCenterMappingTasks.length} 个看板映射样例（非真实执行任务）。`))}</div>`
+            : ""
+        }
+      </div>
+      <div class="task-top-controls">
+      <div class="quick-filters">${quickFilters}</div>
+      <form method="GET" action="/" class="filters task-top-filters">
+        <input type="hidden" name="section" value="${escapeHtml(options.section)}" />
+        <input type="hidden" name="lang" value="${escapeHtml(options.language)}" />
+        <input type="hidden" name="quick" value="${escapeHtml(effectiveQuick)}" />
+        <input type="hidden" name="compact" value="${options.compactStatusStrip ? "1" : "0"}" />
+        <input type="hidden" name="usage_view" value="${options.usageView === "today" ? "today" : "cumulative"}" />
+        <div>
+          <label for="status">${escapeHtml(t("Status", "状态"))}</label>
+          <select id="status" name="status">
+            ${renderSelectOptions(
+              [{ value: "", label: t("All", "全部") }, ...TASK_STATES.map((state) => ({ value: state, label: taskStateLabel(state, options.language) }))],
+              filters.status ?? "",
+            )}
+          </select>
+        </div>
+        <div>
+          <label for="owner">${escapeHtml(t("Agent", "员工"))}</label>
+          <select id="owner" name="owner">
+            ${renderSelectOptions(
+              [{ value: "", label: t("All", "全部") }, ...ownerOptions.map((owner) => ({ value: owner, label: owner }))],
+              filters.owner ?? "",
+            )}
+          </select>
+        </div>
+        <div>
+          <label for="project">${escapeHtml(t("Project", "项目"))}</label>
+          <select id="project" name="project">
+            ${renderSelectOptions(
+              [{ value: "", label: t("All", "全部") }, ...projectOptions.map((project) => ({ value: project, label: project }))],
+              filters.project ?? "",
+            )}
+          </select>
+        </div>
+        <div class="filter-actions">
+          <button class="btn" type="submit">${escapeHtml(t("Apply", "应用"))}</button>
+          <a href="${escapeHtml(clearHref)}">${escapeHtml(t("Clear filters", "清空筛选"))}</a>
+        </div>
+      </form>
+      </div>
+      ${taskBoard}
+      <details class="compact-table-details" style="margin-top:12px;">
+        <summary>${escapeHtml(t("Open timeline detail", "查看时间线明细"))}</summary>
+        <div class="fold-body">${calendarBoardHtml}</div>
+      </details>
+    </section>
+  `;
+  const cronExecutionSection = `
+    <section class="card" id="cron-execution-board">
+      <div class="overview-command-head">
+        <h2>${escapeHtml(t("Cron execution board", "Cron 执行看板"))}</h2>
+        <div>${badge(cronOverview.health.status, cronHealthLabel(cronOverview.health.status, options.language))}</div>
+      </div>
+      <div class="meta">${escapeHtml(t("This row focuses only on timed-job execution itself. Keep it below the main card wall so it acts as an execution monitor instead of competing with task priority.", "这一排只看定时任务执行本身，放在主卡片墙下方，作为执行监控而不是和任务优先级抢位置。"))}</div>
+      <div class="meta">${escapeHtml(t("Next", "下次"))} ${escapeHtml(cronOverview.nextRunAt ?? t("None", "暂无"))} · ${escapeHtml(t("Heartbeat", "心跳"))} ${escapeHtml(heartbeatNextRun)} · ${escapeHtml(t("Enabled", "已启用"))} ${enabledCronCount}</div>
+      ${cronExecutionCardsHtml}
+      <details class="compact-table-details" style="margin-top:12px;">
+        <summary>${escapeHtml(t("Open Cron table detail", "查看 Cron 表格明细"))}</summary>
+        <div class="fold-body">${cronTable}</div>
+      </details>
+    </section>
+  `;
   const projectsSection = `
-    <section class="task-hub-grid">
+    <section class="task-flow-stack">
       ${calendarSection}
       ${cronExecutionSection}
     </section>
+    ${agentTeamProjectsBlock}
     <details class="card compact-details" id="tracked-task-view"${trackedTaskDetailsOpen ? " open" : ""}>
       <summary>${escapeHtml(t("Tracked tasks and follow-up", "跟踪任务与跟进"))}</summary>
       <div class="fold-body">
@@ -6295,20 +8445,8 @@ async function renderHtml(
     </details>
   `;
   const settingsSection = `
-    ${connectionHealthCard}
-    ${securityRiskSection}
-    ${updateStatusSection}
-    <section class="card">
-      <h2>安全开关</h2>
-      <table>
-        <thead><tr><th>项目</th><th>状态</th><th>当前值</th><th>说明</th></tr></thead>
-        <tbody>${importGuardRows}</tbody>
-      </table>
-    </section>
-    <section class="card" id="tool-connectors">
-      <h2>${escapeHtml(t("Recommended data connections", "数据接入建议"))}</h2>
-      <ul class="story-list">${usageConnectorTodos}</ul>
-    </section>
+    ${settingsEnvironmentStatusCard}
+    ${settingsConfigAccessCard}
     <section class="card">
       <h2>${escapeHtml(t("Panel preferences", "面板偏好"))}</h2>
       <div class="toolbar">
@@ -6316,6 +8454,7 @@ async function renderHtml(
         <a class="btn" href="${escapeHtml(clearHref)}">${escapeHtml(t("Reset filters", "重置筛选"))}</a>
       </div>
     </section>
+    ${agentTeamSettingsBlock}
   `;
   let sectionBody = overviewSection;
   if (options.section === "calendar") sectionBody = projectsSection;
@@ -6359,11 +8498,14 @@ async function renderHtml(
     options.section === "overview"
       ? globalVisibilityQuickRows
       : `<div class="meta"><a href="${escapeHtml(buildHomeHref({ quick: "all" }, true, "overview", options.language, options.usageView))}">${escapeHtml(t("See four signals in overview", "在总览查看四项信号"))}</a></div>`;
+  const taskBoardScript = renderTaskBoardScript();
   const fileWorkbenchScript = renderFileWorkbenchScript();
+  const staffModelScript = renderStaffModelScript();
   const agentVisualEnhancerScript = renderAgentVisualEnhancerScript();
   const nativeMotionScript = renderNativeMotionScript(options.language);
   const collaborationFilterScript = renderCollaborationFilterScript(options.language);
   const quotaResetScript = renderQuotaResetScript();
+  const dashboardRefreshScript = renderDashboardRefreshScript(options.language);
   const renderTotalMs = Math.round(performance.now() - renderStartedAt);
   if (renderTotalMs >= 1000) {
     console.warn("[mission-control] slow html render", {
@@ -6377,7 +8519,7 @@ async function renderHtml(
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>OpenClaw Control Center</title>
+  <title>${escapeHtml(uiEmployeeSystemBrand(options.language))}</title>
   <style>
     :root {
       --bg: #eef2f6;
@@ -6586,7 +8728,62 @@ async function renderHtml(
       gap: var(--space-2);
     }
     .section-head-copy { min-width: 0; }
-    .section-head-actions { display: flex; align-items: center; gap: var(--space-1); }
+    .section-head-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: flex-end;
+      gap: var(--space-1);
+    }
+    .refresh-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex: 0 1 460px;
+      min-width: min(460px, 100%);
+    }
+    .refresh-toolbar .panel-toggle {
+      white-space: nowrap;
+    }
+    .refresh-interval {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(17, 24, 39, 0.09);
+      border-radius: 999px;
+      padding: 7px 12px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 251, 255, 0.92));
+      color: #334155;
+      font-size: var(--font-caption);
+      font-weight: 620;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
+    }
+    .refresh-interval span {
+      white-space: nowrap;
+    }
+    .refresh-interval select {
+      border: none;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      min-width: 68px;
+      padding: 0;
+      cursor: pointer;
+      outline: none;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .refresh-status {
+      flex: 1 0 100%;
+      min-height: 18px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #5f6b7a;
+      padding: 2px 2px 0;
+      text-align: right;
+    }
     .panel-toggle {
       border: 1px solid rgba(17, 24, 39, 0.09);
       border-radius: 999px;
@@ -6608,15 +8805,16 @@ async function renderHtml(
     }
     .content-stack { margin-top: var(--space-2); display: grid; gap: var(--space-2); }
     .content-stack > #overview-decision-home { order: 1; }
-    .content-stack > #overview-primary-section { order: 2; }
-    .content-stack > #overview-secondary-shell { order: 3; }
-    .content-stack > #global-visibility-card { order: 4; }
+    .content-stack > #agent-team-overview { order: 2; }
+    .content-stack > #overview-primary-section { order: 3; }
+    .content-stack > #overview-secondary-shell { order: 4; }
+    .content-stack > #global-visibility-card { order: 5; }
     .executive-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 12px; }
     .overview-v3-shell {
       display: grid;
       grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
       gap: var(--space-2);
-      align-items: stretch;
+      align-items: start;
     }
     .overview-primary-card {
       position: relative;
@@ -6762,6 +8960,9 @@ async function renderHtml(
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: var(--space-2);
       align-items: start;
+    }
+    .overview-decision-grid > .card {
+      align-self: start;
     }
     .overview-kpi-card {
       border: 1px solid var(--card-border);
@@ -7045,6 +9246,44 @@ async function renderHtml(
       white-space: nowrap;
       background: linear-gradient(180deg, rgba(238, 246, 255, 0.96), rgba(255, 255, 255, 0.98));
     }
+    .overview-context-card {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+    .overview-context-card .overview-command-head {
+      margin-bottom: 0;
+      align-items: flex-start;
+    }
+    .overview-context-note {
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      background: var(--card-fill-soft);
+      padding: 12px 13px;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.86),
+        0 10px 20px rgba(15, 23, 42, 0.035);
+    }
+    .overview-context-note strong {
+      display: block;
+      font-size: 12px;
+      color: #1d1d1f;
+      letter-spacing: 0.01em;
+    }
+    .overview-context-note .meta {
+      margin-top: 6px;
+    }
+    .overview-context-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .overview-context-links .btn {
+      padding: 7px 11px;
+      border-radius: 9px;
+      white-space: nowrap;
+      background: linear-gradient(180deg, rgba(238, 246, 255, 0.96), rgba(255, 255, 255, 0.98));
+    }
     .overview-usage-card {
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 251, 255, 0.97)),
@@ -7206,6 +9445,47 @@ async function renderHtml(
       box-shadow: var(--ring-soft), inset 0 1px 0 rgba(255, 255, 255, 0.84);
     }
     .filter-actions { margin-top: 8px; display: flex; gap: 10px; align-items: center; }
+    .task-top-intro {
+      max-width: 960px;
+      line-height: 1.38;
+    }
+    .task-top-meta-row {
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 12px;
+    }
+    .task-top-meta {
+      margin: 0;
+      line-height: 1.32;
+    }
+    .task-top-controls {
+      margin-top: 8px;
+      display: grid;
+      gap: 8px;
+    }
+    .task-top-filters {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 0;
+    }
+    .task-top-filters label {
+      font-size: 11.5px;
+      margin-bottom: 4px;
+    }
+    .task-top-filters select,
+    .task-top-filters input {
+      border-radius: 12px;
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+    .task-top-filters .filter-actions {
+      margin-top: 0;
+      gap: 8px;
+      align-self: end;
+      padding-bottom: 1px;
+    }
     .btn {
       -webkit-appearance: none;
       appearance: none;
@@ -7296,6 +9576,28 @@ async function renderHtml(
     .inline-form { display: inline; margin: 0; }
     .status-strip { margin-top: 10px; display: grid; gap: 9px; grid-template-columns: repeat(auto-fit, minmax(138px, 1fr)); }
     .status-strip.compact { grid-template-columns: repeat(auto-fit, minmax(116px, 1fr)); }
+    .settings-status-grid {
+      margin-top: 12px;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+    }
+    .settings-status-panel {
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,255,0.96));
+      padding: 16px;
+      box-shadow: 0 10px 22px rgba(17, 24, 39, 0.04);
+    }
+    .settings-status-panel .overview-command-head {
+      align-items: flex-start;
+    }
+    .settings-status-panel h3 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.35;
+      color: #1d1d1f;
+    }
     .status-chip {
       border: 1px solid var(--card-border);
       border-radius: 16px;
@@ -7366,6 +9668,11 @@ async function renderHtml(
     .task-hub-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-2);
+      align-items: start;
+    }
+    .task-flow-stack {
+      display: grid;
       gap: var(--space-2);
       align-items: start;
     }
@@ -7709,18 +10016,18 @@ async function renderHtml(
       margin-top: -4px;
     }
     .timeline-summary-strip {
-      margin-top: 10px;
+      margin-top: 8px;
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
     }
     .timeline-stat {
       border: 1px solid var(--card-border);
       border-radius: 14px;
-      padding: 11px;
+      padding: 9px 10px;
       background: var(--card-fill-soft);
       display: grid;
-      gap: 4px;
+      gap: 3px;
       box-shadow:
         inset 0 1px 0 rgba(255,255,255,0.84),
         0 10px 20px rgba(15, 23, 42, 0.03);
@@ -7730,15 +10037,15 @@ async function renderHtml(
       color: #6b6f76;
     }
     .timeline-stat strong {
-      font-size: 26px;
+      font-size: 22px;
       line-height: 1;
       color: #1d1d1f;
       letter-spacing: -0.03em;
     }
     .timeline-stat small {
-      font-size: 12px;
+      font-size: 11px;
       color: #6e6e73;
-      line-height: 1.45;
+      line-height: 1.35;
     }
     .signal-gauge-card {
       padding: 11px 11px 12px;
@@ -7850,7 +10157,9 @@ async function renderHtml(
       margin-top: 1px;
     }
     .quick-filters { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; }
+    .task-top-controls .quick-filters { margin-top: 0; gap: 6px; }
     .quick-chip { border: 1px solid rgba(17, 24, 39, 0.16); border-radius: 999px; padding: 6px 11px; font-size: 12px; text-decoration: none; color: #4f545a; background: rgba(255, 255, 255, 0.95); }
+    .task-top-controls .quick-chip { padding: 5px 10px; font-size: 11.5px; }
     .quick-chip.active { border-color: rgba(0, 113, 227, 0.42); color: #005cb9; background: rgba(236, 246, 255, 0.96); }
     .segment-switch {
       margin-top: 8px;
@@ -7925,6 +10234,77 @@ async function renderHtml(
     }
     .cron-job-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
     .cron-job-head strong { font-size: 13px; color: #1d1d1f; line-height: 1.45; }
+    .cron-run-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+      gap: 12px;
+    }
+    .cron-run-card {
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 20px;
+      padding: 15px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 251, 255, 0.96)),
+        radial-gradient(circle at 100% 0%, rgba(23, 120, 242, 0.1), transparent 56%);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.84),
+        0 14px 30px rgba(17, 24, 39, 0.06);
+      display: grid;
+      gap: 12px;
+    }
+    .cron-run-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .cron-run-head h3 {
+      margin: 4px 0 0 0;
+      font-size: 18px;
+      line-height: 1.22;
+      color: #1d1d1f;
+      letter-spacing: -0.02em;
+    }
+    .cron-run-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .cron-run-list {
+      margin: 0;
+      display: grid;
+      gap: 8px;
+    }
+    .cron-run-row {
+      display: grid;
+      grid-template-columns: 78px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+    }
+    .cron-run-row dt {
+      margin: 0;
+      color: #68707a;
+      font-size: 12px;
+      line-height: 1.45;
+      font-weight: 700;
+    }
+    .cron-run-row dd {
+      margin: 0;
+      color: #22262b;
+      font-size: 14px;
+      line-height: 1.6;
+      word-break: break-word;
+    }
+    .cron-run-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding-top: 10px;
+      border-top: 1px solid rgba(17, 24, 39, 0.07);
+    }
     .toolbar { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .readiness-grid { margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; }
     .readiness-chip {
@@ -7987,6 +10367,12 @@ async function renderHtml(
         );
       overflow: hidden;
     }
+    .agent-avatar.has-photo .agent-stage,
+    .staff-avatar.has-photo .agent-stage {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(243, 248, 255, 0.84)),
+        radial-gradient(circle at 50% 18%, rgba(255, 255, 255, 0.5), transparent 54%);
+    }
     .agent-pixel-canvas {
       width: 100%;
       height: 100%;
@@ -7994,6 +10380,16 @@ async function renderHtml(
       image-rendering: pixelated;
       image-rendering: crisp-edges;
       filter: saturate(1.06) contrast(1.04);
+    }
+    .agent-photo-image {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+      object-position: center center;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      filter: saturate(1.02) contrast(1.02);
     }
     .agent-animal-label {
       margin-top: 8px;
@@ -8006,12 +10402,12 @@ async function renderHtml(
       margin-top: 12px;
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
+      gap: 10px;
     }
     .staff-brief-card {
       border: 1px solid rgba(17, 24, 39, 0.07);
       border-radius: 22px;
-      padding: 15px;
+      padding: 13px;
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(249, 251, 255, 0.97)),
         radial-gradient(circle at 100% 0%, rgba(221, 232, 255, 0.18), transparent 52%);
@@ -8019,18 +10415,603 @@ async function renderHtml(
         inset 0 1px 0 rgba(255, 255, 255, 0.82),
         0 16px 34px rgba(17, 24, 39, 0.06);
       display: grid;
+      gap: 10px;
+      position: relative;
+    }
+    .staff-status-dot,
+    .task-status-dot {
+      position: absolute;
+      left: 14px;
+      top: 14px;
+      width: 11px;
+      height: 11px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.82);
+      box-shadow:
+        0 0 0 3px rgba(255, 255, 255, 0.72),
+        0 6px 12px rgba(17, 24, 39, 0.14);
+      z-index: 2;
+    }
+    .staff-status-dot.idle,
+    .task-status-dot.idle {
+      background: #1f9d55;
+    }
+    .staff-status-dot.working,
+    .task-status-dot.working {
+      background: #e0a106;
+    }
+    .staff-status-dot.issue,
+    .task-status-dot.issue {
+      background: #dc3c32;
+    }
+    .task-status-dot.scheduled {
+      background: #1778f2;
+    }
+    .task-brief-board {
+      margin-top: 12px;
+      display: grid;
       gap: 12px;
+    }
+    .doc-summary-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+      gap: 12px;
+    }
+    .doc-summary-card {
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 18px;
+      padding: 14px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,255,0.96));
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+      overflow: hidden;
+      box-shadow: 0 10px 22px rgba(17, 24, 39, 0.05);
+    }
+    .doc-preview-trigger {
+      width: 100%;
+      appearance: none;
+      text-align: left;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+      min-width: 0;
+      overflow: hidden;
+      transition:
+        transform 160ms ease,
+        box-shadow 160ms ease,
+        border-color 160ms ease;
+    }
+    .doc-preview-trigger:hover {
+      transform: translateY(-1px);
+      border-color: rgba(37, 99, 235, 0.22);
+      box-shadow: 0 16px 28px rgba(17, 24, 39, 0.08);
+    }
+    .doc-preview-trigger:focus-visible {
+      outline: 2px solid rgba(37, 99, 235, 0.45);
+      outline-offset: 3px;
+    }
+    .doc-summary-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: start;
+      min-width: 0;
+    }
+    .doc-summary-head strong {
+      min-width: 0;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      font-size: 15px;
+      line-height: 1.35;
+      color: #1d1d1f;
+    }
+    .doc-summary-card .meta,
+    .doc-project-trigger .meta,
+    .doc-project-trigger strong,
+    .doc-summary-card code,
+    .doc-project-trigger code {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .doc-summary-body {
+      color: #364152;
+      font-size: 13px;
+      line-height: 1.6;
+      display: -webkit-box;
+      -webkit-line-clamp: 6;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .doc-coverage-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+      gap: 12px;
+    }
+    .doc-coverage-card {
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 18px;
+      padding: 14px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,247,252,0.96));
+      display: grid;
+      gap: 10px;
+      box-shadow: 0 10px 22px rgba(17, 24, 39, 0.04);
+    }
+    .doc-coverage-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .doc-coverage-head strong {
+      font-size: 15px;
+      line-height: 1.35;
+      color: #1d1d1f;
+    }
+    .doc-coverage-count {
+      border-radius: 999px;
+      padding: 4px 10px;
+      background: rgba(15, 23, 42, 0.06);
+      color: #0f172a;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .doc-coverage-pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .doc-coverage-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    button.doc-coverage-pill {
+      appearance: none;
+      cursor: pointer;
+    }
+    .doc-coverage-pill.ready {
+      background: rgba(34, 197, 94, 0.14);
+      border: 1px solid rgba(22, 163, 74, 0.2);
+      color: #166534;
+    }
+    .doc-coverage-pill.missing {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(220, 38, 38, 0.18);
+      color: #b91c1c;
+    }
+    .doc-project-grid {
+      margin-top: 12px;
+      display: grid;
+      gap: 12px;
+    }
+    .doc-project-card {
+      margin: 0;
+    }
+    .doc-project-items .group-item {
+      gap: 6px;
+    }
+    .doc-project-trigger {
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 14px;
+      padding: 12px;
+      background: rgba(248, 250, 252, 0.86);
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .doc-preview-dialog {
+      width: min(920px, calc(100vw - 32px));
+      max-width: 920px;
+      height: min(78vh, 720px);
+      max-height: 78vh;
+      padding: 0;
+      border: none;
+      border-radius: 24px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(246, 249, 255, 0.98)),
+        radial-gradient(circle at top right, rgba(191, 219, 254, 0.3), transparent 42%);
+      box-shadow:
+        0 26px 80px rgba(15, 23, 42, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.82);
+      color: #0f172a;
+      overflow: hidden;
+    }
+    .doc-preview-dialog::backdrop {
+      background: rgba(15, 23, 42, 0.46);
+      backdrop-filter: blur(5px);
+    }
+    .doc-preview-shell {
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+    }
+    .doc-preview-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 22px 24px 14px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+    }
+    .doc-preview-head-copy {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .doc-preview-head-copy strong {
+      font-size: 18px;
+      line-height: 1.4;
+      color: #0f172a;
+    }
+    .doc-preview-close {
+      appearance: none;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.92);
+      color: #0f172a;
+      padding: 9px 14px;
+      cursor: pointer;
+      font: inherit;
+      white-space: nowrap;
+      box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+    }
+    .doc-preview-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      padding: 12px 24px 0;
+    }
+    .doc-preview-token {
+      min-width: min(240px, 100%);
+      border: 1px solid rgba(148, 163, 184, 0.34);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.96);
+      color: #0f172a;
+    }
+    .doc-preview-content {
+      padding: 0 24px 24px;
+      overflow: auto;
+    }
+    .doc-preview-body {
+      margin: 0;
+      min-height: 100%;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 13px;
+      line-height: 1.7;
+      color: #0f172a;
+      background: rgba(255, 255, 255, 0.84);
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+    }
+    .doc-preview-editor {
+      width: 100%;
+      min-height: 100%;
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      border-radius: 16px;
+      padding: 14px 16px;
+      background: rgba(255, 255, 255, 0.96);
+      color: #0f172a;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 13px;
+      line-height: 1.65;
+      resize: none;
+      box-sizing: border-box;
+    }
+    .doc-preview-status {
+      padding: 12px 24px 14px;
+    }
+    .task-brief-board-empty {
+      margin-top: 12px;
+    }
+    .task-empty-state strong {
+      display: block;
+      font-size: 14px;
+      color: #5b3f14;
+    }
+    .task-empty-state .meta {
+      margin-top: 6px;
+    }
+    .task-empty-signals {
+      margin-top: 12px;
+    }
+    .task-empty-signals .dashboard-strip {
+      margin-top: 0;
+    }
+    .task-brief-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px 12px;
+    }
+    .task-brief-copy {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .task-brief-controls {
+      display: grid;
+      gap: 6px;
+      justify-items: end;
+      min-width: min(100%, 190px);
+    }
+    .task-brief-token {
+      width: min(100%, 220px);
+      border-radius: 12px;
+      border: 1px solid rgba(17, 24, 39, 0.14);
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.92);
+      color: #1d1d1f;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    }
+    .task-brief-legend {
+      margin-top: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .task-legend-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(17, 24, 39, 0.07);
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.82);
+      color: #505863;
+      font-size: 11px;
+      font-weight: 620;
+    }
+    .task-brief-hint,
+    .task-brief-status-line {
+      margin: 0;
+      line-height: 1.35;
+    }
+    .task-brief-hint {
+      max-width: 780px;
+    }
+    .task-legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.62);
+    }
+    .task-legend-dot.idle { background: #1f9d55; }
+    .task-legend-dot.working { background: #e0a106; }
+    .task-legend-dot.issue { background: #dc3c32; }
+    .task-legend-dot.scheduled { background: #1778f2; }
+    .task-brief-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+      gap: 10px;
+    }
+    .task-brief-card {
+      border: 1px solid rgba(17, 24, 39, 0.07);
+      border-radius: 22px;
+      padding: 13px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(249, 251, 255, 0.97)),
+        radial-gradient(circle at 100% 0%, rgba(221, 232, 255, 0.16), transparent 54%);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.82),
+        0 16px 34px rgba(17, 24, 39, 0.06);
+      display: grid;
+      gap: 10px;
+      position: relative;
+      cursor: grab;
+      transition:
+        transform 160ms ease,
+        box-shadow 160ms ease,
+        border-color 160ms ease,
+        opacity 160ms ease;
+    }
+    .task-brief-card.dragging {
+      opacity: 0.68;
+      cursor: grabbing;
+      transform: scale(0.985);
+      border-color: rgba(0, 113, 227, 0.34);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.82),
+        0 18px 38px rgba(17, 24, 39, 0.12);
+    }
+    .task-brief-card.drag-target {
+      border-color: rgba(0, 113, 227, 0.42);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.82),
+        0 18px 38px rgba(17, 24, 39, 0.1);
+    }
+    .task-drag-handle {
+      position: absolute;
+      right: 14px;
+      top: 12px;
+      display: inline-grid;
+      gap: 3px;
+      padding: 8px 7px;
+      border-radius: 12px;
+      border: 1px dashed rgba(70, 96, 124, 0.22);
+      background: rgba(255, 255, 255, 0.88);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+      pointer-events: none;
+    }
+    .task-drag-handle span {
+      display: block;
+      width: 13px;
+      height: 2px;
+      border-radius: 999px;
+      background: rgba(70, 96, 124, 0.74);
+    }
+    .task-brief-head {
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+    .task-brief-card[data-task-kind="timed_job"] .task-brief-head {
+      grid-template-columns: 76px minmax(0, 1fr);
+    }
+    .task-priority-panel {
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 18px;
+      padding: 9px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 250, 255, 0.96)),
+        radial-gradient(circle at 0% 0%, rgba(0, 113, 227, 0.08), transparent 60%);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.82),
+        0 10px 22px rgba(17, 24, 39, 0.05);
+      display: grid;
+      gap: 4px;
+      min-height: 100%;
+    }
+    .task-priority-panel.compact {
+      padding: 8px 9px;
+      gap: 3px;
+    }
+    .task-priority-panel span {
+      color: #68707a;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 700;
+    }
+    .task-priority-panel.compact span {
+      font-size: 10px;
+      letter-spacing: 0.03em;
+    }
+    .task-priority-panel strong {
+      font-size: 16px;
+      line-height: 1.15;
+      color: #1d1d1f;
+      letter-spacing: -0.02em;
+    }
+    .task-priority-panel.compact strong {
+      font-size: 13px;
+      line-height: 1.2;
+    }
+    .task-priority-panel small {
+      color: #68707a;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .task-priority-panel.compact small {
+      font-size: 10px;
+      line-height: 1.25;
+    }
+    .task-brief-identity h3 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.14;
+      color: #1d1d1f;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .task-brief-pills {
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .task-brief-identity .task-role {
+      margin-top: 4px;
+      font-size: 11px;
+      line-height: 1.35;
+      color: #5c6570;
+      font-weight: 620;
+      display: -webkit-box;
+      -webkit-line-clamp: 1;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .task-brief-list {
+      margin: 0;
+      display: grid;
+      gap: 6px;
+    }
+    .task-brief-row {
+      display: grid;
+      grid-template-columns: 74px minmax(0, 1fr);
+      gap: 6px;
+      align-items: start;
+      min-width: 0;
+    }
+    .task-brief-row dt {
+      margin: 0;
+      color: #68707a;
+      font-size: 11px;
+      line-height: 1.35;
+      font-weight: 700;
+    }
+    .task-brief-row dd {
+      margin: 0;
+      color: #22262b;
+      font-size: 13px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+    .task-brief-value {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .task-brief-value.clamp-2 {
+      -webkit-line-clamp: 2;
+    }
+    .task-brief-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding-top: 8px;
+      border-top: 1px solid rgba(17, 24, 39, 0.07);
+    }
+    .task-brief-actions code {
+      color: #46607c;
+      font-size: 11px;
     }
     .staff-brief-head {
       display: grid;
-      grid-template-columns: 122px minmax(0, 1fr);
-      gap: 12px;
+      grid-template-columns: 96px minmax(0, 1fr);
+      gap: 10px;
       align-items: center;
     }
     .staff-avatar {
-      width: 122px;
-      padding: 9px;
-      border-radius: 18px;
+      width: 96px;
+      padding: 7px;
+      border-radius: 16px;
       border: 1px solid rgba(17, 24, 39, 0.08);
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 252, 255, 0.95)),
@@ -8045,28 +11026,28 @@ async function renderHtml(
     }
     .staff-brief-identity h3 {
       margin: 0;
-      font-size: 20px;
-      line-height: 1.15;
+      font-size: 18px;
+      line-height: 1.12;
       color: #1d1d1f;
     }
     .staff-role {
-      margin-top: 4px;
-      font-size: 12px;
-      line-height: 1.45;
+      margin-top: 3px;
+      font-size: 11px;
+      line-height: 1.35;
       color: #5c6570;
       font-weight: 620;
     }
     .staff-brief-list {
       margin: 0;
       display: grid;
-      gap: 8px;
+      gap: 6px;
     }
     .staff-brief-row {
       display: grid;
-      grid-template-columns: 92px minmax(0, 1fr);
-      gap: 8px;
+      grid-template-columns: 84px minmax(0, 1fr);
+      gap: 6px;
       align-items: start;
-      padding-top: 8px;
+      padding-top: 6px;
       border-top: 1px solid rgba(17, 24, 39, 0.06);
     }
     .staff-brief-row:first-child {
@@ -8075,18 +11056,70 @@ async function renderHtml(
     }
     .staff-brief-row dt {
       margin: 0;
-      font-size: 12px;
-      line-height: 1.45;
+      font-size: 11px;
+      line-height: 1.35;
       color: #7b8490;
       font-weight: 700;
       letter-spacing: 0.02em;
     }
     .staff-brief-row dd {
       margin: 0;
-      font-size: 14px;
-      line-height: 1.55;
+      font-size: 13px;
+      line-height: 1.45;
       color: #24313d;
       font-weight: 560;
+    }
+    .staff-brief-value {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .staff-brief-value.clamp-2 {
+      -webkit-line-clamp: 2;
+    }
+    .staff-brief-value.clamp-3 {
+      -webkit-line-clamp: 3;
+    }
+    .staff-config-row dd {
+      overflow: hidden;
+    }
+    .staff-model-editor {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+    .staff-model-select,
+    .staff-model-token {
+      width: 100%;
+      min-height: 36px;
+      border: 1px solid rgba(148, 163, 184, 0.32);
+      border-radius: 12px;
+      padding: 0 12px;
+      background: rgba(255, 255, 255, 0.95);
+      color: #17212b;
+      font: inherit;
+      box-sizing: border-box;
+    }
+    .staff-model-token {
+      grid-column: 1 / -1;
+    }
+    .staff-model-save {
+      justify-self: start;
+      min-height: 36px;
+      padding: 0 14px;
+    }
+    .staff-model-status {
+      grid-column: 1 / -1;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      min-height: 0;
+    }
+    .staff-model-status:empty {
+      display: none;
     }
     .office-focus { margin: 6px 0 0 18px; padding: 0; }
     .office-focus li { margin-top: 4px; }
@@ -8525,6 +11558,7 @@ async function renderHtml(
       .task-hub-board-grid { grid-template-columns: 1fr; }
       .overview-busy-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .office-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .task-brief-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .staff-brief-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .collaboration-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
@@ -8534,12 +11568,15 @@ async function renderHtml(
       .panel { grid-column: 1; }
       .section-hero-head { flex-direction: column; align-items: stretch; }
       .section-head-actions { justify-content: flex-start; }
+      .refresh-toolbar { justify-content: flex-start; }
+      .refresh-status { text-align: left; }
       .overview-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .overview-decision-grid { grid-template-columns: 1fr; }
       .overview-main-grid { grid-template-columns: 1fr; }
       .overview-pulse-card .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .task-hub-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .timeline-summary-strip { grid-template-columns: 1fr; }
+      .timeline-summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .task-top-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .overview-busy-grid { grid-template-columns: 1fr; }
       .dashboard-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .execution-chain-list { grid-template-columns: 1fr; }
@@ -8548,12 +11585,15 @@ async function renderHtml(
       .collaboration-current-owner { text-align: left; }
       .collaboration-timeline-step { grid-template-columns: 1fr; }
       .file-workbench { grid-template-columns: 1fr; }
+      .task-brief-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .staff-brief-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 1080px) {
       .app-shell { grid-template-columns: 1fr; }
       .sidebar, .panel { order: unset; }
       .section-title { font-size: 25px; }
+      .refresh-toolbar { width: 100%; }
+      .refresh-status { width: 100%; }
       .overview-v3-shell { grid-template-columns: 1fr; }
       .overview-kpi-grid { grid-template-columns: 1fr; }
       .overview-decision-grid { grid-template-columns: 1fr; }
@@ -8577,6 +11617,8 @@ async function renderHtml(
       .collaboration-avatar { width: 54px; max-width: 54px; }
       .signal-gauge-main { grid-template-columns: 64px minmax(0, 1fr); }
       .office-grid { grid-template-columns: 1fr; }
+      .task-brief-head { grid-template-columns: 1fr; }
+      .task-brief-grid { grid-template-columns: 1fr; }
       .staff-brief-head { grid-template-columns: 1fr; }
       .staff-avatar { width: min(156px, 100%); }
       .staff-brief-grid { grid-template-columns: 1fr; }
@@ -8591,6 +11633,13 @@ async function renderHtml(
       .file-editor-panel { grid-template-rows: auto minmax(280px, 1fr) auto; }
       .file-editor-textarea { min-height: 360px; }
     }
+    @media (max-width: 720px) {
+      .timeline-summary-strip { grid-template-columns: 1fr; }
+      .task-top-meta-row { flex-direction: column; align-items: flex-start; }
+      .task-top-filters { grid-template-columns: 1fr; }
+      .task-brief-toolbar { align-items: stretch; }
+      .task-brief-controls { justify-items: start; min-width: 0; }
+    }
     @media (prefers-reduced-motion: reduce) {
       * {
         animation-duration: 0.01ms !important;
@@ -8600,16 +11649,17 @@ async function renderHtml(
     }
   </style>
 </head>
-<body class="ui-preload" data-ui-polish="apple-native-v3" data-apple-window-controls="true" data-ui-language="${escapeHtml(options.language)}" style="--fold-open-label:${options.language === "en" ? "'Expand'" : "'展开'"}; --fold-close-label:${options.language === "en" ? "'Collapse'" : "'收起'"};">
+<body class="ui-preload" data-ui-polish="apple-native-v3" data-apple-window-controls="true" data-ui-language="${escapeHtml(options.language)}" data-refresh-generated-at="${escapeHtml(snapshot.generatedAt ?? "")}" style="--fold-open-label:${options.language === "en" ? "'Expand'" : "'展开'"}; --fold-close-label:${options.language === "en" ? "'Collapse'" : "'收起'"};">
   <div class="app-shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-kicker">OpenClaw</div>
-        <h1>OpenClaw Control Center</h1>
+        <div class="brand-kicker">${escapeHtml(uiEmployeeBrand(options.language))}</div>
+        <h1>${escapeHtml(uiEmployeeSystemBrand(options.language))}</h1>
         <div class="meta">${escapeHtml(t("Updated", "更新时间"))}${escapeHtml(options.language === "en" ? ": " : "：")}${escapeHtml(snapshot.generatedAt ?? t("Not available", "暂无"))}</div>
         ${languageToggle}
       </div>
       <nav class="nav-links">${sectionNav}</nav>
+      ${agentTeamSidebarCard}
     </aside>
     <main class="panel">
       <header class="section-hero-head">
@@ -8618,6 +11668,7 @@ async function renderHtml(
           <div class="section-blurb">${escapeHtml(sectionLeadText)}</div>
         </div>
         <div class="section-head-actions">
+          ${dashboardRefreshControls}
           <button id="inspector-toggle" type="button" class="panel-toggle" aria-pressed="false">${escapeHtml(t("Collapse inspector", "收起检视栏"))}</button>
         </div>
       </header>
@@ -8629,6 +11680,7 @@ async function renderHtml(
         <div class="meta">${escapeHtml(t("Active sessions", "活跃会话"))}：${liveSessionCount}</div>
         <div class="meta">${escapeHtml(t("Tasks under watch", "正在观察中的任务"))}：${taskCertaintyCards.length}</div>
         <div class="meta">${escapeHtml(t("Review queue", "审阅队列"))}：${pendingDecisionCount}</div>
+        ${agentTeamInspectorSummary}
         ${sidebarSignalRows}
       </div>
       <div class="card" style="margin-top:10px;">
@@ -8655,6 +11707,9 @@ async function renderHtml(
         <h2>${escapeHtml(t("Currently active agents", "当前活跃智能体"))}</h2>
         <ul class="story-list">${executionAgentRows || `<li>${escapeHtml(t("No active agent signal yet.", "暂无活跃智能体信号。"))}</li>`}</ul>
       </div>
+      ${agentTeamInspectorCard}
+      ${agentTeamRunSummaryCard}
+      ${agentTeamArtifactPreviewCard}
       <section class="card" style="margin-top:10px;">
         <h2>${escapeHtml(t("Timed jobs and heartbeat", "定时与心跳"))}</h2>
         <div class="meta">${escapeHtml(t("Timed jobs", "定时"))} ${badge(cronOverview.health.status)} · ${escapeHtml(t("Next", "下次"))} ${escapeHtml(cronOverview.nextRunAt ?? t("None", "暂无"))}</div>
@@ -8663,8 +11718,11 @@ async function renderHtml(
       </section>
     </aside>
   </div>
+  ${dashboardRefreshScript}
   ${agentVisualEnhancerScript}
+  ${taskBoardScript}
   ${fileWorkbenchScript}
+  ${staffModelScript}
   ${nativeMotionScript}
   ${collaborationFilterScript}
   ${quotaResetScript}
@@ -9076,6 +12134,7 @@ function mergeUiPreferencesPatch(current: UiPreferences, payload: Record<string,
     compactStatusStrip: current.compactStatusStrip,
     quickFilter: current.quickFilter,
     taskFilters: { ...current.taskFilters },
+    taskCardOrder: [...current.taskCardOrder],
     updatedAt: new Date().toISOString(),
   };
 
@@ -9134,6 +12193,10 @@ function mergeUiPreferencesPatch(current: UiPreferences, payload: Record<string,
     if (filtersObj.project !== undefined) {
       next.taskFilters.project = normalizeOptionalPatchString(filtersObj.project, "taskFilters.project", 120);
     }
+  }
+
+  if (payload.taskCardOrder !== undefined) {
+    next.taskCardOrder = normalizeTaskCardOrderPatch(payload.taskCardOrder, "taskCardOrder");
   }
 
   return next;
@@ -9357,7 +12420,45 @@ async function loadStaffRoleEvidence(member: TeamMemberSnapshot): Promise<string
   return output;
 }
 
+function resolveCoreTeamDutyLabel(agentId: string, language: UiLanguage = "zh"): string | undefined {
+  switch (normalizeLookupKey(agentId)) {
+    case "main":
+    case "jarvis":
+      return pickUiText(language, "Team lead", "总协调中枢");
+    case "dispatcher":
+    case "productdispatcher":
+    case "product":
+      return pickUiText(language, "Task dispatch", "任务编排");
+    case "architect":
+    case "architecture":
+      return pickUiText(language, "System design", "架构设计");
+    case "backend":
+    case "api":
+    case "server":
+      return pickUiText(language, "Backend build", "后端实现");
+    case "frontend":
+    case "ui":
+    case "client":
+      return pickUiText(language, "Frontend UI", "前端交互");
+    case "qa":
+    case "quality":
+    case "test":
+      return pickUiText(language, "QA review", "质量验收");
+    case "ops":
+    case "devops":
+    case "release":
+    case "sre":
+      return pickUiText(language, "Release ops", "发布运维");
+    default:
+      return undefined;
+  }
+}
+
 async function resolveStaffRoleLabel(member: TeamMemberSnapshot, language: UiLanguage = "zh"): Promise<string> {
+  const coreTeamDutyLabel = resolveCoreTeamDutyLabel(member.agentId, language);
+  if (coreTeamDutyLabel) {
+    return coreTeamDutyLabel;
+  }
   const roleEvidence = await loadStaffRoleEvidence(member);
   const combined = roleEvidence.join("\n");
   const normalized = normalizeEvidenceText(combined);
@@ -9551,8 +12652,8 @@ async function listEditableMemoryFiles(): Promise<EditableFileEntry[]> {
   const output: EditableFileEntry[] = [];
   const seen = new Set<string>();
   const mainFacetKey = "main";
-  const mainFacetLabel = "Main";
   const agentScopes = await loadEditableAgentScopes();
+  const mainFacetLabel = agentScopes.find((scope) => scope.facetKey === mainFacetKey)?.facetLabel ?? "Main";
 
   const append = async (entry: EditableFileEntry | undefined): Promise<void> => {
     if (!entry) return;
@@ -9569,7 +12670,7 @@ async function listEditableMemoryFiles(): Promise<EditableFileEntry[]> {
     await append(
       await buildEditableFileEntry({
         scope: "memory",
-        category: "Main 长期记忆",
+        category: `${mainFacetLabel} 长期记忆`,
         sourcePath: candidateFile,
         relativeBase: OPENCLAW_WORKSPACE_ROOT,
         facetKey: mainFacetKey,
@@ -9586,7 +12687,7 @@ async function listEditableMemoryFiles(): Promise<EditableFileEntry[]> {
     await append(
       await buildEditableFileEntry({
         scope: "memory",
-        category: "Main 记忆记录",
+        category: `${mainFacetLabel} 记忆记录`,
         sourcePath: file.path,
         relativeBase: OPENCLAW_WORKSPACE_ROOT,
         facetKey: mainFacetKey,
@@ -9650,6 +12751,7 @@ async function listEditableWorkspaceFiles(): Promise<EditableFileEntry[]> {
   const output: EditableFileEntry[] = [];
   const seen = new Set<string>();
   const agentScopes = await loadEditableAgentScopes();
+  const mainFacetLabel = agentScopes.find((scope) => scope.facetKey === "main")?.facetLabel ?? "Main";
 
   const append = async (entry: EditableFileEntry | undefined): Promise<void> => {
     if (!entry) return;
@@ -9663,11 +12765,11 @@ async function listEditableWorkspaceFiles(): Promise<EditableFileEntry[]> {
     await append(
       await buildEditableFileEntry({
         scope: "workspace",
-        category: "Main 核心文档",
+        category: `${mainFacetLabel} 核心文档`,
         sourcePath: join(OPENCLAW_WORKSPACE_ROOT, relativePath),
         relativeBase: OPENCLAW_WORKSPACE_ROOT,
         facetKey: "main",
-        facetLabel: "Main",
+        facetLabel: mainFacetLabel,
       }),
     );
   }
@@ -9803,7 +12905,7 @@ function resolveEditableAgentScopesFromConfig(input: unknown): EditableAgentScop
     output.push({
       agentId: rawId,
       facetKey,
-      facetLabel: facetKey === "main" ? "Main" : humanizeOperatorLabel(rawId),
+      facetLabel: resolveConfiguredAgentDisplayName(row, rawId),
       workspaceRoot,
     });
   }
@@ -9835,11 +12937,11 @@ function compareEditableAgentScopes(a: EditableAgentScope, b: EditableAgentScope
   return a.facetLabel.localeCompare(b.facetLabel, "zh-Hans-CN");
 }
 
-function buildMainEditableAgentScope(): EditableAgentScope {
+function buildMainEditableAgentScope(facetLabel = "Main"): EditableAgentScope {
   return {
     agentId: "main",
     facetKey: "main",
-    facetLabel: "Main",
+    facetLabel,
     workspaceRoot: OPENCLAW_WORKSPACE_ROOT,
   };
 }
@@ -9847,6 +12949,14 @@ function buildMainEditableAgentScope(): EditableAgentScope {
 function ensureMainEditableAgentScope(scopes: EditableAgentScope[]): EditableAgentScope[] {
   if (scopes.some((scope) => scope.facetKey === "main")) return scopes;
   return [buildMainEditableAgentScope(), ...scopes];
+}
+
+function resolveConfiguredAgentDisplayName(row: Record<string, unknown>, rawId: string): string {
+  const identity = asObject(row.identity);
+  const configuredName =
+    asString(row.name)?.trim() ||
+    asString(identity?.name)?.trim();
+  return configuredName || humanizeOperatorLabel(rawId);
 }
 
 function resolveEditableAgentScopesFromConfigText(raw: string | undefined): {
@@ -9961,47 +13071,6 @@ async function loadMemoryEntries(): Promise<{ daily: MemoryEntry[]; longTerm: Me
   };
 }
 
-async function loadDocHubEntries(chatEntries: StructuredChatDocEntry[] = []): Promise<DocEntry[]> {
-  const output: DocEntry[] = [];
-  for (const candidate of DOC_HUB_DIR_CANDIDATES) {
-    const files = await listFileEntries(candidate.dir);
-    for (const file of files.slice(0, 40)) {
-      const ext = extname(file.name).toLowerCase();
-      if (![".md", ".markdown", ".txt", ".json"].includes(ext)) continue;
-      if (file.size > 600 * 1024) continue;
-      const raw = await safeReadTextFile(file.path);
-      if (!raw) continue;
-      const title =
-        extractMarkdownHeading(raw) ||
-        basename(file.name, ext) ||
-        file.name;
-      output.push({
-        title,
-        excerpt: toPlainSummary(raw, 180),
-        category: candidate.category,
-        sourcePath: file.path,
-        updatedAt: file.updatedAt,
-        sourceType: "file",
-      });
-    }
-  }
-  for (const entry of chatEntries) {
-    output.push({
-      title: entry.title,
-      excerpt: entry.excerpt,
-      category: `聊天输出 · ${entry.category}`,
-      sourcePath: `/sessions/${encodeURIComponent(entry.sourceSessionKey)}`,
-      updatedAt: entry.updatedAt,
-      sourceType: "chat",
-      sourceSessionKey: entry.sourceSessionKey,
-      sourceAgentId: entry.sourceAgentId,
-    });
-  }
-  return output
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, 120);
-}
-
 async function renderEditableFileWorkbench(input: {
   scope: EditableFileScope;
   language: UiLanguage;
@@ -10095,11 +13164,11 @@ async function renderEditableFileWorkbench(input: {
   const tokenHint = !LOCAL_TOKEN_AUTH_REQUIRED
     ? t("This environment allows direct save.", "当前环境允许直接保存。")
     : LOCAL_API_TOKEN
-      ? t("Enter the local token when saving.", "保存时输入本地令牌。")
-      : t("LOCAL_API_TOKEN is not configured in this environment. Save will be blocked.", "当前环境未配置 LOCAL_API_TOKEN，保存会被拦截。");
+      ? t("Enter the local safety passcode when saving.", "保存前输入这台机器的安全口令。")
+      : t("This machine has not set a safety passcode yet, so saving is blocked for now.", "这台机器还没设置安全口令，所以这里暂时不能保存。");
   const tokenField =
     LOCAL_TOKEN_AUTH_REQUIRED && LOCAL_API_TOKEN
-      ? `<input class="file-token-input" type="password" data-file-token placeholder="${escapeHtml(t("Local token", "本地令牌"))}" />`
+      ? `<input class="file-token-input" type="password" data-file-token placeholder="${escapeHtml(t("Safety passcode", "安全口令"))}" />`
       : "";
 
   return `<section class="card">
@@ -10144,18 +13213,6 @@ async function renderEditableFileWorkbench(input: {
   </section>`;
 }
 
-function renderStructuredChatDocSummary(entries: StructuredChatDocEntry[]): string {
-  if (entries.length === 0) {
-    return '<div class="empty-state">尚无聊天输出结构化入库记录。</div>';
-  }
-  return `<ul class="story-list">${entries
-    .slice(0, 16)
-    .map(
-      (entry) => `<li><strong>${escapeHtml(entry.title)}</strong><div class="meta">${escapeHtml(entry.excerpt)}</div><div class="meta">会话 ${escapeHtml(entry.sourceSessionKey)} · 更新 ${escapeHtml(entry.updatedAt)}</div></li>`,
-    )
-    .join("")}</ul>`;
-}
-
 async function loadTeamSnapshot(officeRoster: AgentRosterSnapshot): Promise<TeamSnapshot> {
   const sourcePath = OPENCLAW_CONFIG_PATH;
   const fallbackMission = "构建可持续自治的 AI 员工体系，持续完成高价值任务。";
@@ -10180,7 +13237,9 @@ async function loadTeamSnapshot(officeRoster: AgentRosterSnapshot): Promise<Team
         toolsProfile: "default",
       })),
       sourcePath,
-      detail: "openclaw.json 未找到，已回退为运行时员工名录。",
+      detail: "员工配置文件未找到，已回退为运行时员工名录。",
+      modelOptions: [],
+      modelEditable: false,
     };
   }
   try {
@@ -10194,13 +13253,16 @@ async function loadTeamSnapshot(officeRoster: AgentRosterSnapshot): Promise<Team
     for (const item of list) {
       if (!item || typeof item !== "object") continue;
       const obj = item as Record<string, unknown>;
+      const identity = (obj.identity ?? {}) as Record<string, unknown>;
       const id = typeof obj.id === "string" ? obj.id.trim() : "";
       if (!id) continue;
       const tools = (obj.tools ?? {}) as Record<string, unknown>;
       members.push({
         agentId: id,
         displayName:
-          (typeof obj.name === "string" && obj.name.trim()) || id,
+          (typeof obj.name === "string" && obj.name.trim()) ||
+          (typeof identity.name === "string" && identity.name.trim()) ||
+          id,
         model:
           (typeof obj.model === "string" && obj.model.trim()) ||
           (typeof defaultModel === "string" ? defaultModel : "未标注"),
@@ -10212,9 +13274,11 @@ async function loadTeamSnapshot(officeRoster: AgentRosterSnapshot): Promise<Team
     }
     return {
       missionStatement,
-      members: members.sort((a, b) => a.agentId.localeCompare(b.agentId, "zh-Hans-CN")),
+      members: members.sort((a, b) => compareAgentHierarchy(a.agentId, b.agentId)),
       sourcePath,
-      detail: `已从 openclaw.json 读取 ${members.length} 名员工。`,
+      detail: `已从员工配置文件读取 ${members.length} 名员工。`,
+      modelOptions: collectOpenClawModelOptions(parsed, members.map((item) => item.model)),
+      modelEditable: true,
     };
   } catch {
     return {
@@ -10227,9 +13291,128 @@ async function loadTeamSnapshot(officeRoster: AgentRosterSnapshot): Promise<Team
         toolsProfile: "default",
       })),
       sourcePath,
-      detail: "openclaw.json 解析失败，已回退为运行时员工名录。",
+      detail: "员工配置文件解析失败，已回退为运行时员工名录。",
+      modelOptions: [],
+      modelEditable: false,
     };
   }
+}
+
+async function updateOpenClawAgentModel(
+  agentId: string,
+  model: string,
+): Promise<
+  | {
+      agentId: string;
+      displayName: string;
+      model: string;
+      workspace: string;
+      toolsProfile: string;
+      configPath: string;
+      modelOptions: OpenClawModelOption[];
+    }
+  | undefined
+> {
+  let raw: string;
+  try {
+    raw = await readFile(OPENCLAW_CONFIG_PATH, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT") {
+      throw new RequestValidationError("openclaw.json not found.", 404);
+    }
+    throw error;
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    throw new RequestValidationError("openclaw.json could not be parsed.", 500);
+  }
+  const agentsRoot = asObject(parsed.agents);
+  const list = asArray(agentsRoot?.list);
+  const normalizedAgentId = normalizeLookupKey(agentId);
+  const normalizedModel = model.trim();
+  const currentModels = list
+    .map((item) => asString(asObject(item)?.model)?.trim() ?? "")
+    .filter(Boolean);
+  const modelOptions = collectOpenClawModelOptions(parsed, currentModels.concat(normalizedModel));
+  const allowedModels = new Set(modelOptions.map((item) => item.value));
+  if (!allowedModels.has(normalizedModel)) {
+    throw new RequestValidationError("model must be one of the configured OpenClaw models.", 400);
+  }
+
+  for (const item of list) {
+    const row = asObject(item);
+    if (!row) continue;
+    const rawId = asString(row.id)?.trim() ?? asString(row.name)?.trim() ?? "";
+    if (normalizeLookupKey(rawId) !== normalizedAgentId) continue;
+    row.model = normalizedModel;
+    const identity = asObject(row.identity);
+    const tools = asObject(row.tools);
+    await writeFile(OPENCLAW_CONFIG_PATH, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+    return {
+      agentId: rawId,
+      displayName:
+        asString(row.name)?.trim() ||
+        asString(identity?.name)?.trim() ||
+        rawId,
+      model: normalizedModel,
+      workspace: asString(row.workspace)?.trim() || "未标注",
+      toolsProfile: asString(tools?.profile)?.trim() || "default",
+      configPath: OPENCLAW_CONFIG_PATH,
+      modelOptions,
+    };
+  }
+
+  return undefined;
+}
+
+function collectOpenClawModelOptions(
+  configRoot: Record<string, unknown>,
+  currentModels: string[] = [],
+): OpenClawModelOption[] {
+  const merged = new Map<string, OpenClawModelOption>();
+  const register = (value: string | undefined, label?: string | undefined): void => {
+    const normalized = value?.trim();
+    if (!normalized) return;
+    if (merged.has(normalized)) return;
+    merged.set(normalized, {
+      value: normalized,
+      label: label?.trim() ? label.trim() : normalized,
+    });
+  };
+
+  const agentsRoot = asObject(configRoot.agents);
+  const defaults = asObject(agentsRoot?.defaults);
+  const defaultModel = asString(asObject(defaults?.model)?.primary);
+  register(defaultModel, defaultModel);
+
+  const configuredModels = asObject(defaults?.models);
+  for (const [key, rawValue] of Object.entries(configuredModels ?? {})) {
+    const modelConfig = asObject(rawValue);
+    const alias = asString(modelConfig?.alias);
+    register(key, alias ? `${alias} · ${key}` : key);
+  }
+
+  const providers = asObject(asObject(configRoot.models)?.providers);
+  for (const [providerKey, rawProvider] of Object.entries(providers ?? {})) {
+    const provider = asObject(rawProvider);
+    for (const rawModel of asArray(provider?.models)) {
+      const model = asObject(rawModel);
+      const modelId = asString(model?.id)?.trim();
+      if (!modelId) continue;
+      const name = asString(model?.name)?.trim();
+      const value = `${providerKey}/${modelId}`;
+      register(value, name ? `${name} · ${value}` : value);
+    }
+  }
+
+  for (const currentModel of currentModels) {
+    register(currentModel, currentModel);
+  }
+
+  return [...merged.values()].sort((a, b) => a.label.localeCompare(b.label, "zh-Hans-CN"));
 }
 
 function summarizeFilters(filters: TaskQueryFilters): string {
@@ -10269,6 +13452,35 @@ function renderLanguageToggle(filters: TaskQueryFilters, options: DashboardOptio
   const label = pickUiText(options.language, "Language:", "语言：");
   const zhLabel = pickUiText(options.language, "中文", "中文");
   return `<div class="meta lang-toggle">${label} <a${enClass} href="${escapeHtml(enHref)}">EN</a> / <a${zhClass} href="${escapeHtml(zhHref)}">${zhLabel}</a></div>`;
+}
+
+function renderDashboardRefreshControls(language: UiLanguage): string {
+  const intervals = [15, 30, 60, 120];
+  const intervalOptions = intervals
+    .map((value) => {
+      const label = language === "en" ? `${value}s` : `${value} 秒`;
+      return `<option value="${value}"${value === 30 ? " selected" : ""}>${escapeHtml(label)}</option>`;
+    })
+    .join("");
+  return `<div class="refresh-toolbar" data-dashboard-refresh-root>
+    <button class="panel-toggle" type="button" data-dashboard-refresh-now>${escapeHtml(
+      pickUiText(language, "Refresh now", "立即刷新"),
+    )}</button>
+    <button class="panel-toggle" type="button" data-dashboard-auto-refresh-toggle aria-pressed="false">${escapeHtml(
+      pickUiText(language, "Auto refresh: off", "自动刷新：关"),
+    )}</button>
+    <label class="refresh-interval">
+      <span>${escapeHtml(pickUiText(language, "Auto every", "自动间隔"))}</span>
+      <select data-dashboard-auto-refresh-interval aria-label="${escapeHtml(
+        pickUiText(language, "Auto refresh interval", "自动刷新间隔"),
+      )}">
+        ${intervalOptions}
+      </select>
+    </label>
+    <div class="refresh-status" data-dashboard-refresh-status role="status" aria-live="polite">${escapeHtml(
+      pickUiText(language, "Auto refresh is off.", "自动刷新已关闭。"),
+    )}</div>
+  </div>`;
 }
 
 function buildHomeHref(
@@ -10381,6 +13593,14 @@ function humanizeOperatorLabel(value: string): string {
 }
 
 export function deriveAgentAnimalIdentity(agentId: string): AgentAnimalIdentity {
+  const customIdentity = deriveCustomStaffAvatarIdentity(agentId);
+  if (customIdentity) {
+    return customIdentity;
+  }
+  return deriveGeneratedAgentAnimalIdentity(agentId);
+}
+
+function deriveGeneratedAgentAnimalIdentity(agentId: string): AgentAnimalIdentity {
   const normalized = agentId.trim().toLowerCase();
   const compact = normalized.replace(/[^a-z0-9]/g, "");
   if (!compact) {
@@ -10412,6 +13632,87 @@ export function deriveAgentAnimalIdentity(agentId: string): AgentAnimalIdentity 
     title: fallback.title,
     accent: fallback.accent,
     sprite: fallback.sprite,
+  };
+}
+
+function deriveCustomStaffAvatarIdentity(agentId: string): AgentAnimalIdentity | undefined {
+  const key = normalizeLookupKey(agentId);
+  if (!key) return undefined;
+
+  const reservedKey = CORE_STAFF_AVATAR_OVERRIDES.get(key);
+  if (reservedKey) {
+    return buildCustomStaffAvatarIdentity(reservedKey);
+  }
+
+  const catalog = CUSTOM_STAFF_AVATAR_CATALOG;
+  const randomishKey = catalog[stableHashIndex(key) % catalog.length]?.key;
+  return randomishKey ? buildCustomStaffAvatarIdentity(randomishKey) : undefined;
+}
+
+function buildAgentAnimalIdentityMap(agentIds: string[]): Map<string, AgentAnimalIdentity> {
+  const normalizedAgentIds = [...new Set(agentIds.map((item) => item.trim()).filter(Boolean))]
+    .sort(compareAgentHierarchy);
+  const identityByKey = new Map<string, AgentAnimalIdentity>();
+  if (normalizedAgentIds.length === 0) {
+    return identityByKey;
+  }
+
+  const uniqueCustomOnly = normalizedAgentIds.length <= CUSTOM_STAFF_AVATAR_CATALOG.length;
+  const usedCustomKeys = new Set<CustomStaffAvatarKey>();
+  const availableCustomKeys = (): CustomStaffAvatarKey[] =>
+    CUSTOM_STAFF_AVATAR_CATALOG
+      .map((item) => item.key)
+      .filter((item) => !usedCustomKeys.has(item));
+
+  const assignCustomIdentity = (agentId: string, avatarKey: CustomStaffAvatarKey): void => {
+    const identity = buildCustomStaffAvatarIdentity(avatarKey);
+    if (!identity) return;
+    identityByKey.set(normalizeLookupKey(agentId), identity);
+    if (uniqueCustomOnly) {
+      usedCustomKeys.add(avatarKey);
+    }
+  };
+
+  for (const agentId of normalizedAgentIds) {
+    const key = normalizeLookupKey(agentId);
+    const reservedKey = CORE_STAFF_AVATAR_OVERRIDES.get(key);
+    if (!reservedKey) continue;
+    if (uniqueCustomOnly && usedCustomKeys.has(reservedKey)) continue;
+    assignCustomIdentity(agentId, reservedKey);
+  }
+
+  for (const agentId of normalizedAgentIds) {
+    const key = normalizeLookupKey(agentId);
+    if (identityByKey.has(key)) continue;
+    if (!uniqueCustomOnly) {
+      const catalog = CUSTOM_STAFF_AVATAR_CATALOG;
+      const avatarKey = catalog[stableHashIndex(`${key}:${normalizedAgentIds.length}`) % catalog.length]?.key;
+      if (avatarKey) {
+        assignCustomIdentity(agentId, avatarKey);
+        continue;
+      }
+    }
+    const remaining = availableCustomKeys();
+    if (remaining.length > 0) {
+      const pickIndex = stableHashIndex(key) % remaining.length;
+      assignCustomIdentity(agentId, remaining[pickIndex]);
+      continue;
+    }
+    identityByKey.set(key, deriveGeneratedAgentAnimalIdentity(agentId));
+  }
+
+  return identityByKey;
+}
+
+function buildCustomStaffAvatarIdentity(avatarKey: CustomStaffAvatarKey): AgentAnimalIdentity | undefined {
+  const asset = CUSTOM_STAFF_AVATAR_BY_KEY.get(avatarKey);
+  if (!asset) return undefined;
+  return {
+    animal: asset.key,
+    title: asset.title,
+    accent: asset.accent,
+    sprite: "",
+    imageHref: `${CUSTOM_STAFF_AVATAR_ROUTE_PREFIX}${encodeURIComponent(asset.fileName)}`,
   };
 }
 
@@ -10457,6 +13758,7 @@ export function buildOfficeSpaceCards(
     if (!allowUnknownAgents && !configuredAgentKeys.has(normalizeLookupKey(agentId))) continue;
     agentIds.add(agentId.trim());
   }
+  const avatarIdentityByKey = buildAgentAnimalIdentityMap([...agentIds]);
 
   const tasksBySession = new Map<string, TaskListItem[]>();
   for (const task of tasks) {
@@ -10498,7 +13800,7 @@ export function buildOfficeSpaceCards(
     const summary = buildOfficeSummary(status, focusItems, activeSessions, language);
     return {
       agentId,
-      identity: deriveAgentAnimalIdentity(agentId),
+      identity: avatarIdentityByKey.get(normalizeLookupKey(agentId)) ?? deriveAgentAnimalIdentity(agentId),
       status,
       statusLabel,
       officeZone,
@@ -10510,9 +13812,11 @@ export function buildOfficeSpaceCards(
   });
 
   return cards.sort((a, b) => {
+    const hierarchyRank = agentHierarchyRank(a.agentId) - agentHierarchyRank(b.agentId);
+    if (hierarchyRank !== 0) return hierarchyRank;
     const rank = officeStatusRank(a.status) - officeStatusRank(b.status);
     if (rank !== 0) return rank;
-    return a.agentId.localeCompare(b.agentId);
+    return compareAgentHierarchy(a.agentId, b.agentId);
   });
 }
 
@@ -10605,11 +13909,13 @@ export function buildExecutionAgentSummaries(
   }
 
   return rows.sort((a, b) => {
+    const hierarchyRank = agentHierarchyRank(a.agentId) - agentHierarchyRank(b.agentId);
+    if (hierarchyRank !== 0) return hierarchyRank;
     const loadA = a.activeSessions + a.activeTasks + a.enabledCronJobs;
     const loadB = b.activeSessions + b.activeTasks + b.enabledCronJobs;
     if (loadB !== loadA) return loadB - loadA;
     if (b.recentTokens30d !== a.recentTokens30d) return b.recentTokens30d - a.recentTokens30d;
-    return a.agentId.localeCompare(b.agentId);
+    return compareAgentHierarchy(a.agentId, b.agentId);
   });
 }
 
@@ -10701,6 +14007,10 @@ function officeZoneLabel(zone: OfficeSpaceCard["officeZone"], language: UiLangua
 
 function animalLabel(animal: string, language: UiLanguage = "zh"): string {
   if (animal === "robot") return pickUiText(language, "Robot", "机器人");
+  if (animal === "bird") return pickUiText(language, "Bird", "白鸟");
+  if (animal === "cat") return pickUiText(language, "Cat", "橘猫");
+  if (animal === "deer") return pickUiText(language, "Deer", "小鹿");
+  if (animal === "elephant") return pickUiText(language, "Elephant", "大象");
   if (animal === "lion") return pickUiText(language, "Lion", "狮子");
   if (animal === "panda") return pickUiText(language, "Panda", "熊猫");
   if (animal === "monkey") return pickUiText(language, "Monkey", "猴子");
@@ -10709,6 +14019,7 @@ function animalLabel(animal: string, language: UiLanguage = "zh"): string {
   if (animal === "fox") return pickUiText(language, "Fox", "狐狸");
   if (animal === "bear") return pickUiText(language, "Bear", "棕熊");
   if (animal === "eagle") return pickUiText(language, "Eagle", "鹰");
+  if (animal === "shiba") return pickUiText(language, "Shiba", "柴犬");
   if (animal === "tiger") return pickUiText(language, "Tiger", "老虎");
   if (animal === "otter") return pickUiText(language, "Otter", "水獭");
   if (animal === "rooster") return pickUiText(language, "Rooster", "公鸡");
@@ -10759,6 +14070,31 @@ function staffStatusLabel(status: OfficeSpaceCard["status"] | undefined, languag
     default:
       return pickUiText(language, "Standing by", "待命");
   }
+}
+
+function resolveStaffStatusDotTone(status: OfficeSpaceCard["status"] | undefined): "idle" | "working" | "issue" {
+  switch (status) {
+    case "running":
+    case "waiting_approval":
+      return "working";
+    case "blocked":
+    case "error":
+    case "mixed":
+      return "issue";
+    case "idle":
+    case "inactive":
+    default:
+      return "idle";
+  }
+}
+
+function staffStatusDotLabel(
+  tone: "idle" | "working" | "issue",
+  language: UiLanguage = "zh",
+): string {
+  if (tone === "working") return pickUiText(language, "Working", "工作中");
+  if (tone === "issue") return pickUiText(language, "Issue detected", "出现故障");
+  return pickUiText(language, "Idle", "暂时闲置");
 }
 
 function staffCurrentWorkLabel(input: {
@@ -10885,7 +14221,170 @@ async function loadStaffRecentActivity(
     }),
   );
 
-  return new Map(entries.filter((entry): entry is [string, StaffRecentActivity] => Boolean(entry[1])));
+  const resolved = new Map(entries.filter((entry): entry is [string, StaffRecentActivity] => Boolean(entry[1])));
+  const agentTeamFallback = buildStaffRecentActivityFallbackFromAgentTeamEmbed(
+    await loadAgentTeamEmbedSnapshot(),
+    targetKeys,
+    language,
+  );
+  for (const [key, value] of agentTeamFallback.entries()) {
+    if (!resolved.has(key)) resolved.set(key, value);
+  }
+  return resolved;
+}
+
+function buildStaffRecentActivityFallbackFromAgentTeamEmbed(
+  embed: AgentTeamEmbedSnapshot,
+  agentIds: string[],
+  language: UiLanguage,
+): Map<string, StaffRecentActivity> {
+  const output = new Map<string, StaffRecentActivity>();
+  if (!embed.available || agentIds.length === 0) return output;
+
+  const timeline = [...embed.timeline].sort(compareAgentTeamTimelineItemsByLatest);
+  const artifacts = uniqueAgentTeamArtifacts([embed.previewArtifact, ...embed.artifacts]).sort(compareAgentTeamArtifactsByLatest);
+  const fallbackRun = embed.focusedRun ?? embed.runs[0];
+
+  for (const agentId of agentIds) {
+    const key = normalizeLookupKey(agentId);
+    if (!key || output.has(key)) continue;
+
+    const recentTimeline = timeline.find((item) => agentTeamTimelineItemMatchesAgent(item, key));
+    if (recentTimeline) {
+      output.set(key, {
+        recentOutput: formatAgentTeamTimelineRecentOutput(recentTimeline, language),
+        recentOutputAt: recentTimeline.timestamp,
+      });
+      continue;
+    }
+
+    const recentArtifact = artifacts.find((item) => agentTeamArtifactMatchesAgent(item, key));
+    if (recentArtifact) {
+      output.set(key, {
+        recentOutput: formatAgentTeamArtifactRecentOutput(recentArtifact, fallbackRun, language),
+        recentOutputAt: recentArtifact.updatedAt ?? fallbackRun?.updatedAt,
+      });
+    }
+  }
+
+  return output;
+}
+
+export function buildStaffRecentActivityFallbackFromAgentTeamEmbedForSmoke(
+  embed: AgentTeamEmbedSnapshot,
+  agentIds: string[],
+  language: UiLanguage = "zh",
+): Map<string, StaffRecentActivity> {
+  return buildStaffRecentActivityFallbackFromAgentTeamEmbed(embed, agentIds, language);
+}
+
+function uniqueAgentTeamArtifacts(
+  items: Array<AgentTeamEmbedPreviewArtifact | AgentTeamEmbedArtifact | undefined>,
+): Array<AgentTeamEmbedPreviewArtifact | AgentTeamEmbedArtifact> {
+  const output: Array<AgentTeamEmbedPreviewArtifact | AgentTeamEmbedArtifact> = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (!item?.file) continue;
+    const key = item.file.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
+}
+
+function agentTeamTimelineItemMatchesAgent(item: AgentTeamEmbedTimelineItem, agentKey: string): boolean {
+  const stageKey = normalizeLookupKey(item.stage ?? "");
+  if (stageKey && stageKey === agentKey) return true;
+  const detail = normalizeLookupKey(item.detail ?? "");
+  return agentKey.length > 2 && detail.includes(agentKey);
+}
+
+function agentTeamArtifactMatchesAgent(
+  artifact: AgentTeamEmbedPreviewArtifact | AgentTeamEmbedArtifact,
+  agentKey: string,
+): boolean {
+  const stageKey = normalizeLookupKey(artifact.sourceRole ?? artifact.stage ?? "");
+  if (stageKey && stageKey === agentKey) return true;
+  const fileKey = normalizeLookupKey(basename(artifact.file));
+  return agentKey.length > 2 && fileKey.includes(agentKey);
+}
+
+function compareAgentTeamTimelineItemsByLatest(left: AgentTeamEmbedTimelineItem, right: AgentTeamEmbedTimelineItem): number {
+  const byTime = toSortableRuntimeTimestamp(right.timestamp) - toSortableRuntimeTimestamp(left.timestamp);
+  if (byTime !== 0) return byTime;
+  return (right.detail ?? "").localeCompare(left.detail ?? "");
+}
+
+function compareAgentTeamArtifactsByLatest(
+  left: AgentTeamEmbedPreviewArtifact | AgentTeamEmbedArtifact,
+  right: AgentTeamEmbedPreviewArtifact | AgentTeamEmbedArtifact,
+): number {
+  const byTime = toSortableRuntimeTimestamp(right.updatedAt) - toSortableRuntimeTimestamp(left.updatedAt);
+  if (byTime !== 0) return byTime;
+  return right.file.localeCompare(left.file);
+}
+
+function toSortableRuntimeTimestamp(value: string | undefined): number {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatAgentTeamTimelineRecentOutput(item: AgentTeamEmbedTimelineItem, language: UiLanguage): string {
+  const stageLabel = describeAgentTeamStage(item.stage, language);
+  if (normalizeLookupKey(item.kind ?? "") === "stage_validated" && stageLabel) {
+    return pickUiText(
+      language,
+      `${stageLabel} cleared the latest team-run checkpoint.`,
+      `最近完成了${stageLabel}阶段校验。`,
+    );
+  }
+  if (stageLabel) {
+    return pickUiText(
+      language,
+      `Latest team run progressed in ${stageLabel}.`,
+      `最近团队运行推进到了${stageLabel}阶段。`,
+    );
+  }
+  return pickUiText(language, "Recently contributed to the latest team run.", "最近参与过一次团队运行。");
+}
+
+function formatAgentTeamArtifactRecentOutput(
+  artifact: AgentTeamEmbedPreviewArtifact | AgentTeamEmbedArtifact,
+  run: AgentTeamEmbedFocusedRun | AgentTeamEmbedRun | undefined,
+  language: UiLanguage,
+): string {
+  const stageLabel = describeAgentTeamStage(artifact.sourceRole ?? artifact.stage, language);
+  const hasWarnings = (run?.warningCount ?? 0) > 0 || normalizeLookupKey(run?.status ?? "") === "attention";
+  if (stageLabel && hasWarnings) {
+    return pickUiText(
+      language,
+      `${stageLabel} delivered a run artifact and left follow-up notes.`,
+      `最近提交了${stageLabel}阶段交付物，并留下了后续跟进项。`,
+    );
+  }
+  if (stageLabel) {
+    return pickUiText(
+      language,
+      `${stageLabel} delivered a team-run artifact.`,
+      `最近提交了${stageLabel}阶段交付物。`,
+    );
+  }
+  return pickUiText(language, "Recently delivered a team-run artifact.", "最近提交过一次团队运行交付物。");
+}
+
+function describeAgentTeamStage(stage: string | undefined, language: UiLanguage): string | undefined {
+  const key = normalizeLookupKey(stage ?? "");
+  if (!key) return undefined;
+  if (key === "main") return pickUiText(language, "Jarvis orchestration", "Jarvis 主控");
+  if (key === "dispatcher") return pickUiText(language, "dispatch planning", "调度拆解");
+  if (key === "architect") return pickUiText(language, "architecture", "架构设计");
+  if (key === "backend") return pickUiText(language, "backend delivery", "后端实现");
+  if (key === "frontend") return pickUiText(language, "frontend delivery", "前端交付");
+  if (key === "qa") return pickUiText(language, "quality validation", "质量验证");
+  if (key === "ops") return pickUiText(language, "release operations", "上线运维");
+  return safeTruncate(stage?.trim() ?? "", 24) || undefined;
 }
 
 function pickRecentStaffActivity(
@@ -11026,11 +14525,14 @@ export async function buildStaffOverviewCards(input: {
   officeCards: OfficeSpaceCard[];
   executionAgentSummaries: ExecutionAgentSummary[];
   language: UiLanguage;
+  modelOptions?: OpenClawModelOption[];
+  modelEditable?: boolean;
+  configPath?: string;
 }): Promise<StaffOverviewCard[]> {
   const officeCardByKey = new Map(input.officeCards.map((item) => [normalizeLookupKey(item.agentId), item]));
   const executionByKey = new Map(input.executionAgentSummaries.map((item) => [normalizeLookupKey(item.agentId), item]));
 
-  const memberList = input.members.length > 0
+  const memberList = (input.members.length > 0
     ? input.members
     : input.executionAgentSummaries.map((item) => ({
         agentId: item.agentId,
@@ -11038,7 +14540,8 @@ export async function buildStaffOverviewCards(input: {
         model: "unlisted",
         workspace: "unlisted",
         toolsProfile: "default",
-      }));
+      }))).slice().sort((a, b) => compareAgentHierarchy(a.agentId, b.agentId));
+  const avatarIdentityByKey = buildAgentAnimalIdentityMap(memberList.map((member) => member.agentId));
   const recentActivityByKey = await loadCachedStaffRecentActivity(
     input.snapshot,
     input.client,
@@ -11051,7 +14554,10 @@ export async function buildStaffOverviewCards(input: {
     const office = officeCardByKey.get(key);
     const execution = executionByKey.get(key);
     const recentActivity = recentActivityByKey.get(key);
-    const identity = office?.identity ?? deriveAgentAnimalIdentity(member.agentId);
+    const identity =
+      office?.identity ??
+      avatarIdentityByKey.get(key) ??
+      deriveAgentAnimalIdentity(member.agentId);
     const roleLabel = await resolveStaffRoleLabel(member, input.language);
     const effectiveOfficeStatus = recentActivity?.statusOverride ?? office?.status;
     const currentWork = staffCurrentWorkLabel({
@@ -11059,6 +14565,7 @@ export async function buildStaffOverviewCards(input: {
       execution,
       language: input.language,
     });
+    const statusTone = resolveStaffStatusDotTone(effectiveOfficeStatus);
     const recentOutput = recentActivity?.recentOutput
       ? recentActivity.recentOutput
       : pickUiText(input.language, "No recent output yet.", "最近暂无产出。");
@@ -11070,13 +14577,59 @@ export async function buildStaffOverviewCards(input: {
       displayName: member.displayName,
       identity,
       roleLabel,
+      statusTone,
+      statusDotLabel: staffStatusDotLabel(statusTone, input.language),
       statusLabel: staffStatusLabel(effectiveOfficeStatus, input.language),
       currentWorkLabel: currentWork.label,
       currentWork: currentWork.value,
       recentOutput,
       scheduledLabel,
+      model: member.model,
+      workspace: member.workspace,
+      toolsProfile: member.toolsProfile,
+      modelOptions: dedupeModelOptionsForCard(member.model, input.modelOptions ?? []),
+      modelEditable: input.modelEditable === true,
+      configPath: input.configPath?.trim() || OPENCLAW_CONFIG_PATH,
     };
   }));
+}
+
+function dedupeModelOptionsForCard(currentModel: string, options: OpenClawModelOption[]): OpenClawModelOption[] {
+  const merged = new Map<string, OpenClawModelOption>();
+  const normalizedCurrent = currentModel.trim();
+  if (normalizedCurrent) {
+    merged.set(normalizedCurrent, { value: normalizedCurrent, label: normalizedCurrent });
+  }
+  for (const option of options) {
+    const value = option.value.trim();
+    if (!value || merged.has(value)) continue;
+    merged.set(value, option);
+  }
+  return [...merged.values()];
+}
+
+function renderAgentAvatarFrame(input: {
+  agentId: string;
+  identity: AgentAnimalIdentity;
+  className: "agent-avatar" | "staff-avatar";
+  canvasWidth: number;
+  canvasHeight: number;
+  language?: UiLanguage;
+  showAnimalLabel?: boolean;
+}): string {
+  const avatarClassName = input.identity.imageHref ? `${input.className} has-photo` : input.className;
+  const stageContent = input.identity.imageHref
+    ? `<img class="agent-photo-image" src="${escapeHtml(input.identity.imageHref)}" alt="" loading="eager" decoding="async" />`
+    : `<canvas class="agent-pixel-canvas" width="${input.canvasWidth}" height="${input.canvasHeight}"></canvas>`;
+  const animalLabelHtml = input.showAnimalLabel
+    ? `<div class="agent-animal-label">${escapeHtml(animalLabel(input.identity.animal, input.language ?? "zh"))}</div>`
+    : "";
+  return `<div class="${avatarClassName}" style="--agent-accent:${escapeHtml(input.identity.accent)};" data-agent-id="${escapeHtml(input.agentId)}" data-animal="${escapeHtml(input.identity.animal)}">
+    <div class="agent-stage" aria-hidden="true">
+      ${stageContent}
+    </div>
+    ${animalLabelHtml}
+  </div>`;
 }
 
 function renderStaffOverviewCards(cards: StaffOverviewCard[], language: UiLanguage = "zh"): string {
@@ -11086,14 +14639,24 @@ function renderStaffOverviewCards(cards: StaffOverviewCard[], language: UiLangua
     )}</div>`;
   }
 
+  const modelCopy = {
+    model: pickUiText(language, "Model", "模型"),
+    save: pickUiText(language, "Save model", "保存模型"),
+    blocked: pickUiText(language, "Model change is blocked until this machine has a safety passcode.", "当前机器还没设置安全口令，暂时不能保存模型。"),
+    unavailable: pickUiText(language, "Model editing is unavailable until openclaw.json can be read.", "要先成功读取 openclaw.json，这里才能直接改模型。"),
+  };
   return `<div class="staff-brief-grid">${cards
     .map((card) => {
-      const avatar = `<div class="staff-avatar" style="--agent-accent:${escapeHtml(card.identity.accent)};" data-agent-id="${escapeHtml(card.agentId)}" data-animal="${escapeHtml(card.identity.animal)}">
-        <div class="agent-stage" aria-hidden="true">
-          <canvas class="agent-pixel-canvas" width="256" height="256"></canvas>
-        </div>
-      </div>`;
+      const saveBlocked = LOCAL_TOKEN_AUTH_REQUIRED && LOCAL_API_TOKEN === "";
+      const avatar = renderAgentAvatarFrame({
+        agentId: card.agentId,
+        identity: card.identity,
+        className: "staff-avatar",
+        canvasWidth: 256,
+        canvasHeight: 256,
+      });
       return `<article class="staff-brief-card">
+        <span class="staff-status-dot ${escapeHtml(card.statusTone)}" title="${escapeHtml(card.statusDotLabel)}" aria-hidden="true"></span>
         <div class="staff-brief-head">
           ${avatar}
           <div class="staff-brief-identity">
@@ -11102,10 +14665,25 @@ function renderStaffOverviewCards(cards: StaffOverviewCard[], language: UiLangua
           </div>
         </div>
         <dl class="staff-brief-list">
-          <div class="staff-brief-row"><dt>${escapeHtml(pickUiText(language, "Status", "当前状态"))}</dt><dd>${escapeHtml(card.statusLabel)}</dd></div>
-          <div class="staff-brief-row"><dt>${escapeHtml(card.currentWorkLabel)}</dt><dd>${escapeHtml(card.currentWork)}</dd></div>
-          <div class="staff-brief-row"><dt>${escapeHtml(pickUiText(language, "Recent output", "最近产出"))}</dt><dd>${escapeHtml(card.recentOutput)}</dd></div>
-          <div class="staff-brief-row"><dt>${escapeHtml(pickUiText(language, "In schedule", "是否在排班里"))}</dt><dd>${escapeHtml(card.scheduledLabel)}</dd></div>
+          <div class="staff-brief-row"><dt>${escapeHtml(pickUiText(language, "Status", "当前状态"))}</dt><dd class="staff-brief-value clamp-2">${escapeHtml(card.statusLabel)}</dd></div>
+          <div class="staff-brief-row"><dt>${escapeHtml(card.currentWorkLabel)}</dt><dd class="staff-brief-value clamp-2">${escapeHtml(card.currentWork)}</dd></div>
+          <div class="staff-brief-row"><dt>${escapeHtml(pickUiText(language, "Recent output", "最近产出"))}</dt><dd class="staff-brief-value clamp-3">${escapeHtml(card.recentOutput)}</dd></div>
+          <div class="staff-brief-row"><dt>${escapeHtml(pickUiText(language, "In schedule", "是否在排班里"))}</dt><dd class="staff-brief-value clamp-2">${escapeHtml(card.scheduledLabel)}</dd></div>
+          <div class="staff-brief-row staff-config-row">
+            <dt>${escapeHtml(modelCopy.model)}</dt>
+            <dd>
+              <div class="staff-model-editor" data-staff-model-root data-agent-id="${escapeHtml(card.agentId)}" data-language="${escapeHtml(language)}" data-current-model="${escapeHtml(card.model)}" data-config-path="${escapeHtml(card.configPath)}" data-token-required="${LOCAL_TOKEN_AUTH_REQUIRED ? "1" : "0"}" data-token-configured="${LOCAL_API_TOKEN !== "" ? "1" : "0"}" data-local-token-header="${escapeHtml(LOCAL_TOKEN_HEADER)}">
+                <select class="staff-model-select" data-staff-model-select ${card.modelEditable ? "" : "disabled"}>
+                  ${card.modelOptions
+                    .map((option) => `<option value="${escapeHtml(option.value)}"${option.value === card.model ? " selected" : ""}>${escapeHtml(option.label)}</option>`)
+                    .join("")}
+                </select>
+                <input class="staff-model-token" type="password" data-staff-model-token placeholder="${escapeHtml(pickUiText(language, "Safety passcode", "安全口令"))}" ${LOCAL_TOKEN_AUTH_REQUIRED && LOCAL_API_TOKEN !== "" ? "" : "hidden"} />
+                <button class="btn staff-model-save" type="button" data-staff-model-save ${card.modelEditable && !saveBlocked ? "" : "disabled"}>${escapeHtml(modelCopy.save)}</button>
+                <div class="meta staff-model-status" data-staff-model-status>${escapeHtml(card.modelEditable ? (saveBlocked ? modelCopy.blocked : "") : modelCopy.unavailable)}</div>
+              </div>
+            </dd>
+          </div>
         </dl>
       </article>`;
     })
@@ -12679,12 +16257,15 @@ function renderOfficeCards(cards: OfficeSpaceCard[], language: UiLanguage = "zh"
           : `<div class="meta">当前重点：</div><ul class="office-focus">${card.focusItems
               .map((item) => `<li>${escapeHtml(item)}</li>`)
               .join("")}</ul>`;
-      const avatar = `<div class="agent-avatar" style="--agent-accent:${escapeHtml(card.identity.accent)};" data-agent-id="${escapeHtml(card.agentId)}" data-animal="${escapeHtml(card.identity.animal)}">
-        <div class="agent-stage" aria-hidden="true">
-          <canvas class="agent-pixel-canvas" width="224" height="160"></canvas>
-        </div>
-        <div class="agent-animal-label">${escapeHtml(animalLabel(card.identity.animal, language))}</div>
-      </div>`;
+      const avatar = renderAgentAvatarFrame({
+        agentId: card.agentId,
+        identity: card.identity,
+        className: "agent-avatar",
+        canvasWidth: 224,
+        canvasHeight: 160,
+        language,
+        showAnimalLabel: true,
+      });
       return `<article class="office-card">
         <div class="office-head">
           ${avatar}
@@ -12830,6 +16411,298 @@ function renderNativeMotionScript(language: UiLanguage = "zh"): string {
       docsSourceFilter.addEventListener('change', applyDocFilter);
     }
     applyDocFilter();
+  }
+
+  const docPreviewDialog = document.querySelector('[data-doc-preview-dialog]');
+  if (docPreviewDialog instanceof HTMLDialogElement) {
+    const docPreviewTitle = docPreviewDialog.querySelector('[data-doc-preview-title]');
+    const docPreviewMeta = docPreviewDialog.querySelector('[data-doc-preview-meta]');
+    const docPreviewStatus = docPreviewDialog.querySelector('[data-doc-preview-status]');
+    const docPreviewContent = docPreviewDialog.querySelector('[data-doc-preview-content]');
+    const docPreviewEditor = docPreviewDialog.querySelector('[data-doc-preview-editor]');
+    const docPreviewScroll = docPreviewDialog.querySelector('.doc-preview-content');
+    const docPreviewClose = docPreviewDialog.querySelector('[data-doc-preview-close]');
+    const docPreviewToolbar = docPreviewDialog.querySelector('[data-doc-preview-toolbar]');
+    const docPreviewEdit = docPreviewDialog.querySelector('[data-doc-preview-edit]');
+    const docPreviewCancelEdit = docPreviewDialog.querySelector('[data-doc-preview-cancel-edit]');
+    const docPreviewSave = docPreviewDialog.querySelector('[data-doc-preview-save]');
+    const docPreviewToken = docPreviewDialog.querySelector('[data-doc-preview-token]');
+    const docPreviewLabels = {
+      defaultTitle: ${JSON.stringify(pickUiText(language, "Document preview", "文档预览"))},
+      loadingTitle: ${JSON.stringify(pickUiText(language, "Loading preview...", "正在加载预览..."))},
+      loadingStatus: ${JSON.stringify(pickUiText(language, "Fetching the latest doc text...", "正在读取最新文档正文..."))},
+      emptyContent: ${JSON.stringify(pickUiText(language, "This document is empty.", "这份文档当前是空的。"))},
+      loadFailed: ${JSON.stringify(pickUiText(language, "Preview failed", "预览失败"))},
+      failedContent: ${JSON.stringify(pickUiText(language, "The preview could not be loaded right now.", "当前没能把这份文档预览加载出来。"))},
+      truncatedHint: ${JSON.stringify(pickUiText(language, "Preview trimmed for fast loading.", "为了更快加载，这里展示的是裁剪后的预览。"))},
+      editableHint: ${JSON.stringify(pickUiText(language, "Read-only preview. Click Modify if you want to edit this file.", "当前是只读预览，如需修改请先点“修改”。"))},
+      editingHint: ${JSON.stringify(pickUiText(language, "Editing mode is on. Save to write back to the source file.", "已进入修改模式，保存后会直接写回源文件。"))},
+      unsavedHint: ${JSON.stringify(pickUiText(language, "Editing in progress. Changes are not saved yet.", "正在修改中，改动还没有保存。"))},
+      editLocked: ${JSON.stringify(pickUiText(language, "This machine has not set a safety passcode yet, so saving is blocked for now.", "这台机器还没设置安全口令，所以这里暂时不能保存。"))},
+      missingToken: ${JSON.stringify(pickUiText(language, "Enter the safety passcode before saving.", "保存前请先输入安全口令。"))},
+      saving: ${JSON.stringify(pickUiText(language, "Saving to the source file...", "正在保存到源文件..."))},
+      saved: ${JSON.stringify(pickUiText(language, "Saved to the source file.", "已保存到源文件。"))},
+      saveFailed: ${JSON.stringify(pickUiText(language, "Save failed", "保存失败"))},
+      editCancelled: ${JSON.stringify(pickUiText(language, "Returned to read-only preview.", "已回到只读预览。"))},
+    };
+    const docPreviewTokenRequired = ${LOCAL_TOKEN_AUTH_REQUIRED ? "true" : "false"};
+    const docPreviewTokenConfigured = ${LOCAL_API_TOKEN !== "" ? "true" : "false"};
+    const docPreviewTokenHeader = ${JSON.stringify(LOCAL_TOKEN_HEADER)};
+    let docPreviewRequestToken = 0;
+    let activeEditableDoc = null;
+    let activePreviewTitle = docPreviewLabels.defaultTitle;
+    let activePreviewMeta = '';
+    let activePreviewContent = '';
+    let docPreviewEditing = false;
+    const syncDocPreviewRefreshGuard = () => {
+      if (typeof window.__openclawSetRefreshGuard !== 'function') return;
+      window.__openclawSetRefreshGuard(
+        'doc-preview',
+        docPreviewEditing,
+        docPreviewEditing ? docPreviewLabels.unsavedHint : '',
+      );
+    };
+    const syncDocPreviewToolbar = () => {
+      const canEdit = Boolean(activeEditableDoc);
+      if (docPreviewToolbar instanceof HTMLElement) {
+        docPreviewToolbar.hidden = !canEdit;
+      }
+      if (docPreviewEdit instanceof HTMLButtonElement) {
+        docPreviewEdit.hidden = !canEdit || docPreviewEditing;
+      }
+      if (docPreviewCancelEdit instanceof HTMLButtonElement) {
+        docPreviewCancelEdit.hidden = !canEdit || !docPreviewEditing;
+      }
+      if (docPreviewSave instanceof HTMLButtonElement) {
+        docPreviewSave.hidden = !canEdit || !docPreviewEditing;
+      }
+      if (docPreviewToken instanceof HTMLInputElement) {
+        const showToken = canEdit && docPreviewEditing && docPreviewTokenRequired && docPreviewTokenConfigured;
+        docPreviewToken.hidden = !showToken;
+        docPreviewToken.disabled = !showToken;
+      }
+      if (docPreviewContent instanceof HTMLElement) {
+        docPreviewContent.hidden = docPreviewEditing;
+      }
+      if (docPreviewEditor instanceof HTMLTextAreaElement) {
+        docPreviewEditor.hidden = !docPreviewEditing;
+      }
+    };
+    const setDocPreviewEditing = (enabled, statusMessage) => {
+      docPreviewEditing = enabled && Boolean(activeEditableDoc);
+      syncDocPreviewToolbar();
+      if (docPreviewEditing) {
+        if (docPreviewEditor instanceof HTMLTextAreaElement) {
+          docPreviewEditor.value = activePreviewContent;
+          docPreviewEditor.focus();
+          const end = docPreviewEditor.value.length;
+          docPreviewEditor.setSelectionRange(end, end);
+        }
+        if (docPreviewStatus) docPreviewStatus.textContent = statusMessage || docPreviewLabels.editingHint;
+      } else {
+        if (docPreviewEditor instanceof HTMLTextAreaElement) {
+          docPreviewEditor.value = activePreviewContent;
+        }
+        if (docPreviewStatus) docPreviewStatus.textContent = statusMessage || (activeEditableDoc ? docPreviewLabels.editableHint : '');
+      }
+      syncDocPreviewRefreshGuard();
+    };
+    const setDocPreviewState = ({ title, meta, status, content }) => {
+      activePreviewTitle = title || docPreviewLabels.defaultTitle;
+      activePreviewMeta = meta || '';
+      activePreviewContent = typeof content === 'string' ? content : '';
+      const visibleContent = activePreviewContent || docPreviewLabels.emptyContent;
+      if (docPreviewTitle) docPreviewTitle.textContent = activePreviewTitle;
+      if (docPreviewMeta) docPreviewMeta.textContent = activePreviewMeta;
+      if (docPreviewStatus) docPreviewStatus.textContent = status || '';
+      if (docPreviewContent) docPreviewContent.textContent = visibleContent;
+      if (docPreviewEditor instanceof HTMLTextAreaElement) {
+        docPreviewEditor.value = activePreviewContent;
+      }
+      if (docPreviewScroll instanceof HTMLElement) docPreviewScroll.scrollTop = 0;
+    };
+    const openDocPreview = async (trigger) => {
+      const docId = (trigger.getAttribute('data-doc-id') || '').trim();
+      const filePath = (trigger.getAttribute('data-doc-file-path') || '').trim();
+      const fileScope = (trigger.getAttribute('data-doc-file-scope') || '').trim();
+      const title = (trigger.getAttribute('data-doc-title') || '').trim() || docPreviewLabels.defaultTitle;
+      const sourceLabel = (trigger.getAttribute('data-doc-source-label') || '').trim();
+      const relativeLabel = (trigger.getAttribute('data-doc-relative-label') || '').trim();
+      const freshnessLabel = (trigger.getAttribute('data-doc-freshness-label') || '').trim();
+      const isEditableFile = Boolean(filePath && fileScope);
+      if (!isEditableFile && !docId) return;
+      const initialMeta = [sourceLabel, relativeLabel, freshnessLabel].filter(Boolean).join(' · ');
+      activeEditableDoc = isEditableFile ? { path: filePath, scope: fileScope, sourceLabel } : null;
+      setDocPreviewEditing(false, '');
+      setDocPreviewState({
+        title,
+        meta: initialMeta,
+        status: docPreviewLabels.loadingStatus,
+        content: docPreviewLabels.loadingStatus,
+      });
+      if (!docPreviewDialog.open) {
+        if (typeof docPreviewDialog.showModal === 'function') {
+          docPreviewDialog.showModal();
+        } else {
+          docPreviewDialog.setAttribute('open', 'open');
+        }
+      }
+      const requestToken = ++docPreviewRequestToken;
+      try {
+        if (activeEditableDoc) {
+          const response = await fetch('/api/files/content?scope=' + encodeURIComponent(fileScope) + '&path=' + encodeURIComponent(filePath), {
+            headers: { accept: 'application/json' },
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok || !payload || payload.ok !== true || !payload.entry) {
+            const message = payload && payload.error && payload.error.message
+              ? payload.error.message
+              : response.statusText || docPreviewLabels.loadFailed;
+            throw new Error(message);
+          }
+          if (requestToken !== docPreviewRequestToken) return;
+          const entry = payload.entry;
+          const nextMeta = [sourceLabel, entry.relativePath || relativeLabel, entry.updatedAt || freshnessLabel].filter(Boolean).join(' · ');
+          setDocPreviewState({
+            title: entry.title || title,
+            meta: nextMeta,
+            status: docPreviewLabels.editableHint,
+            content: typeof payload.content === 'string' ? payload.content : '',
+          });
+          syncDocPreviewToolbar();
+          return;
+        }
+        const response = await fetch('/api/docs/preview?docId=' + encodeURIComponent(docId), {
+          headers: { accept: 'application/json' },
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload || payload.ok !== true || !payload.preview) {
+          const message = payload && payload.error && payload.error.message
+            ? payload.error.message
+            : response.statusText || docPreviewLabels.loadFailed;
+          throw new Error(message);
+        }
+        if (requestToken !== docPreviewRequestToken) return;
+        const preview = payload.preview;
+        const nextMeta = [sourceLabel, relativeLabel, freshnessLabel, preview.updatedAt].filter(Boolean).join(' · ');
+        setDocPreviewState({
+          title: preview.title || title,
+          meta: nextMeta,
+          status: preview.truncated ? docPreviewLabels.truncatedHint : '',
+          content: typeof preview.content === 'string' ? preview.content : '',
+        });
+        syncDocPreviewToolbar();
+      } catch (error) {
+        if (requestToken !== docPreviewRequestToken) return;
+        const message = error instanceof Error ? error.message : docPreviewLabels.loadFailed;
+        setDocPreviewState({
+          title,
+          meta: initialMeta,
+          status: docPreviewLabels.loadFailed + ': ' + message,
+          content: docPreviewLabels.failedContent,
+        });
+        syncDocPreviewToolbar();
+      }
+    };
+    if (docPreviewEdit instanceof HTMLButtonElement) {
+      docPreviewEdit.addEventListener('click', () => {
+        if (!activeEditableDoc) return;
+        if (docPreviewTokenRequired && !docPreviewTokenConfigured) {
+          if (docPreviewStatus) docPreviewStatus.textContent = docPreviewLabels.editLocked;
+          return;
+        }
+        setDocPreviewEditing(true, docPreviewLabels.editingHint);
+      });
+    }
+    if (docPreviewCancelEdit instanceof HTMLButtonElement) {
+      docPreviewCancelEdit.addEventListener('click', () => {
+        setDocPreviewEditing(false, docPreviewLabels.editCancelled);
+      });
+    }
+    if (docPreviewEditor instanceof HTMLTextAreaElement) {
+      docPreviewEditor.addEventListener('input', () => {
+        if (!docPreviewEditing) return;
+        if (docPreviewStatus) docPreviewStatus.textContent = docPreviewLabels.unsavedHint;
+      });
+    }
+    if (docPreviewSave instanceof HTMLButtonElement) {
+      docPreviewSave.addEventListener('click', async () => {
+        if (!activeEditableDoc || !(docPreviewEditor instanceof HTMLTextAreaElement)) return;
+        if (docPreviewTokenRequired && !docPreviewTokenConfigured) {
+          if (docPreviewStatus) docPreviewStatus.textContent = docPreviewLabels.editLocked;
+          return;
+        }
+        if (docPreviewTokenRequired && docPreviewTokenConfigured && (!(docPreviewToken instanceof HTMLInputElement) || !docPreviewToken.value.trim())) {
+          if (docPreviewStatus) docPreviewStatus.textContent = docPreviewLabels.missingToken;
+          return;
+        }
+        docPreviewSave.setAttribute('disabled', 'disabled');
+        if (docPreviewEdit instanceof HTMLButtonElement) docPreviewEdit.setAttribute('disabled', 'disabled');
+        if (docPreviewCancelEdit instanceof HTMLButtonElement) docPreviewCancelEdit.setAttribute('disabled', 'disabled');
+        if (docPreviewStatus) docPreviewStatus.textContent = docPreviewLabels.saving;
+        try {
+          const headers = { 'content-type': 'application/json' };
+          if (docPreviewTokenRequired && docPreviewTokenConfigured && docPreviewToken instanceof HTMLInputElement) {
+            headers[docPreviewTokenHeader] = docPreviewToken.value.trim();
+          }
+          const response = await fetch('/api/files/content', {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify({
+              scope: activeEditableDoc.scope,
+              path: activeEditableDoc.path,
+              content: docPreviewEditor.value,
+            }),
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok || !payload || payload.ok !== true || !payload.entry) {
+            const message = payload && payload.error && payload.error.message
+              ? payload.error.message
+              : response.statusText || docPreviewLabels.saveFailed;
+            throw new Error(message);
+          }
+          const entry = payload.entry;
+          const nextMeta = [
+            activeEditableDoc.sourceLabel || '',
+            entry.relativePath || '',
+            entry.updatedAt || '',
+          ].filter(Boolean).join(' · ');
+          setDocPreviewState({
+            title: entry.title || activePreviewTitle,
+            meta: nextMeta,
+            status: docPreviewLabels.saved,
+            content: typeof payload.content === 'string' ? payload.content : '',
+          });
+          setDocPreviewEditing(false, docPreviewLabels.saved);
+        } catch (error) {
+          if (docPreviewStatus) {
+            docPreviewStatus.textContent = (error instanceof Error ? error.message : docPreviewLabels.saveFailed);
+          }
+        } finally {
+          docPreviewSave.removeAttribute('disabled');
+          if (docPreviewEdit instanceof HTMLButtonElement) docPreviewEdit.removeAttribute('disabled');
+          if (docPreviewCancelEdit instanceof HTMLButtonElement) docPreviewCancelEdit.removeAttribute('disabled');
+        }
+      });
+    }
+    Array.from(document.querySelectorAll('[data-doc-preview-trigger]')).forEach((node) => {
+      if (!(node instanceof HTMLButtonElement)) return;
+      node.addEventListener('click', () => {
+        void openDocPreview(node);
+      });
+    });
+    if (docPreviewClose instanceof HTMLButtonElement) {
+      docPreviewClose.addEventListener('click', () => docPreviewDialog.close());
+    }
+    docPreviewDialog.addEventListener('click', (event) => {
+      if (event.target === docPreviewDialog) docPreviewDialog.close();
+    });
+    docPreviewDialog.addEventListener('close', () => {
+      activeEditableDoc = null;
+      if (docPreviewToken instanceof HTMLInputElement) docPreviewToken.value = '';
+      setDocPreviewEditing(false, '');
+      syncDocPreviewToolbar();
+    });
   }
 
   const counterStorageKey = 'openclaw:overview-counters:v2';
@@ -13015,6 +16888,504 @@ function renderQuotaResetScript(): string {
 </script>`;
 }
 
+function renderDashboardRefreshScript(language: UiLanguage): string {
+  return `<script>
+(() => {
+  const root = document.querySelector('[data-dashboard-refresh-root]');
+  if (!(root instanceof HTMLElement)) return;
+
+  const refreshButton = root.querySelector('[data-dashboard-refresh-now]');
+  const autoToggle = root.querySelector('[data-dashboard-auto-refresh-toggle]');
+  const intervalSelect = root.querySelector('[data-dashboard-auto-refresh-interval]');
+  const statusNode = root.querySelector('[data-dashboard-refresh-status]');
+  if (
+    !(refreshButton instanceof HTMLButtonElement) ||
+    !(autoToggle instanceof HTMLButtonElement) ||
+    !(intervalSelect instanceof HTMLSelectElement) ||
+    !(statusNode instanceof HTMLElement)
+  ) {
+    return;
+  }
+
+  const generatedAtRaw = (document.body?.dataset.refreshGeneratedAt || '').trim();
+  const settingsKey = 'openclaw:dashboard-refresh:v1';
+  const scrollKey = 'openclaw:dashboard-refresh-scroll:v1';
+  const refreshEndpoint = '/api/dashboard/refresh';
+  const allowedIntervals = [15, 30, 60, 120];
+  const refreshGuards = new Map();
+  const timeFormatter = new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  const l = {
+    refreshing: ${JSON.stringify(pickUiText(language, "Refreshing dashboard data, docs, and runtime...", "正在刷新看板数据、文档与运行快照..."))},
+    autoOn: ${JSON.stringify(pickUiText(language, "Auto refresh is on.", "自动刷新已开启。"))},
+    autoOff: ${JSON.stringify(pickUiText(language, "Auto refresh is off.", "自动刷新已关闭。"))},
+    autoButtonOn: ${JSON.stringify(pickUiText(language, "Auto refresh: on", "自动刷新：开"))},
+    autoButtonOff: ${JSON.stringify(pickUiText(language, "Auto refresh: off", "自动刷新：关"))},
+    waitingForTab: ${JSON.stringify(
+      pickUiText(language, "Auto refresh is waiting for this tab to become active.", "自动刷新等待当前标签页恢复活动。"),
+    )},
+    pausedByDraft: ${JSON.stringify(
+      pickUiText(language, "Auto refresh paused because there are unsaved edits.", "有未保存改动，自动刷新已暂停。"),
+    )},
+    nextIn: ${JSON.stringify(pickUiText(language, "Next refresh in", "下次刷新还有"))},
+    lastUpdated: ${JSON.stringify(pickUiText(language, "Last updated", "最近更新时间"))},
+    unknown: ${JSON.stringify(pickUiText(language, "unknown", "未知"))},
+    forceConfirm: ${JSON.stringify(
+      pickUiText(language, "There are unsaved edits on this page. Refreshing now will discard them. Continue?", "当前页面有未保存改动，立即刷新会丢失这些修改。继续吗？"),
+    )},
+    unsavedDraft: ${JSON.stringify(pickUiText(language, "Unsaved edits are open.", "存在未保存改动。"))},
+    refreshFailed: ${JSON.stringify(pickUiText(language, "Refresh failed.", "刷新失败。"))},
+    secondsSuffix: ${JSON.stringify(language === "en" ? "s" : " 秒")},
+  };
+  let enabled = false;
+  let intervalSeconds = 30;
+  let nextRefreshAt = 0;
+  let ticker = 0;
+  let refreshing = false;
+  let refreshErrorMessage = '';
+
+  const currentPageKey = () => window.location.pathname + window.location.search + window.location.hash;
+  const setStatus = (message) => {
+    statusNode.textContent = message;
+  };
+  const syncBodyState = () => {
+    if (!(document.body instanceof HTMLElement)) return;
+    document.body.dataset.refreshBlocked = refreshGuards.size > 0 ? '1' : '0';
+  };
+  const formatGeneratedAt = (raw) => {
+    if (!raw) return l.unknown;
+    const ms = Date.parse(raw);
+    if (!Number.isFinite(ms)) return raw;
+    return timeFormatter.format(new Date(ms));
+  };
+  const persistSettings = () => {
+    try {
+      window.localStorage.setItem(settingsKey, JSON.stringify({ enabled, intervalSeconds }));
+    } catch {}
+  };
+  const loadSettings = () => {
+    try {
+      const raw = window.localStorage.getItem(settingsKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      enabled = parsed?.enabled === true;
+      const nextInterval = Number(parsed?.intervalSeconds);
+      intervalSeconds = allowedIntervals.includes(nextInterval) ? nextInterval : 30;
+    } catch {}
+  };
+  const restoreScrollPosition = () => {
+    try {
+      const raw = window.sessionStorage.getItem(scrollKey);
+      if (!raw) return;
+      window.sessionStorage.removeItem(scrollKey);
+      const saved = JSON.parse(raw);
+      if (!saved || saved.key !== currentPageKey()) return;
+      const x = Number(saved.x);
+      const y = Number(saved.y);
+      window.requestAnimationFrame(() => {
+        window.scrollTo(Number.isFinite(x) ? x : 0, Number.isFinite(y) ? y : 0);
+      });
+    } catch {}
+  };
+  const saveScrollPosition = () => {
+    try {
+      window.sessionStorage.setItem(
+        scrollKey,
+        JSON.stringify({
+          key: currentPageKey(),
+          x: window.scrollX,
+          y: window.scrollY,
+        }),
+      );
+    } catch {}
+  };
+  const refreshGuardSummary = () => {
+    const messages = [...new Set(Array.from(refreshGuards.values()).map((value) => String(value || '').trim()).filter(Boolean))];
+    return messages[0] || l.unsavedDraft;
+  };
+  const syncControls = () => {
+    autoToggle.textContent = enabled ? l.autoButtonOn : l.autoButtonOff;
+    autoToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    intervalSelect.value = String(intervalSeconds);
+    refreshButton.disabled = refreshing;
+    autoToggle.disabled = refreshing;
+    intervalSelect.disabled = refreshing;
+  };
+  const parseRefreshError = async (response) => {
+    try {
+      const payload = await response.json();
+      const detail = typeof payload?.error?.message === 'string'
+        ? payload.error.message
+        : typeof payload?.error === 'string'
+          ? payload.error
+          : typeof payload?.message === 'string'
+            ? payload.message
+            : '';
+      return String(detail || '').trim();
+    } catch {
+      return '';
+    }
+  };
+  const requestUpstreamRefresh = async () => {
+    const response = await window.fetch(refreshEndpoint, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+      },
+      cache: 'no-store',
+    });
+    if (!response.ok) {
+      const detail = await parseRefreshError(response);
+      throw new Error(detail || l.refreshFailed);
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (payload?.ok !== true) {
+      throw new Error(l.refreshFailed);
+    }
+    return payload;
+  };
+  const updateStatus = () => {
+    syncControls();
+    syncBodyState();
+    if (refreshing) {
+      setStatus(l.refreshing);
+      return;
+    }
+    if (refreshErrorMessage) {
+      setStatus(refreshErrorMessage);
+      return;
+    }
+    const updatedLabel = formatGeneratedAt(generatedAtRaw);
+    if (!enabled) {
+      setStatus(l.autoOff + ' · ' + l.lastUpdated + ' ' + updatedLabel);
+      return;
+    }
+    if (refreshGuards.size > 0) {
+      setStatus(l.pausedByDraft + ' · ' + refreshGuardSummary());
+      return;
+    }
+    if (document.visibilityState === 'hidden') {
+      setStatus(l.waitingForTab + ' · ' + l.lastUpdated + ' ' + updatedLabel);
+      return;
+    }
+    const remaining = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
+    setStatus(l.autoOn + ' · ' + l.nextIn + ' ' + String(remaining) + l.secondsSuffix);
+  };
+  const stopTicker = () => {
+    if (ticker) {
+      window.clearInterval(ticker);
+      ticker = 0;
+    }
+  };
+  const triggerRefresh = async (reason) => {
+    if (refreshing) return;
+    const blocked = refreshGuards.size > 0;
+    if (blocked && reason === 'manual' && !window.confirm(l.forceConfirm)) {
+      updateStatus();
+      return;
+    }
+    if (blocked && reason !== 'manual') {
+      updateStatus();
+      return;
+    }
+    if (reason !== 'manual' && document.visibilityState === 'hidden') {
+      updateStatus();
+      return;
+    }
+    refreshing = true;
+    refreshErrorMessage = '';
+    updateStatus();
+    saveScrollPosition();
+    try {
+      await requestUpstreamRefresh();
+      window.location.reload();
+    } catch (error) {
+      refreshing = false;
+      if (enabled) {
+        nextRefreshAt = Date.now() + intervalSeconds * 1000;
+      }
+      const detail = error instanceof Error ? String(error.message || '').trim() : '';
+      refreshErrorMessage = detail ? l.refreshFailed + ' ' + detail : l.refreshFailed;
+      updateStatus();
+    }
+  };
+  const startTicker = () => {
+    stopTicker();
+    if (!enabled) {
+      updateStatus();
+      return;
+    }
+    nextRefreshAt = Date.now() + intervalSeconds * 1000;
+    updateStatus();
+    ticker = window.setInterval(() => {
+      if (!enabled) {
+        stopTicker();
+        return;
+      }
+      if (refreshing || refreshGuards.size > 0 || document.visibilityState === 'hidden') {
+        updateStatus();
+        return;
+      }
+      if (Date.now() >= nextRefreshAt) {
+        void triggerRefresh('auto');
+        return;
+      }
+      updateStatus();
+    }, 1000);
+  };
+  const setRefreshGuard = (key, active, message) => {
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey) return;
+    if (active) {
+      refreshGuards.set(normalizedKey, String(message || '').trim());
+    } else {
+      refreshGuards.delete(normalizedKey);
+    }
+    if (enabled && refreshGuards.size === 0 && Date.now() >= nextRefreshAt) {
+      nextRefreshAt = Date.now() + intervalSeconds * 1000;
+    }
+    updateStatus();
+  };
+
+  window.__openclawSetRefreshGuard = setRefreshGuard;
+  refreshButton.addEventListener('click', () => {
+    void triggerRefresh('manual');
+  });
+  autoToggle.addEventListener('click', () => {
+    enabled = !enabled;
+    persistSettings();
+    startTicker();
+  });
+  intervalSelect.addEventListener('change', () => {
+    const nextInterval = Number(intervalSelect.value);
+    intervalSeconds = allowedIntervals.includes(nextInterval) ? nextInterval : 30;
+    persistSettings();
+    startTicker();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (enabled && document.visibilityState === 'visible' && refreshGuards.size === 0 && Date.now() >= nextRefreshAt) {
+      nextRefreshAt = Date.now() + Math.min(intervalSeconds, 5) * 1000;
+    }
+    updateStatus();
+  });
+
+  loadSettings();
+  restoreScrollPosition();
+  syncControls();
+  if (enabled) {
+    nextRefreshAt = Date.now() + intervalSeconds * 1000;
+  }
+  startTicker();
+})();
+</script>`;
+}
+
+function renderTaskBoardScript(): string {
+  return `<script>
+(() => {
+  const roots = Array.from(document.querySelectorAll('[data-task-board-root]'));
+  if (roots.length === 0) return;
+
+  roots.forEach((root) => {
+    const grid = root.querySelector('[data-task-card-grid]');
+    if (!(grid instanceof HTMLElement)) return;
+
+    const language = (root.dataset.language || 'zh').trim().toLowerCase() === 'en' ? 'en' : 'zh';
+    const tokenRequired = root.dataset.tokenRequired === '1';
+    const tokenHeader = (root.dataset.localTokenHeader || 'x-local-token').trim() || 'x-local-token';
+    const statusNode = root.querySelector('[data-task-board-status]');
+    const tokenInput = root.querySelector('[data-task-board-token]');
+    const l = {
+      ready: language === 'en' ? 'Task and schedule order is ready.' : '任务与排程顺序已就绪。',
+      dragging: language === 'en' ? 'Dragging board card...' : '正在拖拽看板卡片...',
+      saving: language === 'en' ? 'Saving board order...' : '正在保存看板顺序...',
+      saved: language === 'en' ? 'Board order saved.' : '看板顺序已保存。',
+      missingToken: language === 'en' ? 'Enter the safety passcode before saving board order.' : '保存看板顺序前请先输入安全口令。',
+      failed: language === 'en' ? 'Save failed' : '保存失败',
+    };
+
+    const parseStoredOrder = (raw) => {
+      try {
+        const parsed = JSON.parse(raw || '[]');
+        return Array.isArray(parsed)
+          ? parsed
+              .map((value) => (typeof value === 'string' ? value.trim() : ''))
+              .filter(Boolean)
+          : [];
+      } catch {
+        return [];
+      }
+    };
+    let storedOrder = parseStoredOrder(root.dataset.taskOrder || '[]');
+    let draggingCard = null;
+    let dragSnapshotVisible = [];
+    let saving = false;
+    let dropApplied = false;
+
+    const setStatus = (message) => {
+      if (statusNode) statusNode.textContent = message;
+    };
+    const listCards = () => Array.from(grid.querySelectorAll('[data-task-card]')).filter((card) => card instanceof HTMLElement);
+    const currentVisibleOrder = () =>
+      listCards()
+        .map((card) => (card.dataset.taskId || '').trim())
+        .filter(Boolean);
+    const clearDragTargets = () => {
+      listCards().forEach((card) => {
+        card.classList.remove('drag-target');
+      });
+    };
+    const restoreVisibleOrder = (order) => {
+      const cards = listCards();
+      const byId = new Map(cards.map((card) => [(card.dataset.taskId || '').trim(), card]));
+      const seen = new Set();
+      order.forEach((taskId) => {
+        const card = byId.get(taskId);
+        if (!card || seen.has(taskId)) return;
+        grid.appendChild(card);
+        seen.add(taskId);
+      });
+      cards.forEach((card) => {
+        const taskId = (card.dataset.taskId || '').trim();
+        if (!taskId || seen.has(taskId)) return;
+        grid.appendChild(card);
+      });
+    };
+    const composePersistedOrder = (visibleOrder) => {
+      const visibleSet = new Set(visibleOrder);
+      const hiddenOrder = storedOrder.filter((taskId) => !visibleSet.has(taskId));
+      return visibleOrder.concat(hiddenOrder);
+    };
+    const persistVisibleOrder = async () => {
+      const visibleOrder = currentVisibleOrder();
+      const nextOrder = composePersistedOrder(visibleOrder);
+      const changed = JSON.stringify(nextOrder) !== JSON.stringify(storedOrder);
+      if (!changed) {
+        setStatus(l.ready);
+        return;
+      }
+
+      if (tokenRequired) {
+        const token = tokenInput instanceof HTMLInputElement ? tokenInput.value.trim() : '';
+        if (!token) {
+          restoreVisibleOrder(dragSnapshotVisible);
+          setStatus(l.missingToken);
+          return;
+        }
+      }
+
+      saving = true;
+      setStatus(l.saving);
+      try {
+        const headers = { 'content-type': 'application/json' };
+        if (tokenRequired && tokenInput instanceof HTMLInputElement) {
+          headers[tokenHeader] = tokenInput.value.trim();
+        }
+        const response = await fetch('/api/ui/preferences', {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ taskCardOrder: nextOrder }),
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload || payload.ok !== true) {
+          const message = payload && payload.error && payload.error.message ? payload.error.message : response.statusText || l.failed;
+          throw new Error(message);
+        }
+        storedOrder = nextOrder;
+        root.dataset.taskOrder = JSON.stringify(nextOrder);
+        setStatus(l.saved);
+      } catch (error) {
+        restoreVisibleOrder(dragSnapshotVisible);
+        const message = error instanceof Error ? error.message : l.failed;
+        setStatus(l.failed + ': ' + message);
+      } finally {
+        saving = false;
+      }
+    };
+    const finalizeDrag = async () => {
+      if (!draggingCard) return;
+      const activeCard = draggingCard;
+      draggingCard = null;
+      activeCard.classList.remove('dragging');
+      clearDragTargets();
+      if (!dropApplied) {
+        restoreVisibleOrder(dragSnapshotVisible);
+        setStatus(l.ready);
+        return;
+      }
+      dropApplied = false;
+      if (JSON.stringify(currentVisibleOrder()) === JSON.stringify(dragSnapshotVisible)) {
+        setStatus(l.ready);
+        return;
+      }
+      await persistVisibleOrder();
+    };
+    const bindCard = (card) => {
+      if (card.dataset.taskDragBound === '1') return;
+      card.dataset.taskDragBound = '1';
+      card.addEventListener('dragstart', (event) => {
+        if (saving) {
+          event.preventDefault();
+          return;
+        }
+        draggingCard = card;
+        dragSnapshotVisible = currentVisibleOrder();
+        dropApplied = false;
+        card.classList.add('dragging');
+        setStatus(l.dragging);
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = 'move';
+          try {
+            event.dataTransfer.setData('text/plain', card.dataset.taskId || '');
+          } catch {}
+        }
+      });
+      card.addEventListener('dragover', (event) => {
+        if (!draggingCard || draggingCard === card) return;
+        event.preventDefault();
+        clearDragTargets();
+        card.classList.add('drag-target');
+        const rect = card.getBoundingClientRect();
+        const insertAfter = event.clientY > rect.top + rect.height / 2;
+        if (insertAfter) {
+          grid.insertBefore(draggingCard, card.nextElementSibling);
+        } else {
+          grid.insertBefore(draggingCard, card);
+        }
+      });
+      card.addEventListener('drop', (event) => {
+        if (!draggingCard) return;
+        event.preventDefault();
+        dropApplied = true;
+      });
+      card.addEventListener('dragend', () => {
+        window.requestAnimationFrame(() => {
+          void finalizeDrag();
+        });
+      });
+    };
+
+    listCards().forEach(bindCard);
+    grid.addEventListener('dragover', (event) => {
+      if (!draggingCard) return;
+      event.preventDefault();
+    });
+    grid.addEventListener('drop', (event) => {
+      if (!draggingCard) return;
+      event.preventDefault();
+      dropApplied = true;
+    });
+    setStatus(l.ready);
+  });
+})();
+</script>`;
+}
+
 function renderFileWorkbenchScript(): string {
   return `<script>
 (() => {
@@ -13085,6 +17456,14 @@ function renderFileWorkbenchScript(): string {
 
     const setStatus = (message) => {
       if (statusNode) statusNode.textContent = message;
+    };
+    const syncRefreshGuard = () => {
+      if (typeof window.__openclawSetRefreshGuard !== 'function') return;
+      window.__openclawSetRefreshGuard(
+        'file-editor:' + scope,
+        Boolean(activePath && textNode.value !== lastLoadedValue),
+        textNode.value !== lastLoadedValue ? l.unsaved : '',
+      );
     };
 
     const setFilterState = (message) => {
@@ -13158,6 +17537,7 @@ function renderFileWorkbenchScript(): string {
       if (metaNode) metaNode.textContent = l.updatedAt + ' ' + (payload.entry.updatedAt || '-') + ' · ' + String(payload.entry.size || 0) + ' bytes';
       setActiveItem(activePath);
       setStatus(message);
+      syncRefreshGuard();
     };
 
     const loadFile = async (path, message) => {
@@ -13207,6 +17587,7 @@ function renderFileWorkbenchScript(): string {
 
     textNode.addEventListener('input', () => {
       setStatus(textNode.value === lastLoadedValue ? l.sameAsSource : l.unsaved);
+      syncRefreshGuard();
     });
 
     if (reloadButton) {
@@ -13258,6 +17639,117 @@ function renderFileWorkbenchScript(): string {
     setActiveFacetButton();
     setActiveItem(activePath);
     applyNavFilter();
+    syncRefreshGuard();
+  });
+})();
+</script>`;
+}
+
+function renderStaffModelScript(): string {
+  return `<script>
+(() => {
+  const roots = Array.from(document.querySelectorAll('[data-staff-model-root]'));
+  if (roots.length === 0) return;
+
+  roots.forEach((root) => {
+    const agentId = (root.dataset.agentId || '').trim();
+    const language = (root.dataset.language || 'zh').trim().toLowerCase() === 'en' ? 'en' : 'zh';
+    const tokenRequired = root.dataset.tokenRequired === '1';
+    const tokenConfigured = root.dataset.tokenConfigured === '1';
+    const tokenHeader = (root.dataset.localTokenHeader || 'x-local-token').trim() || 'x-local-token';
+    const select = root.querySelector('[data-staff-model-select]');
+    const saveButton = root.querySelector('[data-staff-model-save]');
+    const tokenInput = root.querySelector('[data-staff-model-token]');
+    const statusNode = root.querySelector('[data-staff-model-status]');
+    if (!(select instanceof HTMLSelectElement) || !(saveButton instanceof HTMLButtonElement) || !(statusNode instanceof HTMLElement) || !agentId) return;
+
+    let currentModel = (root.dataset.currentModel || select.value || '').trim();
+    const l = {
+      blocked: language === 'en' ? 'Model change is blocked until this machine has a safety passcode.' : '当前机器还没设置安全口令，暂时不能保存模型。',
+      missingToken: language === 'en' ? 'Enter the safety passcode before saving the model.' : '保存模型前请先输入安全口令。',
+      unchanged: language === 'en' ? 'This is already the current model.' : '这已经是当前模型。',
+      changed: language === 'en' ? 'Ready to save.' : '等待保存。',
+      saving: language === 'en' ? 'Saving model to openclaw.json...' : '正在把模型写回 openclaw.json...',
+      saved: language === 'en' ? 'Model saved to openclaw.json.' : '模型已写回 openclaw.json。',
+      failed: language === 'en' ? 'Save failed' : '保存失败',
+    };
+
+    const setStatus = (message) => {
+      statusNode.textContent = message;
+    };
+    const syncRefreshGuard = () => {
+      if (typeof window.__openclawSetRefreshGuard !== 'function') return;
+      const selected = (select.value || '').trim();
+      window.__openclawSetRefreshGuard(
+        'staff-model:' + agentId,
+        Boolean(selected && selected !== currentModel),
+        selected && selected !== currentModel ? l.changed : '',
+      );
+    };
+
+    const syncSelectionState = () => {
+      const selected = (select.value || '').trim();
+      if (tokenRequired && !tokenConfigured) {
+        setStatus(l.blocked);
+        syncRefreshGuard();
+        return;
+      }
+      setStatus(selected === currentModel ? '' : l.changed);
+      syncRefreshGuard();
+    };
+
+    select.addEventListener('change', syncSelectionState);
+    saveButton.addEventListener('click', async () => {
+      const nextModel = (select.value || '').trim();
+      if (!nextModel) return;
+      if (nextModel === currentModel) {
+        setStatus(l.unchanged);
+        return;
+      }
+      if (tokenRequired && !tokenConfigured) {
+        setStatus(l.blocked);
+        return;
+      }
+      if (tokenRequired && tokenConfigured) {
+        if (!(tokenInput instanceof HTMLInputElement) || !tokenInput.value.trim()) {
+          setStatus(l.missingToken);
+          return;
+        }
+      }
+
+      saveButton.setAttribute('disabled', 'disabled');
+      select.setAttribute('disabled', 'disabled');
+      setStatus(l.saving);
+      try {
+        const headers = { 'content-type': 'application/json' };
+        if (tokenRequired && tokenConfigured && tokenInput instanceof HTMLInputElement) {
+          headers[tokenHeader] = tokenInput.value.trim();
+        }
+        const response = await fetch('/api/staff/' + encodeURIComponent(agentId) + '/model', {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ model: nextModel }),
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload || payload.ok !== true || !payload.member) {
+          const message = payload && payload.error && payload.error.message ? payload.error.message : response.statusText || l.failed;
+          throw new Error(message);
+        }
+        currentModel = payload.member.model || nextModel;
+        root.dataset.currentModel = currentModel;
+        setStatus(l.saved + ' ' + currentModel);
+        syncRefreshGuard();
+      } catch (error) {
+        setStatus(l.failed + ': ' + (error instanceof Error ? error.message : l.failed));
+      } finally {
+        if (!(tokenRequired && !tokenConfigured)) {
+          saveButton.removeAttribute('disabled');
+        }
+        select.removeAttribute('disabled');
+      }
+    });
+
+    syncSelectionState();
   });
 })();
 </script>`;
@@ -14327,8 +18819,8 @@ export function renderDashboardSectionNavForSmoke(
   }).join("");
 }
 
-export function renderGlobalVisibilityCardForSmoke(language: UiLanguage): string {
-  const model: GlobalVisibilityViewModel = {
+function buildGlobalVisibilitySmokeModel(language: UiLanguage): GlobalVisibilityViewModel {
+  return {
     tasks: [
       {
         taskType: "cron",
@@ -14397,8 +18889,16 @@ export function renderGlobalVisibilityCardForSmoke(language: UiLanguage): string
       toolCalls: 3,
     },
   };
+}
+
+export function renderGlobalVisibilityCardForSmoke(language: UiLanguage): string {
+  const model = buildGlobalVisibilitySmokeModel(language);
 
   return renderGlobalVisibilityCard(model, language);
+}
+
+export function renderTaskBoardEmptyStateForSmoke(language: UiLanguage): string {
+  return renderTaskBoard([], language, [], buildGlobalVisibilitySmokeModel(language));
 }
 
 export function renderInformationCertaintyCardForSmoke(language: UiLanguage): string {
@@ -14408,7 +18908,7 @@ export function renderInformationCertaintyCardForSmoke(language: UiLanguage): st
       badgeStatus: "ok",
       badgeLabel: pickUiText(language, "High certainty", "高确定性"),
       headline: pickUiText(language, "This picture is trustworthy enough for day-to-day decisions.", "这张画面已经足够支撑日常判断。"),
-      summary: pickUiText(language, "Most key signals are connected, so you can judge OpenClaw from one screen with relatively high confidence.", "大部分关键信号都已连上，可以比较放心地用这一屏判断 OpenClaw 的当前状态。"),
+      summary: pickUiText(language, "Most key signals are connected, so you can judge the AI employee system from one screen with relatively high confidence.", "大部分关键信号都已连上，可以比较放心地用这一屏判断 AI 员工系统的当前状态。"),
       strengths: [
         pickUiText(language, "The home picture is fresh enough for current-state decisions.", "首页画面够新，可以直接拿来判断当前状态。"),
         pickUiText(language, "Current execution is visible, not just task records on a board.", "现在能看到真实执行中的会话，而不只是任务板上的记录。"),
@@ -14790,6 +19290,35 @@ function normalizeOptionalPatchString(
   return trimmed;
 }
 
+function normalizeTaskCardOrderPatch(input: unknown, label: string): string[] {
+  if (!Array.isArray(input)) {
+    throw new RequestValidationError(`${label} must be an array`, 400);
+  }
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  input.forEach((entry, index) => {
+    if (typeof entry !== "string") {
+      throw new RequestValidationError(`${label}[${index}] must be a string`, 400);
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    if (/[\u0000-\u001F\u007F]/.test(trimmed)) {
+      throw new RequestValidationError(`${label}[${index}] contains invalid control characters`, 400);
+    }
+    if (trimmed.length > 160) {
+      throw new RequestValidationError(`${label}[${index}] must be <= 160 characters`, 400);
+    }
+    out.push(trimmed);
+    seen.add(trimmed);
+    if (out.length > 200) {
+      throw new RequestValidationError(`${label} must contain <= 200 items`, 400);
+    }
+  });
+
+  return out;
+}
+
 function isControlCenterMappingTask(task: TaskListItem): boolean {
   return (
     task.projectId === "p-live" &&
@@ -14810,26 +19339,239 @@ function isControlCenterMappingUsageTaskLabel(value: string): boolean {
   return false;
 }
 
-function renderTaskBoard(tasks: TaskListItem[], language: UiLanguage = "zh"): string {
-  if (tasks.length === 0) {
-    return `<div class="empty-state">${escapeHtml(pickUiText(language, "No tasks yet. New tasks will enter the board automatically.", "暂无任务。创建任务后会自动进入泳道。"))}</div>`;
+function renderLegacyTaskBoard(cards: TaskSpotlightCard[], language: UiLanguage = "zh", storedOrder: string[] = []): string {
+  if (cards.length === 0) {
+    return `<div class="empty-state">${escapeHtml(pickUiText(language, "No tasks yet. New tasks will appear here automatically.", "暂无任务。新任务出现后会自动显示在这里。"))}</div>`;
   }
-  const lanes = TASK_STATES.map((state) => {
-    const laneTasks = tasks.filter((task) => task.status === state);
-    const cards =
-      laneTasks.length === 0
-        ? `<div class="meta" style="margin-top:8px;">${escapeHtml(pickUiText(language, "None", "暂无"))}</div>`
-        : laneTasks
-            .map(
-              (task) =>
-                `<div class="task-chip"><div><code>${escapeHtml(task.taskId)}</code></div><div>${escapeHtml(task.title)}</div><div class="meta">${escapeHtml(task.projectId)} · ${escapeHtml(task.owner)}</div></div>`,
-            )
-            .join("");
 
-    return `<div class="lane"><h3>${escapeHtml(taskStateLabel(state, language))}</h3><div class="lane-count">${laneTasks.length} ${escapeHtml(pickUiText(language, "tasks", "个任务"))}</div>${cards}</div>`;
-  });
+  const workingCount = cards.filter((item) => item.statusTone === "working").length;
+  const issueCount = cards.filter((item) => item.statusTone === "issue").length;
+  const queuedCount = cards.filter((item) => item.statusTone === "idle").length;
+  const topCards = cards.slice(0, 18);
+  const manualOrder = storedOrder.length > 0 ? storedOrder : cards.map((item) => item.taskId);
+  const taskBoardStatus = pickUiText(language, "Manual priority order is ready.", "已就绪，可手动调整优先级。");
+  const taskBoardHint = pickUiText(
+    language,
+    "Drag task cards to manually reorder board priority. Your order is saved in UI preferences.",
+    "拖动任务卡片即可手动调整看板优先级，排序会保存到界面偏好。",
+  );
+  const dragHandleLabel = pickUiText(language, "Drag to reorder", "拖拽排序");
+  const moreLabel =
+    cards.length > topCards.length
+      ? `<div class="meta">${escapeHtml(
+          pickUiText(
+            language,
+            `${cards.length - topCards.length} more tasks stay in the raw table below.`,
+            `其余 ${cards.length - topCards.length} 个任务保留在下方原始明细里。`,
+          ),
+        )}</div>`
+      : "";
 
-  return `<div class="board">${lanes.join("")}</div>`;
+  return `
+    <div class="task-brief-board" data-task-board-root data-language="${escapeHtml(language)}" data-token-required="0" data-task-order="${escapeHtml(JSON.stringify(manualOrder))}">
+      <div class="task-brief-toolbar">
+        <div class="task-brief-copy">
+          <div class="task-brief-legend">
+      <span class="task-legend-chip"><span class="task-legend-dot issue"></span>${escapeHtml(pickUiText(language, "Issue first", "异常优先"))} ${issueCount}</span>
+      <span class="task-legend-chip"><span class="task-legend-dot working"></span>${escapeHtml(pickUiText(language, "Working now", "正在进行"))} ${workingCount}</span>
+      <span class="task-legend-chip"><span class="task-legend-dot idle"></span>${escapeHtml(pickUiText(language, "Queued", "排队中"))} ${queuedCount}</span>
+          </div>
+          <div class="meta task-brief-hint">${escapeHtml(taskBoardHint)}</div>
+        </div>
+        <div class="task-brief-controls">
+          <div class="meta task-brief-status-line" data-task-board-status>${escapeHtml(taskBoardStatus)}</div>
+        </div>
+      </div>
+    <div class="task-brief-grid" data-task-card-grid>${topCards
+      .map(
+        (card) => `<article class="task-brief-card" draggable="true" data-task-card data-task-id="${escapeHtml(card.taskId)}">
+          <span class="task-status-dot ${escapeHtml(card.statusTone)}" title="${escapeHtml(card.statusDotLabel)}" aria-hidden="true"></span>
+          <div class="task-drag-handle" title="${escapeHtml(dragHandleLabel)}" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="task-brief-head">
+            <div class="task-priority-panel">
+              <span>${escapeHtml(pickUiText(language, "Priority", "优先级"))}</span>
+              <strong>${escapeHtml(card.priorityLabel)}</strong>
+              <small>${escapeHtml(card.dueLabel)}</small>
+            </div>
+            <div class="task-brief-identity">
+              <h3>${escapeHtml(card.title)}</h3>
+              <div class="task-brief-pills">
+                ${badge(
+                  card.statusTone === "issue"
+                    ? "blocked"
+                    : card.statusTone === "working"
+                      ? "warn"
+                      : "enabled",
+                  card.statusLabel,
+                )}
+                ${badge(
+                  card.taskStatus === "done"
+                    ? "done"
+                    : card.taskStatus === "in_progress"
+                      ? "in_progress"
+                      : card.taskStatus === "blocked"
+                        ? "blocked"
+                        : "enabled",
+                  card.boardStatusLabel,
+                )}
+              </div>
+              <div class="task-role">${escapeHtml(card.projectTitle)} · ${escapeHtml(card.ownerLabel)}</div>
+            </div>
+          </div>
+          <dl class="task-brief-list">
+            <div class="task-brief-row"><dt>${escapeHtml(pickUiText(language, "Current state", "当前状态"))}</dt><dd>${escapeHtml(card.summary)}</dd></div>
+            <div class="task-brief-row"><dt>${escapeHtml(pickUiText(language, "Recent signal", "最近信号"))}</dt><dd>${escapeHtml(card.recentSignal)}</dd></div>
+            <div class="task-brief-row"><dt>${escapeHtml(pickUiText(language, "Next step", "下一步"))}</dt><dd>${escapeHtml(card.nextStep)}</dd></div>
+            <div class="task-brief-row"><dt>${escapeHtml(pickUiText(language, "Update", "更新时间"))}</dt><dd>${escapeHtml(card.updatedLabel)}</dd></div>
+          </dl>
+          <div class="task-brief-actions">
+            <div class="meta"><code>${escapeHtml(card.taskId)}</code></div>
+            <a class="btn" href="${escapeHtml(card.detailHref)}">${escapeHtml(pickUiText(language, "Open detail", "查看详情"))}</a>
+          </div>
+        </article>`,
+      )
+      .join("")}</div>
+    ${moreLabel}
+    </div>
+  `;
+}
+
+function renderTaskBoard(
+  cards: TaskSpotlightCard[],
+  language: UiLanguage = "zh",
+  storedOrder: string[] = [],
+  emptyStateModel?: GlobalVisibilityViewModel,
+): string {
+  if (cards.length === 0) {
+    const emptyTitle = pickUiText(language, "No task or schedule cards yet.", "暂无任务或排程卡片。");
+    const emptyDetail = pickUiText(
+      language,
+      "The wall is empty for now, but the live signals below still show whether timed jobs, heartbeat, current tasks, or tool calls are alive.",
+      "当前卡片墙还是空的，但下面的实时信号仍会告诉你：定时任务、任务心跳、当前任务、工具调用有没有在动。",
+    );
+    const signalStrip = emptyStateModel
+      ? `<div class="task-empty-signals" data-task-empty-signals>${renderGlobalVisibilityStrip(emptyStateModel, language)}</div>`
+      : "";
+    return `<div class="task-brief-board task-brief-board-empty">
+      <div class="empty-state task-empty-state">
+        <strong>${escapeHtml(emptyTitle)}</strong>
+        <div class="meta">${escapeHtml(emptyDetail)}</div>
+        ${signalStrip}
+      </div>
+    </div>`;
+  }
+
+  const workingCount = cards.filter((item) => item.statusTone === "working").length;
+  const issueCount = cards.filter((item) => item.statusTone === "issue").length;
+  const queuedCount = cards.filter((item) => item.statusTone === "idle").length;
+  const scheduledCount = cards.filter((item) => item.statusTone === "scheduled").length;
+  const topCards = cards.slice(0, 18);
+  const manualOrder = storedOrder.length > 0 ? storedOrder : cards.map((item) => item.cardId);
+  const boardOrderReadyText = pickUiText(language, "Task and schedule order is ready.", "任务与排程顺序已就绪。");
+  const boardHintText = pickUiText(
+    language,
+    "Drag cards to reorder your task and schedule focus. The order is saved in UI preferences.",
+    "拖动卡片即可重排任务与排程的关注顺序，排序会保存到界面偏好。",
+  );
+  const dragHandleLabel = pickUiText(language, "Drag to reorder", "拖拽排序");
+  const moreLabel =
+    cards.length > topCards.length
+      ? `<div class="meta">${escapeHtml(
+          pickUiText(
+            language,
+            `${cards.length - topCards.length} more cards stay in the raw detail panels below.`,
+            `其余 ${cards.length - topCards.length} 张卡片保留在下方原始明细面板中。`,
+          ),
+        )}</div>`
+      : "";
+
+  return `
+    <div class="task-brief-board" data-task-board-root data-language="${escapeHtml(language)}" data-token-required="0" data-task-order="${escapeHtml(JSON.stringify(manualOrder))}">
+      <div class="task-brief-toolbar">
+        <div class="task-brief-copy">
+          <div class="task-brief-legend">
+            <span class="task-legend-chip"><span class="task-legend-dot issue"></span>${escapeHtml(pickUiText(language, "Issues", "异常"))} ${issueCount}</span>
+            <span class="task-legend-chip"><span class="task-legend-dot working"></span>${escapeHtml(pickUiText(language, "Working", "进行中"))} ${workingCount}</span>
+            <span class="task-legend-chip"><span class="task-legend-dot idle"></span>${escapeHtml(pickUiText(language, "Queued", "排队中"))} ${queuedCount}</span>
+            <span class="task-legend-chip"><span class="task-legend-dot scheduled"></span>${escapeHtml(pickUiText(language, "Timed jobs", "定时任务"))} ${scheduledCount}</span>
+          </div>
+          <div class="meta task-brief-hint">${escapeHtml(boardHintText)}</div>
+        </div>
+        <div class="task-brief-controls">
+          <div class="meta task-brief-status-line" data-task-board-status>${escapeHtml(boardOrderReadyText)}</div>
+        </div>
+      </div>
+      <div class="task-brief-grid" data-task-card-grid>${topCards
+        .map((card) => {
+          const priorityPanelClass = card.cardKind === "timed_job" ? "task-priority-panel compact" : "task-priority-panel";
+          const primaryBadge =
+            card.cardKind === "timed_job"
+              ? badge("ok", pickUiText(language, "Timed job", "定时任务"))
+              : badge(
+                  card.statusTone === "issue"
+                    ? "blocked"
+                    : card.statusTone === "working"
+                      ? "warn"
+                      : card.taskStatus === "done"
+                        ? "done"
+                        : "enabled",
+                  card.statusLabel,
+                );
+          const secondaryBadge =
+            card.cardKind === "timed_job"
+              ? badge(
+                  card.boardStatusLabel === pickUiText(language, "Disabled", "已停用") ? "blocked" : "ok",
+                  card.boardStatusLabel,
+                )
+              : badge(
+                  card.taskStatus === "done"
+                    ? "done"
+                    : card.taskStatus === "in_progress"
+                      ? "in_progress"
+                      : card.taskStatus === "blocked"
+                        ? "blocked"
+                        : "enabled",
+                  card.boardStatusLabel,
+                );
+          const tertiaryBadge =
+            card.cardKind === "timed_job" ? badge("enabled", pickUiText(language, "Auto", "自动")) : badge("ok", card.priorityLabel);
+          const topLabel = card.cardKind === "timed_job" ? pickUiText(language, "Auto run", "自动执行") : pickUiText(language, "Time", "时间");
+          const rowOneLabel = card.cardKind === "timed_job" ? pickUiText(language, "Purpose", "用途") : pickUiText(language, "Current state", "当前状态");
+          const rowTwoLabel = card.cardKind === "timed_job" ? pickUiText(language, "Runtime", "运行状态") : pickUiText(language, "Recent signal", "最近信号");
+          return `<article class="task-brief-card" draggable="true" data-task-card data-task-kind="${escapeHtml(card.cardKind)}" data-task-id="${escapeHtml(card.cardId)}">
+            <span class="task-status-dot ${escapeHtml(card.statusTone)}" title="${escapeHtml(card.statusDotLabel)}" aria-hidden="true"></span>
+            <div class="task-drag-handle" title="${escapeHtml(dragHandleLabel)}" aria-hidden="true"><span></span><span></span><span></span></div>
+            <div class="task-brief-head">
+              <div class="${priorityPanelClass}">
+                <span>${escapeHtml(topLabel)}</span>
+                <strong>${escapeHtml(card.scheduleLabel)}</strong>
+                <small>${escapeHtml(card.dueLabel)}</small>
+              </div>
+              <div class="task-brief-identity">
+                <h3>${escapeHtml(card.title)}</h3>
+                <div class="task-brief-pills">
+                  ${primaryBadge}
+                  ${secondaryBadge}
+                  ${tertiaryBadge}
+                </div>
+                <div class="task-role">${escapeHtml(card.projectTitle)} · ${escapeHtml(card.ownerLabel)}</div>
+              </div>
+            </div>
+            <dl class="task-brief-list">
+              <div class="task-brief-row"><dt>${escapeHtml(rowOneLabel)}</dt><dd class="task-brief-value clamp-2">${escapeHtml(card.summary)}</dd></div>
+              <div class="task-brief-row"><dt>${escapeHtml(rowTwoLabel)}</dt><dd class="task-brief-value clamp-2">${escapeHtml(card.recentSignal)}</dd></div>
+              <div class="task-brief-row"><dt>${escapeHtml(pickUiText(language, "Next step", "下一步"))}</dt><dd class="task-brief-value clamp-2">${escapeHtml(card.nextStep)}</dd></div>
+            </dl>
+            <div class="task-brief-actions">
+              <div class="meta"><code>${escapeHtml(card.taskId)}</code> · ${escapeHtml(card.updatedLabel)}</div>
+              <a class="btn" href="${escapeHtml(card.detailHref)}">${escapeHtml(pickUiText(language, "Open detail", "查看详情"))}</a>
+            </div>
+          </article>`;
+        })
+        .join("")}</div>
+      ${moreLabel}
+    </div>
+  `;
 }
 
 function renderProjectBoard(projects: ReadModelSnapshot["projectSummaries"], language: UiLanguage = "zh"): string {
@@ -14864,7 +19606,7 @@ function renderActionQueue(center: NotificationCenterSnapshot): string {
     .map((item) => {
       const ackMeta = item.acknowledged
         ? `<span class="meta">已确认于 ${escapeHtml(item.ackedAt ?? "暂无")}${item.ackExpiresAt ? ` · 到期 ${escapeHtml(item.ackExpiresAt)}` : ""}</span>`
-        : `<form method="POST" action="/action-queue/ack" class="inline-form"><input type="hidden" name="itemId" value="${escapeHtml(item.itemId)}" /><input type="password" name="localToken" placeholder="本地令牌" style="max-width:150px;" /><button class="btn" type="submit">确认</button></form>`;
+        : `<form method="POST" action="/action-queue/ack" class="inline-form"><input type="hidden" name="itemId" value="${escapeHtml(item.itemId)}" /><input type="password" name="localToken" placeholder="安全口令" style="max-width:150px;" /><button class="btn" type="submit">确认</button></form>`;
       const links =
         item.links.length === 0
           ? ""
@@ -14925,7 +19667,7 @@ function renderSessionDrilldownPage(
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>${escapeHtml(t("OpenClaw Control Center Session Drilldown", "OpenClaw 控制中心会话详情"))}</title>
+  <title>${escapeHtml(t("AI Employee System Session Drilldown", "AI员工系统会话详情"))}</title>
   <style>
     body { font-family: "SF Mono", Menlo, monospace; background: #0b1016; color: #d6e7f9; padding: 16px; margin: 0; }
     a { color: #7dd3fc; }
@@ -15016,7 +19758,7 @@ function renderAuditPage(timeline: AuditTimelineSnapshot, severity: AuditSeverit
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>OpenClaw Control Center Audit Timeline</title>
+  <title>AI Employee System Audit Timeline</title>
   <style>
     body { font-family: "SF Mono", Menlo, monospace; background: #0b1016; color: #d6e7f9; padding: 16px; margin: 0; }
     a { color: #7dd3fc; }
@@ -15191,7 +19933,7 @@ function renderCronJobDetailPage(
       <div class="meta"><code>${escapeHtml(job.jobId)}</code> ${badge(job.status, cronHealthLabel(job.status, language))}</div>
       <div class="meta">${escapeHtml(pickUiText(language, "Agent", "执行智能体"))}：${escapeHtml(job.owner)}</div>
       <div class="meta">${escapeHtml(pickUiText(language, "Purpose", "任务目的"))}：${escapeHtml(job.purpose)}</div>
-      <div class="meta">${escapeHtml(pickUiText(language, "Schedule", "调度"))}：${escapeHtml(job.schedule)}</div>
+      <div class="meta">${escapeHtml(pickUiText(language, "Schedule", "调度"))}：${escapeHtml(humanizeTimedJobScheduleLabel(job.schedule, language))}</div>
       <div class="meta">${escapeHtml(pickUiText(language, "Next run", "下次运行"))}：${escapeHtml(job.nextRunAt)} · ${escapeHtml(formatSeconds(job.dueInSeconds, language))}</div>
     </div>
     <div class="meta"><a href="${escapeHtml(buildHomeHref({ quick: "all" }, true, "overview", language))}#cron-health">${escapeHtml(pickUiText(language, "Back to cron board", "返回 Cron 看板"))}</a></div>
@@ -15452,6 +20194,25 @@ function writeText(
     headers.pragma = "no-cache";
     headers.expires = "0";
   }
+  const requestId = responseRequestId(res);
+  if (requestId) {
+    headers["x-request-id"] = requestId;
+  }
+  res.writeHead(statusCode, headers);
+  res.end(body);
+}
+
+function writeBinary(
+  res: ServerResponse,
+  statusCode: number,
+  body: Buffer,
+  contentType: string,
+): void {
+  const headers: Record<string, string> = {
+    "content-type": contentType,
+    "content-length": String(body.byteLength),
+    "cache-control": "public, max-age=300",
+  };
   const requestId = responseRequestId(res);
   if (requestId) {
     headers["x-request-id"] = requestId;

@@ -62,7 +62,7 @@ export function buildApiDocs(): ApiDocsPayload {
         summary: "Read persisted dashboard UI preferences",
         response: {
           ok: "boolean",
-          preferences: "{ compactStatusStrip, quickFilter, taskFilters, updatedAt }",
+          preferences: "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, updatedAt }",
           path: "string",
           issues: "string[]",
         },
@@ -71,15 +71,27 @@ export function buildApiDocs(): ApiDocsPayload {
         method: "PATCH",
         path: "/api/ui/preferences",
         summary:
-          "Update dashboard UI preferences persisted to runtime/ui-preferences.json (requires local token gate)",
+          "Update dashboard UI preferences persisted to runtime/ui-preferences.json",
         body: {
           compactStatusStrip: "boolean (optional)",
           quickFilter: "all|attention|todo|in_progress|blocked|done (optional)",
           taskFilters: "{ status?, owner?, project? } (optional)",
+          taskCardOrder: "string[] (optional)",
         },
         response: {
           ok: "boolean",
-          preferences: "{ compactStatusStrip, quickFilter, taskFilters, updatedAt }",
+          preferences: "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, updatedAt }",
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/dashboard/refresh",
+        summary:
+          "Force a live dashboard refresh cycle that rebuilds the embedded serve-session snapshot, docs hub index, and transient UI caches",
+        response: {
+          ok: "boolean",
+          refresh:
+            "{ refreshedAt, fixtureDir, statusPath, dashboardPath, embeddedSourceKind, embeddedFreshnessState, embeddedUpdatedAt, snapshotGeneratedAt, docsHubGeneratedAt, docsHubEntryCount, scopes[] }",
         },
       },
       {

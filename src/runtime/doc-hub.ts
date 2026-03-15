@@ -53,6 +53,12 @@ let cachedSnapshot: StructuredDocHubSnapshot | undefined;
 let cacheAtMs = 0;
 let cachePath = "";
 
+export function invalidateStructuredDocHubCache(): void {
+  cachedSnapshot = undefined;
+  cacheAtMs = 0;
+  cachePath = "";
+}
+
 export async function buildStructuredDocHubFromSessions(
   input: StructuredDocHubBuildInput,
 ): Promise<StructuredDocHubSnapshot> {

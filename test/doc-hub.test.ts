@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { ToolClient } from "../src/clients/tool-client";
-import { buildStructuredDocHubFromSessions } from "../src/runtime/doc-hub";
+import { buildStructuredDocHubFromSessions, invalidateStructuredDocHubCache } from "../src/runtime/doc-hub";
 import type { ReadModelSnapshot } from "../src/types";
 
 function createEmptySnapshot(): ReadModelSnapshot {
@@ -100,6 +100,34 @@ test("doc hub ingests structured chat outputs into runtime index", async () => {
   assert.equal(result.items[0].sourceSessionKey, "sess-alpha");
   assert.match(result.items[0].title, /今日执行计划/);
   assert.match(result.items[0].category, /(计划路线|会话文档|总结复盘)/);
+
+  const cached = await buildStructuredDocHubFromSessions({
+    snapshot,
+    client,
+    indexPath,
+    refreshFromSessions: true,
+    maxSessions: 8,
+    historyLimit: 40,
+    maxDocsPerSession: 2,
+    maxStoredDocs: 20,
+  });
+  assert.equal(cached.items.length, 1);
+  assert.equal(historyCalls, 1);
+
+  invalidateStructuredDocHubCache();
+
+  const refreshed = await buildStructuredDocHubFromSessions({
+    snapshot,
+    client,
+    indexPath,
+    refreshFromSessions: true,
+    maxSessions: 8,
+    historyLimit: 40,
+    maxDocsPerSession: 2,
+    maxStoredDocs: 20,
+  });
+  assert.equal(refreshed.items.length, 1);
+  assert.equal(historyCalls, 2);
 
   const persistedRaw = await readFile(indexPath, "utf8");
   assert(persistedRaw.includes("sess-alpha"));

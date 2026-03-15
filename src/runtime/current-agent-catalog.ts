@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { compareAgentHierarchy } from "./team-hierarchy";
 
 export type CurrentAgentCatalogStatus = "connected" | "partial" | "not_connected";
 
 export interface CurrentAgentCatalogEntry {
   agentId: string;
   displayName: string;
+  workspace?: string;
 }
 
 export interface CurrentAgentCatalog {
@@ -31,15 +33,21 @@ export async function loadCurrentAgentCatalog(): Promise<CurrentAgentCatalog> {
       if (!obj) continue;
       const agentId = asString(obj.id)?.trim() ?? asString(obj.name)?.trim();
       if (!agentId) continue;
+      const identity = asObject(obj.identity);
+      const workspace = asString(obj.workspace)?.trim();
       const key = normalizeKey(agentId);
       if (merged.has(key)) continue;
       merged.set(key, {
         agentId,
-        displayName: asString(obj.name)?.trim() || agentId,
+        displayName:
+          asString(obj.name)?.trim() ||
+          asString(identity?.name)?.trim() ||
+          agentId,
+        workspace: workspace && workspace.length > 0 ? workspace : undefined,
       });
     }
 
-    const entries = [...merged.values()].sort((a, b) => a.agentId.localeCompare(b.agentId));
+    const entries = [...merged.values()].sort((a, b) => compareAgentHierarchy(a.agentId, b.agentId));
     if (entries.length === 0) {
       return {
         status: "partial",

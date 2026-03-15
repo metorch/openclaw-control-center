@@ -90,6 +90,19 @@ let updateInFlight: Promise<unknown> | undefined;
 let memoryCache: TimedSourceCache<unknown> | undefined;
 let memoryInFlight: Promise<unknown> | undefined;
 
+export function invalidateOpenClawCliInsightsCache(): void {
+  statusCache = undefined;
+  statusInFlight = undefined;
+  gatewayCache = undefined;
+  gatewayInFlight = undefined;
+  securityCache = undefined;
+  securityInFlight = undefined;
+  updateCache = undefined;
+  updateInFlight = undefined;
+  memoryCache = undefined;
+  memoryInFlight = undefined;
+}
+
 export function primeOpenClawCliInsights(): void {
   void loadCachedOpenClawConnectionSummary();
   void loadCachedOpenClawUpdateSummary();
