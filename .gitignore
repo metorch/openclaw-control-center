@@ -36,3 +36,8 @@ docs/assets/_usage-*.png
 720m
 alexfinn-gap-checklist.md
 i18n-missing-list.md
+openclaw-preview-4311.cmd
+start-ai-employee-system-4311.cmd
+start-ai-employee-system-4311.ps1
+stop-ai-employee-system-4311.cmd
+scripts/run-index-with-env.mjs
