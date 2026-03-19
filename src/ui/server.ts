@@ -95,12 +95,20 @@ const { createInsightRenderers } = require("./server-insight-panels");
 const { createTaskPageRenderers } = require("./server-task-pages");
 const { createTeamPanelRenderers } = require("./server-team-panels");
 const { createUsageRenderers } = require("./server-usage-rendering");
+const { createNavigationHelpers } = require("./server-navigation");
+const navigationHelpers = createNavigationHelpers({
+    defaultPrimaryOperatorDisplayName: import_operator_display.DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME,
+    escapeHtml,
+    pickUiText,
+    uiQuickFilters: import_ui_preferences.UI_QUICK_FILTERS
+});
+const { agentTeamSidebarLinks, buildCronDetailHref, buildHomeHref, buildHomeQuery, buildSessionDetailHref, buildTaskDetailHref, dashboardSectionLinks, hasAnyQueryKey, joinDisplayList, matchesQuickFilter, normalizeDashboardSectionForNav, projectStateLabel, quickFilterLabel, renderDashboardRefreshControls, renderLanguageToggle, renderQuickFilters, resolveDashboardSectionTitle, searchScopeLabel, taskStateLabel } = navigationHelpers;
 const dashboardFragmentHelpers = createDashboardFragmentHelpers({
     badge,
     escapeHtml,
     getDocLinks: () => DOC_LINKS,
     pickUiText,
-    projectStateLabel: (state, language = "zh") => projectStateLabel(state, language),
+    projectStateLabel,
     projectStates: import_project_store.PROJECT_STATES,
     toSortableMs
 });
@@ -216,7 +224,6 @@ __name(resolveOpenClawWorkspaceRootForSmoke, "resolveOpenClawWorkspaceRootForSmo
 const TASK_STATES = ["todo", "in_progress", "blocked", "done"];
 const SESSION_STATES = ["idle", "running", "blocked", "waiting_approval", "error"];
 const DOC_LINKS = [{ label: "README.md", href: "/docs/readme" }, { label: "docs/RUNBOOK.md", href: "/docs/runbook" }, { label: "docs/ARCHITECTURE.md", href: "/docs/architecture" }, { label: "docs/PROGRESS.md", href: "/docs/progress" }];
-const DASHBOARD_SECTION_LINKS_EN = [{ key: "overview", label: "Overview", blurb: "Today at a glance" }, { key: "usage-cost", label: "Usage", blurb: "Budget and quota" }, { key: "team", label: "Staff", blurb: "Mission, staff and assignments" }, { key: "collaboration", label: "Collaboration", blurb: "Agent handoffs and teamwork" }, { key: "memory", label: "Memory", blurb: "Daily and long-term memories" }, { key: "docs", label: "Documents", blurb: `${import_operator_display.DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME} and active agent core docs` }, { key: "projects-tasks", label: "Tasks", blurb: "Board, schedule and activity" }, { key: "settings", label: "Settings", blurb: "Safety and data links" }];
 const ANIMAL_CATALOG = [{ key: "robot", title: "Robot Operator", accent: "#8ad2ff", sprite: " [:::] \n |o o| \n | - | \n /|_|\\\\ ", keywords: ["robot", "android", "bot", "codex"] }, { key: "lion", title: "Lion Captain", accent: "#ff9966", sprite: " /\\_/\\ \n( 0_0 )\n /|^|\\ \n  / \\  ", keywords: ["lion", "lead", "main", "chief", "alpha"] }, { key: "panda", title: "Panda Strategist", accent: "#9df2ff", sprite: " /\\_/\\ \n( o.o )\n(  =  )\n /   \\ ", keywords: ["panda", "focus", "plan", "calm"] }, { key: "monkey", title: "Monkey Builder", accent: "#f4c542", sprite: " /\\_/\\ \n( @.@ )\n /|_|\\ \n  / \\  ", keywords: ["monkey", "ape", "creative", "hack"] }, { key: "dolphin", title: "Dolphin Navigator", accent: "#6ed8ff", sprite: "  __/\\ \n<( o )__\n /  .--'\n \\_/    ", keywords: ["dolphin", "wave", "flow", "sea"] }, { key: "owl", title: "Owl Analyst", accent: "#f4ccff", sprite: " /\\_/\\ \n( O,O )\n(  V  )\n /   \\ ", keywords: ["owl", "watch", "audit", "night"] }, { key: "fox", title: "Fox Courier", accent: "#ffb36e", sprite: " /\\_/\\ \n( ^.^ )\n /\\_/\\ \n  / \\  ", keywords: ["fox", "swift", "relay", "ops"] }, { key: "bear", title: "Bear Guardian", accent: "#a4ffb0", sprite: " /\\_/\\ \n( -.- )\n(  U  )\n /   \\ ", keywords: ["bear", "guard", "shield", "safe"] }, { key: "eagle", title: "Eagle Scout", accent: "#ffe07d", sprite: "  /\\_/\\\n==(o)==\n  /_\\  \n  / \\  ", keywords: ["eagle", "vision", "scan", "observer"] }, { key: "tiger", title: "Tiger Sprinter", accent: "#ff8a7d", sprite: " /\\_/\\ \n( >.< )\n /|#|\\ \n  / \\  ", keywords: ["tiger", "stripe", "fast", "sprint"] }, { key: "otter", title: "Otter Planner", accent: "#8ad1ff", sprite: " /\\_/\\ \n( o_o )\n /~~~\\ \n  / \\  ", keywords: ["otter", "water", "daily", "planner"] }, { key: "rooster", title: "Rooster Herald", accent: "#ffb85e", sprite: "  __\n<(o )___\n ( ._> /\n  `---'  ", keywords: ["rooster", "cock", "coq", "chanticleer"] }];
 const FALLBACK_ANIMAL_CATALOG = ANIMAL_CATALOG.filter(item => item.key !== "robot");
 const CUSTOM_STAFF_AVATAR_CATALOG = [{ key: "fox", title: "Fox Lead", accent: "#ff8f4d", fileName: "fox.png" }, { key: "panda", title: "Panda Architect", accent: "#91bdd8", fileName: "panda.png" }, { key: "shiba", title: "Shiba Dispatcher", accent: "#f3ab5f", fileName: "shiba.png" }, { key: "cat", title: "Cat Frontend", accent: "#ffb783", fileName: "cat.png" }, { key: "tiger", title: "Tiger Backend", accent: "#ff985a", fileName: "tiger.png" }, { key: "elephant", title: "Elephant QA", accent: "#9aa7bf", fileName: "elephant.png" }, { key: "dolphin", title: "Dolphin Ops", accent: "#73c7f4", fileName: "dolphin.png" }, { key: "lion", title: "Lion Captain", accent: "#f1a35f", fileName: "lion.png" }, { key: "deer", title: "Deer Runner", accent: "#c89d67", fileName: "deer.png" }, { key: "bird", title: "Bird Scout", accent: "#d7d9df", fileName: "bird.png" }];
@@ -1061,44 +1068,6 @@ function humanizeTimedJobScheduleLabelForSmoke(scheduleLabel, language) { return
 __name(humanizeTimedJobScheduleLabelForSmoke, "humanizeTimedJobScheduleLabelForSmoke");
 function humanizeTimedJobWindowLabelForSmoke(nextRun, dueInSeconds, language) { return humanizeTimedJobWindowLabel(nextRun, dueInSeconds, language); }
 __name(humanizeTimedJobWindowLabelForSmoke, "humanizeTimedJobWindowLabelForSmoke");
-function dashboardSectionLinks(language) {
-    return DASHBOARD_SECTION_LINKS_EN.map(item => {
-        if (language !== "zh")
-            return item;
-        if (item.key === "overview") {
-            return { ...item, label: "\u603B\u89C8", blurb: "\u4ECA\u5929\u91CD\u70B9" };
-        }
-        if (item.key === "team") {
-            return { ...item, label: "\u5458\u5DE5", blurb: "\u5458\u5DE5\u3001\u5206\u5DE5\u4E0E\u804C\u8D23" };
-        }
-        if (item.key === "collaboration") {
-            return { ...item, label: "\u534F\u4F5C", blurb: "\u667A\u80FD\u4F53\u4EA4\u63A5\u4E0E\u534F\u540C" };
-        }
-        if (item.key === "memory") {
-            return { ...item, label: "\u8BB0\u5FC6", blurb: "\u6BCF\u65E5\u4E0E\u957F\u671F\u8BB0\u5FC6" };
-        }
-        if (item.key === "docs") {
-            return { ...item, label: "\u6587\u6863", blurb: `${import_operator_display.DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME} \u4E0E\u5F53\u524D\u542F\u7528\u667A\u80FD\u4F53\u6838\u5FC3\u6587\u6863` };
-        }
-        if (item.key === "usage-cost") {
-            return { ...item, label: "\u7528\u91CF", blurb: "\u9884\u7B97\u4E0E\u989D\u5EA6" };
-        }
-        if (item.key === "projects-tasks") {
-            return { ...item, label: "\u4EFB\u52A1", blurb: "\u4EFB\u52A1\u3001\u6392\u7A0B\u4E0E\u6D3B\u52A8" };
-        }
-        return { ...item, label: "\u8BBE\u7F6E", blurb: "\u5B89\u5168\u4E0E\u6570\u636E\u8FDE\u63A5" };
-    });
-}
-__name(dashboardSectionLinks, "dashboardSectionLinks");
-function resolveDashboardSectionTitle(section, language) {
-    if (language === "en" && section.key === "overview") {
-        return "Overview Control Center";
-    }
-    return section.label;
-}
-__name(resolveDashboardSectionTitle, "resolveDashboardSectionTitle");
-function agentTeamSidebarLinks(filters, options) { return { team: buildHomeHref(filters, options.compactStatusStrip, "team", options.language, options.usageView), docs: buildHomeHref(filters, options.compactStatusStrip, "docs", options.language, options.usageView), memory: buildHomeHref(filters, options.compactStatusStrip, "memory", options.language, options.usageView), projects: buildHomeHref(filters, options.compactStatusStrip, "projects-tasks", options.language, options.usageView), settings: buildHomeHref(filters, options.compactStatusStrip, "settings", options.language, options.usageView) }; }
-__name(agentTeamSidebarLinks, "agentTeamSidebarLinks");
 async function renderHtml(filters, toolClient, options) {
     const renderStartedAt = performance.now();
     let renderPhaseAt = renderStartedAt;
@@ -1107,7 +1076,7 @@ async function renderHtml(filters, toolClient, options) {
     const snapshot = await readReadModelSnapshotWithLiveSessions(toolClient);
     const t = __name((en, zh) => pickUiText(options.language, en, zh), "t");
     const sectionLinks = dashboardSectionLinks(options.language);
-    const activeSection = options.section === "office-space" ? "team" : options.section === "calendar" ? "projects-tasks" : options.section;
+    const activeSection = normalizeDashboardSectionForNav(options.section);
     const usageCostMode = activeSection === "usage-cost" || activeSection === "settings" ? "full" : "summary";
     const sectionMeta = sectionLinks.find(item => item.key === activeSection) ?? sectionLinks[0];
     const sectionTitle = resolveDashboardSectionTitle(sectionMeta, options.language);
@@ -6653,136 +6622,6 @@ async function updateOpenClawAgentModel(agentId, model) {
     return updateOpenClawAgentModelFromConfig(agentId, model);
 }
 __name(updateOpenClawAgentModel, "updateOpenClawAgentModel");
-function summarizeFilters(filters) {
-    const labels = [];
-    if (filters.quick)
-        labels.push(`quick=${filters.quick}`);
-    if (filters.status)
-        labels.push(`status=${filters.status}`);
-    if (filters.owner)
-        labels.push(`owner=${filters.owner}`);
-    if (filters.project)
-        labels.push(`project=${filters.project}`);
-    return labels.length > 0 ? `filters(${labels.join(", ")})` : "filters(none)";
-}
-__name(summarizeFilters, "summarizeFilters");
-function matchesQuickFilter(task, quick, now) {
-    if (quick === "all")
-        return true;
-    if (quick === "attention") {
-        return task.status === "blocked" || isTaskDueNow(task, now);
-    }
-    return task.status === quick;
-}
-__name(matchesQuickFilter, "matchesQuickFilter");
-function isTaskDueNow(task, now) {
-    if (task.status === "done")
-        return false;
-    if (!task.dueAt)
-        return false;
-    const dueMs = Date.parse(task.dueAt);
-    if (Number.isNaN(dueMs))
-        return false;
-    return dueMs <= now;
-}
-__name(isTaskDueNow, "isTaskDueNow");
-function hasAnyQueryKey(searchParams, keys) { return keys.some(key => searchParams.has(key)); }
-__name(hasAnyQueryKey, "hasAnyQueryKey");
-function renderLanguageToggle(filters, options) { const enHref = buildHomeHref(filters, options.compactStatusStrip, options.section, "en", options.usageView); const zhHref = buildHomeHref(filters, options.compactStatusStrip, options.section, "zh", options.usageView); const enClass = options.language === "en" ? ' class="active"' : ""; const zhClass = options.language === "zh" ? ' class="active"' : ""; const label = pickUiText(options.language, "Language:", "\u8BED\u8A00\uFF1A"); const zhLabel = pickUiText(options.language, "\u4E2D\u6587", "\u4E2D\u6587"); return `<div class="meta lang-toggle">${label} <a${enClass} href="${escapeHtml(enHref)}">EN</a> / <a${zhClass} href="${escapeHtml(zhHref)}">${zhLabel}</a></div>`; }
-__name(renderLanguageToggle, "renderLanguageToggle");
-function renderDashboardRefreshControls(language, options) {
-    const intervals = [15, 30, 60, 120];
-    const intervalOptions = intervals.map(value => { const label = language === "en" ? `${value}s` : `${value} \u79D2`; return `<option value="${value}"${value === 30 ? " selected" : ""}>${escapeHtml(label)}</option>`; }).join("");
-    const writeAccessLabel = !options.localTokenAuthRequired ? pickUiText(language, "Write access: direct", "\u5199\u5165\u6743\u9650\uFF1A\u76F4\u8FDE") : !options.localTokenConfigured ? pickUiText(language, "Write access: unavailable", "\u5199\u5165\u89E3\u9501\uFF1A\u672A\u914D\u7F6E") : options.localMutationUnlock ? pickUiText(language, "Write access: on", "\u5199\u5165\u89E3\u9501\uFF1A\u5F00") : pickUiText(language, "Write access: off", "\u5199\u5165\u89E3\u9501\uFF1A\u5173");
-    const writeAccessPressed = options.localMutationUnlock && options.localTokenConfigured ? "true" : "false";
-    const writeAccessDisabled = options.localTokenAuthRequired && !options.localTokenConfigured ? " disabled" : "";
-    return `<div class="refresh-toolbar" data-dashboard-refresh-root>
-    <button class="panel-toggle" type="button" data-dashboard-refresh-now>${escapeHtml(pickUiText(language, "Refresh now", "\u7ACB\u5373\u5237\u65B0"))}</button>
-    <button class="panel-toggle" type="button" data-dashboard-auto-refresh-toggle aria-pressed="false">${escapeHtml(pickUiText(language, "Auto refresh: off", "\u81EA\u52A8\u5237\u65B0\uFF1A\u5173"))}</button>
-    <button class="panel-toggle" type="button" data-dashboard-mutation-toggle aria-pressed="${writeAccessPressed}"${writeAccessDisabled}>${escapeHtml(writeAccessLabel)}</button>
-    <label class="refresh-interval">
-      <span>${escapeHtml(pickUiText(language, "Auto every", "\u81EA\u52A8\u95F4\u9694"))}</span>
-      <select data-dashboard-auto-refresh-interval aria-label="${escapeHtml(pickUiText(language, "Auto refresh interval", "\u81EA\u52A8\u5237\u65B0\u95F4\u9694"))}">
-        ${intervalOptions}
-      </select>
-    </label>
-    <div class="refresh-status" data-dashboard-refresh-status role="status" aria-live="polite">${escapeHtml(pickUiText(language, "Auto refresh is off.", "\u81EA\u52A8\u5237\u65B0\u5DF2\u5173\u95ED\u3002"))}</div>
-  </div>`;
-}
-__name(renderDashboardRefreshControls, "renderDashboardRefreshControls");
-function buildHomeHref(filters, compactStatusStrip, section = "overview", language = "en", usageView = "cumulative") { const query = buildHomeQuery(filters, compactStatusStrip, section, language, usageView); return query ? `/?${query}` : "/"; }
-__name(buildHomeHref, "buildHomeHref");
-function buildHomeQuery(filters, compactStatusStrip, section = "overview", language = "en", usageView = "cumulative") {
-    const params = new URLSearchParams;
-    params.set("compact", compactStatusStrip ? "1" : "0");
-    params.set("section", section);
-    params.set("lang", language);
-    if (usageView === "today")
-        params.set("usage_view", "today");
-    params.set("quick", filters.quick ?? "all");
-    if (filters.status)
-        params.set("status", filters.status);
-    if (filters.owner)
-        params.set("owner", filters.owner);
-    if (filters.project)
-        params.set("project", filters.project);
-    return params.toString();
-}
-__name(buildHomeQuery, "buildHomeQuery");
-function buildTaskDetailHref(taskId, language) { return `/details/task/${encodeURIComponent(taskId)}?lang=${encodeURIComponent(language)}`; }
-__name(buildTaskDetailHref, "buildTaskDetailHref");
-function buildCronDetailHref(jobId, language) { return `/details/cron/${encodeURIComponent(jobId)}?lang=${encodeURIComponent(language)}`; }
-__name(buildCronDetailHref, "buildCronDetailHref");
-function buildSessionDetailHref(sessionKey, language) { return `/session/${encodeURIComponent(sessionKey)}?lang=${encodeURIComponent(language)}`; }
-__name(buildSessionDetailHref, "buildSessionDetailHref");
-function joinDisplayList(items, language) { const output = items.map(item => item.trim()).filter(item => item.length > 0); return output.join(language === "en" ? ", " : "\u3001"); }
-__name(joinDisplayList, "joinDisplayList");
-function renderQuickFilters(filters, compactStatusStrip, section, language, usageView) { const options = import_ui_preferences.UI_QUICK_FILTERS.map(value => ({ value, label: quickFilterLabel(value, language) })); const active = filters.quick ?? "all"; const base = { owner: filters.owner, project: filters.project }; return options.map(option => { const href = buildHomeHref({ ...base, quick: option.value }, compactStatusStrip, section, language, usageView); const activeClass = option.value === active ? " active" : ""; return `<a class="quick-chip${activeClass}" href="${escapeHtml(href)}">${escapeHtml(option.label)}</a>`; }).join(""); }
-__name(renderQuickFilters, "renderQuickFilters");
-function quickFilterLabel(value, language = "en") {
-    if (value === "all")
-        return pickUiText(language, "Everything", "\u5168\u90E8");
-    if (value === "attention")
-        return pickUiText(language, "Needs Attention", "\u9700\u5173\u6CE8");
-    if (value === "todo")
-        return pickUiText(language, "Ready To Start", "\u53EF\u5F00\u59CB");
-    if (value === "in_progress")
-        return pickUiText(language, "In Motion", "\u8FDB\u884C\u4E2D");
-    if (value === "blocked")
-        return pickUiText(language, "Blocked", "\u5DF2\u963B\u585E");
-    return pickUiText(language, "Completed", "\u5DF2\u5B8C\u6210");
-}
-__name(quickFilterLabel, "quickFilterLabel");
-function taskStateLabel(state, language = "zh") {
-    if (state === "todo")
-        return pickUiText(language, "Ready To Start", "\u5F85\u5F00\u59CB");
-    if (state === "in_progress")
-        return pickUiText(language, "In Motion", "\u8FDB\u884C\u4E2D");
-    if (state === "blocked")
-        return pickUiText(language, "Blocked", "\u5DF2\u963B\u585E");
-    return pickUiText(language, "Completed", "\u5DF2\u5B8C\u6210");
-}
-__name(taskStateLabel, "taskStateLabel");
-function projectStateLabel(state, language = "zh") {
-    if (state === "planned")
-        return pickUiText(language, "Planned", "\u89C4\u5212\u4E2D");
-    if (state === "active")
-        return pickUiText(language, "Active", "\u6267\u884C\u4E2D");
-    if (state === "blocked")
-        return pickUiText(language, "Blocked", "\u5DF2\u963B\u585E");
-    return pickUiText(language, "Completed", "\u5DF2\u5B8C\u6210");
-}
-__name(projectStateLabel, "projectStateLabel");
-function searchScopeLabel(scope, language = "zh") {
-    if (scope === "tasks")
-        return pickUiText(language, "Tasks", "\u4EFB\u52A1");
-    if (scope === "projects")
-        return pickUiText(language, "Projects", "\u9879\u76EE");
-    if (scope === "sessions")
-        return pickUiText(language, "Sessions", "\u4F1A\u8BDD");
-    return pickUiText(language, "Alerts", "\u544A\u8B66");
-}
-__name(searchScopeLabel, "searchScopeLabel");
 function humanizeOperatorLabel(value) { return (0, import_operator_display.humanizeOperatorDisplayName)(value) ?? "\u672A\u77E5\u52A9\u624B"; }
 __name(humanizeOperatorLabel, "humanizeOperatorLabel");
 function normalizeLookupKey(input) { return input.trim().toLowerCase(); }
@@ -6912,7 +6751,7 @@ function mergeCollaborationRoomApiEventsForSmoke(input) { return mergeCollaborat
 __name(mergeCollaborationRoomApiEventsForSmoke, "mergeCollaborationRoomApiEventsForSmoke");
 function pickLatestSessionActivityTimestampForSmoke(...values) { return pickLatestSessionActivityTimestamp(...values); }
 __name(pickLatestSessionActivityTimestampForSmoke, "pickLatestSessionActivityTimestampForSmoke");
-function renderDashboardSectionNavForSmoke(section, language = "en") { const activeSection = section === "office-space" ? "team" : section === "calendar" ? "projects-tasks" : section; return dashboardSectionLinks(language).map(item => { const activeClass = item.key === activeSection ? " active" : ""; const current = item.key === activeSection ? ' aria-current="page"' : ""; return `<a class="nav-link${activeClass}" href="/?section=${encodeURIComponent(item.key)}"${current}>${escapeHtml(item.label)}</a>`; }).join(""); }
+function renderDashboardSectionNavForSmoke(section, language = "en") { const activeSection = normalizeDashboardSectionForNav(section); return dashboardSectionLinks(language).map(item => { const activeClass = item.key === activeSection ? " active" : ""; const current = item.key === activeSection ? ' aria-current="page"' : ""; return `<a class="nav-link${activeClass}" href="/?section=${encodeURIComponent(item.key)}"${current}>${escapeHtml(item.label)}</a>`; }).join(""); }
 __name(renderDashboardSectionNavForSmoke, "renderDashboardSectionNavForSmoke");
 function buildGlobalVisibilitySmokeModel(language) { return { tasks: [{ taskType: "cron", taskTypeLabel: pickUiText(language, "Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1"), taskName: pickUiText(language, "Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1"), executor: pickUiText(language, "System service", "\u7CFB\u7EDF\u670D\u52A1"), currentAction: pickUiText(language, "Timed jobs are on.", "\u5B9A\u65F6\u4EFB\u52A1\u6B63\u5728\u8FD0\u884C\u3002"), nextRun: "2026-03-05T13:30:00.000Z", latestResult: pickUiText(language, "Active timed jobs: 1.", "\u5DF2\u5F00\u542F\u5B9A\u65F6\u4EFB\u52A1\uFF1A1 \u4E2A\u3002"), status: "done", nextAction: pickUiText(language, "Keep timed jobs on and keep each job goal clear.", "\u4FDD\u6301\u5B9A\u65F6\u4EFB\u52A1\u5F00\u542F\uFF0C\u5E76\u786E\u8BA4\u6BCF\u4E2A\u4EFB\u52A1\u76EE\u6807\u6E05\u695A\u3002"), detailsHref: buildGlobalVisibilityDetailHref("cron", language), detailsLabel: pickUiText(language, "See timed jobs", "\u67E5\u770B\u5B9A\u65F6\u4EFB\u52A1") }, { taskType: "heartbeat", taskTypeLabel: pickUiText(language, "Heartbeat", "\u4EFB\u52A1\u5FC3\u8DF3"), taskName: pickUiText(language, "Heartbeat", "\u4EFB\u52A1\u5FC3\u8DF3"), executor: pickUiText(language, "System service", "\u7CFB\u7EDF\u670D\u52A1"), currentAction: pickUiText(language, "Heartbeat is on.", "\u4EFB\u52A1\u5FC3\u8DF3\u5DF2\u5F00\u542F\u3002"), nextRun: "2026-03-05T13:35:00.000Z", latestResult: pickUiText(language, "Active heartbeat checks: 1.", "\u5DF2\u5F00\u542F\u4EFB\u52A1\u5FC3\u8DF3\uFF1A1 \u4E2A\u3002"), status: "done", nextAction: pickUiText(language, "Check picked tasks and confirm the choices look right.", "\u67E5\u770B\u6311\u51FA\u7684\u4EFB\u52A1\uFF0C\u786E\u8BA4\u6311\u9009\u7ED3\u679C\u662F\u5426\u5408\u7406\u3002"), detailsHref: buildGlobalVisibilityDetailHref("heartbeat", language), detailsLabel: pickUiText(language, "See heartbeat checks", "\u67E5\u770B\u4EFB\u52A1\u5FC3\u8DF3") }, { taskType: "current_task", taskTypeLabel: pickUiText(language, "Current tasks", "\u5F53\u524D\u4EFB\u52A1"), taskName: pickUiText(language, "Current tasks", "\u5F53\u524D\u4EFB\u52A1"), executor: pickUiText(language, "Task owners", "\u4EFB\u52A1\u667A\u80FD\u4F53"), currentAction: pickUiText(language, "Tasks are moving.", "\u4EFB\u52A1\u6B63\u5728\u63A8\u8FDB\u3002"), nextRun: pickUiText(language, "Live update", "\u5B9E\u65F6\u66F4\u65B0"), latestResult: pickUiText(language, "2 tasks moving.", "2 \u4E2A\u4EFB\u52A1\u5728\u8FDB\u884C\u4E2D\u3002"), status: "done", nextAction: pickUiText(language, "Keep progress updated.", "\u6301\u7EED\u66F4\u65B0\u4EFB\u52A1\u8FDB\u5EA6\u3002"), detailsHref: buildGlobalVisibilityDetailHref("current_task", language), detailsLabel: pickUiText(language, "See current tasks", "\u67E5\u770B\u5F53\u524D\u4EFB\u52A1") }, { taskType: "tool_call", taskTypeLabel: pickUiText(language, "Tool calls", "\u5DE5\u5177\u8C03\u7528"), taskName: pickUiText(language, "Tool calls", "\u5DE5\u5177\u8C03\u7528"), executor: pickUiText(language, "Active sessions", "\u6D3B\u8DC3\u4F1A\u8BDD"), currentAction: pickUiText(language, "Tools were used recently.", "\u6700\u8FD1\u6709\u5DE5\u5177\u5728\u4F7F\u7528\u3002"), nextRun: pickUiText(language, "Live update", "\u5B9E\u65F6\u66F4\u65B0"), latestResult: pickUiText(language, "Tool calls in recent activity: 3.", "\u6700\u8FD1\u5DE5\u5177\u8C03\u7528\uFF1A3 \u6B21\u3002"), status: "done", nextAction: pickUiText(language, "Review results and keep going.", "\u770B\u4E0B\u7ED3\u679C\u540E\u7EE7\u7EED\u3002"), detailsHref: buildGlobalVisibilityDetailHref("tool_call", language), detailsLabel: pickUiText(language, "See tool calls", "\u67E5\u770B\u5DE5\u5177\u8C03\u7528") }], doneCount: 4, notDoneCount: 0, noTaskMessage: pickUiText(language, "No timed jobs, heartbeat, current tasks, or tool calls yet.", "\u6682\u65E0\u5B9A\u65F6\u4EFB\u52A1\u3001\u4EFB\u52A1\u5FC3\u8DF3\u3001\u5F53\u524D\u4EFB\u52A1\u6216\u5DE5\u5177\u8C03\u7528\u3002"), signalCounts: { schedule: 1, heartbeat: 1, currentTasks: 2, toolCalls: 3 } }; }
 __name(buildGlobalVisibilitySmokeModel, "buildGlobalVisibilitySmokeModel");
@@ -7155,6 +6994,12 @@ Source anchors preserved for text-based smoke tests and DoD source audits while
 this file is temporarily backed by a recovered transpiled build.
 
 Task board / settings / collaboration anchors:
+data-dashboard-refresh-root
+data-dashboard-refresh-now
+data-dashboard-auto-refresh-toggle
+data-dashboard-mutation-toggle
+data-dashboard-auto-refresh-interval
+data-dashboard-refresh-status
 const trackedTaskDetailsOpen = pendingDecisionCount > 0 || taskCertaintyCards.length > 0;
 label: "Collaboration", blurb: "Agent handoffs and teamwork"
 label: "鍗忎綔", blurb: "鏅鸿兘浣撲氦鎺ヤ笌鍗忓悓"
