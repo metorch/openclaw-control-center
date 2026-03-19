@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { deflateSync } from "node:zlib";
@@ -40,13 +40,40 @@ export const STAFF_AVATARS: StaffAvatarExport[] = [
 ];
 
 export function extractSpriteRuntime(source: string): SpriteRuntime {
-  const start = source.indexOf("const spriteSize = 44;");
-  const end = source.indexOf("const motionActors = [];", start);
+  const resolveRuntimeSource = (): string => {
+    const start = source.indexOf("const spriteSize = 44;");
+    const end = source.indexOf("const motionActors = [];", start);
+    if (start >= 0 && end > start) {
+      return source;
+    }
+
+    const fallbackPaths = [
+      path.join(process.cwd(), "src", "ui", "server-inline-scripts-agent-visual.ts"),
+      path.join(process.cwd(), "src", "ui", "server-inline-scripts.ts"),
+    ];
+    for (const fallbackPath of fallbackPaths) {
+      try {
+        const candidate = readFileSync(fallbackPath, "utf8");
+        const candidateStart = candidate.indexOf("const spriteSize = 44;");
+        const candidateEnd = candidate.indexOf("const motionActors = [];", candidateStart);
+        if (candidateStart >= 0 && candidateEnd > candidateStart) {
+          return candidate;
+        }
+      } catch {
+        // Ignore missing fallback paths and keep searching.
+      }
+    }
+    return source;
+  };
+
+  const runtimeSource = resolveRuntimeSource();
+  const start = runtimeSource.indexOf("const spriteSize = 44;");
+  const end = runtimeSource.indexOf("const motionActors = [];", start);
   if (start < 0 || end < 0 || end <= start) {
     throw new Error("Unable to locate embedded staff avatar sprite runtime in src/ui/server.ts");
   }
 
-  const block = source.slice(start, end);
+  const block = runtimeSource.slice(start, end);
   const runtime = vm.runInNewContext(
     `
       (() => {

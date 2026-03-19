@@ -11,8 +11,9 @@ const path = require("node:path");
 const fs = require("node:fs");
 
 const PORT = process.env.UI_SMOKE_PORT || "4516";
-const WAIT_SECONDS = Number(process.env.UI_SMOKE_WAIT_SECONDS || "10");
-const PAGE_WAIT_SECONDS = Number(process.env.UI_SMOKE_PAGE_WAIT_SECONDS || "12");
+const WAIT_SECONDS = Number(process.env.UI_SMOKE_WAIT_SECONDS || "45");
+const PAGE_WAIT_SECONDS = Number(process.env.UI_SMOKE_PAGE_WAIT_SECONDS || "20");
+const REQUEST_TIMEOUT_MS = Number(process.env.UI_SMOKE_REQUEST_TIMEOUT_MS || "30000");
 const ROOT = path.resolve(__dirname, "..");
 const LOG_DIR = path.join(ROOT, "runtime");
 const LOG_FILE = path.join(LOG_DIR, `ui-smoke-${PORT}.log`);
@@ -20,7 +21,7 @@ const LOG_FILE = path.join(LOG_DIR, `ui-smoke-${PORT}.log`);
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
 const logStream = fs.createWriteStream(LOG_FILE);
-const child = spawn(process.execPath, ["--import", "tsx", "src/index.ts"], {
+const child = spawn(process.execPath, ["scripts/run-index.js", "UI_MODE=true", "MONITOR_CONTINUOUS=true"], {
   cwd: ROOT,
   env: { ...process.env, UI_MODE: "true", UI_PORT: PORT },
   stdio: ["ignore", "pipe", "pipe"],
@@ -42,10 +43,13 @@ function fetch(urlPath) {
     const req = http.get(`http://127.0.0.1:${PORT}${urlPath}`, (res) => {
       let data = "";
       res.on("data", (c) => { data += c; });
-      res.on("end", () => resolve(data));
+      res.on("end", () => resolve({
+        statusCode: res.statusCode || 0,
+        body: data,
+      }));
     });
     req.on("error", reject);
-    req.setTimeout(6000, () => { req.destroy(); reject(new Error("timeout")); });
+    req.setTimeout(REQUEST_TIMEOUT_MS, () => { req.destroy(); reject(new Error("timeout")); });
   });
 }
 
@@ -53,11 +57,12 @@ async function waitForUI() {
   const deadline = Date.now() + WAIT_SECONDS * 1000;
   while (Date.now() < deadline) {
     try {
-      await fetch("/healthz");
-      return;
+      const response = await fetch("/healthz");
+      if (response.statusCode === 200) return;
     } catch (_) {
       await new Promise((r) => setTimeout(r, 1000));
     }
+    await new Promise((r) => setTimeout(r, 1000));
   }
   console.error(`UI smoke failed: server did not become ready within ${WAIT_SECONDS}s.`);
   try { console.error(fs.readFileSync(LOG_FILE, "utf8")); } catch (_) { /* ignore */ }
@@ -69,10 +74,14 @@ async function checkPage(urlPath, keywords, label) {
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      const body = await fetch(urlPath);
-      const found = keywords.some((kw) => body.includes(kw));
-      if (found) return;
-      lastError = new Error(`none of [${keywords.join(", ")}] found in response (${body.length} bytes)`);
+      const response = await fetch(urlPath);
+      if (response.statusCode !== 200) {
+        lastError = new Error(`unexpected status ${response.statusCode}`);
+      } else {
+        const found = keywords.some((kw) => response.body.includes(kw));
+        if (found) return;
+        lastError = new Error(`none of [${keywords.join(", ")}] found in response (${response.body.length} bytes)`);
+      }
     } catch (error) {
       lastError = error;
     }

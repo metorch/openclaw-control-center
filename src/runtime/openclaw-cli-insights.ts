@@ -1,10 +1,8 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { runOpenClawCommand } from "./openclaw-cli";
 const INSIGHT_CACHE_TTL_MS = 15_000;
 const INSIGHT_COMMAND_TIMEOUT_MS = 4_000;
 const STATUS_COMMAND_TIMEOUT_MS = 8_000;
+const GATEWAY_STATUS_COMMAND_TIMEOUT_MS = 12_000;
 const UPDATE_STATUS_COMMAND_TIMEOUT_MS = 8_000;
 const INSIGHT_COMMAND_MAX_BUFFER = 4 * 1024 * 1024;
 
@@ -156,27 +154,32 @@ export function summarizeOpenClawConnection(statusJson: unknown, gatewayJson: un
     return (asNumber(obj?.sessionsCount) ?? 0) > 0;
   }).length;
   const hasRuntimeSnapshot = sessions !== undefined || statusAgents !== undefined || asString(statusRoot.runtimeVersion) !== undefined;
+  const hasGatewaySnapshot =
+    gatewayService !== undefined || gatewayConfig !== undefined || gatewayMeta !== undefined || gatewayRpc !== undefined;
 
   const gatewayRunning = asBoolean(gatewayRpc?.ok) === true || asString(gatewayRuntime?.status) === "running";
-  const gatewayStatus: OpenClawInsightStatus = gatewayRunning ? "ok" : "blocked";
-  const gatewayDetail = gatewayRunning
-    ? `${asString(gatewayMeta?.probeUrl) ?? "Gateway"}`
-    : "Gateway is not reachable";
-  const gatewayValue = gatewayRunning ? "Connected" : "Unavailable";
+  const gatewayStatus: OpenClawInsightStatus = !hasGatewaySnapshot ? "info" : gatewayRunning ? "ok" : "blocked";
+  const gatewayDetail = !hasGatewaySnapshot
+    ? "Gateway status is still loading"
+    : gatewayRunning
+      ? `${asString(gatewayMeta?.probeUrl) ?? "Gateway"}`
+      : "Gateway is not reachable";
+  const gatewayValue = !hasGatewaySnapshot ? "loading" : gatewayRunning ? "Connected" : "Unavailable";
 
   const cliValid = asBoolean(cliConfig?.exists) === true && asBoolean(cliConfig?.valid) === true;
   const daemonValid = asBoolean(daemonConfig?.exists) === true && asBoolean(daemonConfig?.valid) === true;
   const allowedOrigins = asArray(
     asObject(cliConfig?.controlUi)?.allowedOrigins ?? asObject(daemonConfig?.controlUi)?.allowedOrigins,
   ).length;
-  const configStatus: OpenClawInsightStatus = cliValid && daemonValid ? "ok" : "blocked";
-  const configDetail =
-    cliValid && daemonValid
+  const configStatus: OpenClawInsightStatus = !hasGatewaySnapshot ? "info" : cliValid && daemonValid ? "ok" : "blocked";
+  const configDetail = !hasGatewaySnapshot
+    ? "Config status is still loading"
+    : cliValid && daemonValid
       ? allowedOrigins > 0
         ? `${allowedOrigins} allowed origin${allowedOrigins === 1 ? "" : "s"}`
         : "Local-only by default"
       : "openclaw.json is missing or invalid";
-  const configValue = cliValid && daemonValid ? "Ready" : "Needs fix";
+  const configValue = !hasGatewaySnapshot ? "loading" : cliValid && daemonValid ? "Ready" : "Needs fix";
 
   const runtimeStatus: OpenClawInsightStatus = !hasRuntimeSnapshot
     ? "info"
@@ -348,7 +351,7 @@ async function loadCachedOpenClawGatewayStatusJson(): Promise<unknown> {
   return loadSourceWithCache(
     gatewayCache,
     gatewayInFlight,
-    () => runOpenClawJson(["gateway", "status", "--json"], {}),
+    () => runOpenClawJson(["gateway", "status", "--json"], {}, { timeoutMs: GATEWAY_STATUS_COMMAND_TIMEOUT_MS }),
     (value) => {
       gatewayCache = value;
     },
@@ -448,8 +451,8 @@ async function runOpenClawJson(
   options?: { timeoutMs?: number },
 ): Promise<unknown> {
   try {
-    const { stdout } = await execFileAsync("openclaw", args, {
-      timeout: options?.timeoutMs ?? INSIGHT_COMMAND_TIMEOUT_MS,
+    const { stdout } = await runOpenClawCommand(args, {
+      timeoutMs: options?.timeoutMs ?? INSIGHT_COMMAND_TIMEOUT_MS,
       maxBuffer: INSIGHT_COMMAND_MAX_BUFFER,
     });
     return parseEmbeddedJson(stdout) ?? fallback;

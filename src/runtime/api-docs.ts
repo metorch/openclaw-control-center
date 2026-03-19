@@ -62,7 +62,8 @@ export function buildApiDocs(): ApiDocsPayload {
         summary: "Read persisted dashboard UI preferences",
         response: {
           ok: "boolean",
-          preferences: "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, updatedAt }",
+          preferences:
+            "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, collaborationChat{expanded,autoRefresh,lastReadSequence}, updatedAt }",
           path: "string",
           issues: "string[]",
         },
@@ -77,10 +78,77 @@ export function buildApiDocs(): ApiDocsPayload {
           quickFilter: "all|attention|todo|in_progress|blocked|done (optional)",
           taskFilters: "{ status?, owner?, project? } (optional)",
           taskCardOrder: "string[] (optional)",
+          collaborationChat: "{ expanded?, autoRefresh?, lastReadSequence? } (optional)",
         },
         response: {
           ok: "boolean",
-          preferences: "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, updatedAt }",
+          preferences:
+            "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, collaborationChat{expanded,autoRefresh,lastReadSequence}, updatedAt }",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/collaboration/participants",
+        summary: "Resolved collaboration participant directory with primary controller metadata",
+        response: {
+          ok: "boolean",
+          primaryAgentId: "string",
+          primaryDisplayName: "string",
+          participants: "Array<{ agentId, displayName, mention, aliases[], primary, identity{accent,imageHref?} }>",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/collaboration/room",
+        summary: "Read the global collaboration room event stream with unread counters",
+        query: {
+          after: "optional non-negative cursor sequence",
+          limit: "optional 1..200 (default 60)",
+          readSequence: "optional non-negative last-read cursor",
+          lang: "optional en|zh",
+        },
+        response: {
+          ok: "boolean",
+          room:
+            "{ roomId, updatedAt, lastSequence, unreadCount, readSequence, returnedCount, participants[{ agentId, displayName, mention, aliases[], primary, identity{accent,imageHref?}, statusTone, statusDotLabel, currentWorkLabel, currentWork, recentOutput }], events[] }",
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/collaboration/room/uploads",
+        summary: "Upload one collaboration attachment before sending a room message",
+        body: {
+          "Content-Type": "raw file bytes",
+          "x-file-name": "required URL-encoded original filename header",
+        },
+        response: {
+          ok: "boolean",
+          attachment: "{ attachmentId, fileName, contentType, sizeBytes, kind, previewText?, localPath, contentHref, downloadHref }",
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/collaboration/room/messages",
+        summary: "Append one user room message and queue real agent dispatch turns",
+        body: {
+          text: "optional message text",
+          attachmentIds: `optional string[] (max ${5})`,
+          lang: "optional en|zh",
+        },
+        response: {
+          ok: "boolean",
+          message: "{ roomId, eventId, sequence, createdAt, text?, targetAgentIds[], targetDisplayNames[], attachments[] }",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/collaboration/room/attachments/:attachmentId/content",
+        summary: "Stream one collaboration attachment inline or as a download",
+        query: {
+          download: "optional 1 to force attachment download",
+        },
+        response: {
+          ok: "binary stream",
         },
       },
       {

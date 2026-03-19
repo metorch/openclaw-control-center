@@ -99,3 +99,26 @@ export interface ApprovalsActionResponse {
   reason?: string;
   rawText: string;
 }
+
+export interface AgentTurnRequest {
+  agentId: string;
+  message: string;
+  sessionId?: string;
+  sessionKey?: string;
+  timeoutSeconds?: number;
+}
+
+export interface AgentTurnResponse {
+  ok: boolean;
+  agentId: string;
+  replyText: string;
+  durationMs: number;
+  sessionId?: string;
+  sessionKey?: string;
+  rawText: string;
+  rawJson?: Record<string, unknown>;
+  failureReason?: string;
+  stopReason?: string;
+  errorMessage?: string;
+  incomplete?: boolean;
+}

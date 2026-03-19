@@ -174,6 +174,25 @@ const MAX_ENTRY_CONTENT_CHARS = 1200;
 const MAX_SNIPPET_CHARS = 220;
 const MAX_TOOL_SEGMENT_CHARS = 280;
 const KNOWN_ROLE_TYPES = new Set(["user", "assistant", "system", "tool"]);
+const SESSION_HISTORY_CACHE_TTL_MS = 15_000;
+
+interface SessionHistoryCacheEntry {
+  limit: number;
+  expiresAt: number;
+  value?: SessionHistoryReadResult;
+  inflight?: Promise<SessionHistoryReadResult>;
+}
+
+const sessionHistoryCache = new Map<string, SessionHistoryCacheEntry>();
+
+export function invalidateSessionConversationHistoryCache(sessionKey?: string): void {
+  const cacheKey = sessionKey?.trim();
+  if (cacheKey) {
+    sessionHistoryCache.delete(cacheKey);
+    return;
+  }
+  sessionHistoryCache.clear();
+}
 
 export async function listSessionConversations(
   input: SessionConversationListInput,
@@ -260,20 +279,63 @@ async function readSessionHistory(
   sessionKey: string,
   limit: number,
 ): Promise<SessionHistoryReadResult> {
-  try {
-    const response = await client.sessionsHistory({ sessionKey, limit });
-    return {
-      messages: normalizeHistoryMessages(response, limit),
-    };
-  } catch (error) {
-    return {
-      messages: [],
-      error: error instanceof Error ? error.message : "Failed to read session history.",
-    };
+  const cacheKey = sessionKey.trim();
+  const now = Date.now();
+  const cached = sessionHistoryCache.get(cacheKey);
+  if (cached && cached.expiresAt > now && cached.value && cached.limit >= limit) {
+    return sliceHistoryReadResult(cached.value, limit);
   }
+
+  if (cached?.inflight) {
+    const inflightResult = await cached.inflight;
+    const refreshed = sessionHistoryCache.get(cacheKey);
+    if (refreshed && refreshed.expiresAt > Date.now() && refreshed.value && refreshed.limit >= limit) {
+      return sliceHistoryReadResult(refreshed.value, limit);
+    }
+    if (cached.limit >= limit) {
+      return sliceHistoryReadResult(inflightResult, limit);
+    }
+  }
+
+  const fetchLimit = Math.max(limit, cached?.limit ?? 0);
+  const inflight = (async (): Promise<SessionHistoryReadResult> => {
+    try {
+      const response = await client.sessionsHistory({ sessionKey, limit: fetchLimit });
+      return {
+        messages: normalizeSessionHistoryMessages(response, fetchLimit),
+      };
+    } catch (error) {
+      return {
+        messages: [],
+        error: error instanceof Error ? error.message : "Failed to read session history.",
+      };
+    }
+  })();
+
+  sessionHistoryCache.set(cacheKey, {
+    limit: fetchLimit,
+    expiresAt: now + SESSION_HISTORY_CACHE_TTL_MS,
+    inflight,
+  });
+
+  const value = await inflight;
+  sessionHistoryCache.set(cacheKey, {
+    limit: fetchLimit,
+    expiresAt: Date.now() + SESSION_HISTORY_CACHE_TTL_MS,
+    value,
+  });
+  return sliceHistoryReadResult(value, limit);
 }
 
-function normalizeHistoryMessages(response: SessionsHistoryResponse, limit: number): SessionHistoryMessage[] {
+function sliceHistoryReadResult(result: SessionHistoryReadResult, limit: number): SessionHistoryReadResult {
+  if (result.messages.length <= limit) return result;
+  return {
+    messages: result.messages.slice(-limit),
+    error: result.error,
+  };
+}
+
+export function normalizeSessionHistoryMessages(response: SessionsHistoryResponse, limit: number): SessionHistoryMessage[] {
   const fromJson = response.json ? normalizeHistoryFromJson(response.json) : [];
   const normalized = fromJson.length > 0 ? fromJson : normalizeHistoryFromText(response.rawText);
   if (normalized.length <= limit) return normalized;
@@ -643,13 +705,6 @@ function extractText(input: unknown, depth: number): string {
       return textBlocks.join(" ");
     }
 
-    const thinkingBlocks = input
-      .map((item) => extractStructuredThinkingBlock(item, depth + 1))
-      .filter((item) => item.trim() !== "");
-    if (thinkingBlocks.length > 0) {
-      return thinkingBlocks.join(" ");
-    }
-
     return input
       .map((item) => extractText(item, depth + 1))
       .filter((item) => item.trim() !== "")
@@ -658,11 +713,12 @@ function extractText(input: unknown, depth: number): string {
 
   const obj = asObject(input);
   if (!obj) return "";
+  if (isStructuredThinkingBlock(obj) || isStructuredCommentaryTextBlock(obj)) return "";
 
   const structured = extractStructuredContentBlock(obj, depth);
   if (structured.trim() !== "") return structured;
 
-  for (const key of ["text", "thinking", "content", "message", "body", "value", "summary", "output", "response"]) {
+  for (const key of ["text", "content", "message", "body", "value", "summary", "output", "response"]) {
     const text = extractText(obj[key], depth + 1);
     if (text.trim() !== "") return text;
   }
@@ -671,15 +727,13 @@ function extractText(input: unknown, depth: number): string {
 }
 
 function extractStructuredContentBlock(input: unknown, depth: number): string {
-  return (
-    extractStructuredTextBlock(input, depth) ||
-    extractStructuredThinkingBlock(input, depth)
-  );
+  return extractStructuredTextBlock(input, depth);
 }
 
 function extractStructuredTextBlock(input: unknown, depth: number): string {
   const obj = asObject(input);
   if (!obj || depth > 4) return "";
+  if (isStructuredCommentaryTextBlock(obj)) return "";
 
   const blockType = (firstString(obj, ROLE_TYPE_KEYS) ?? "").toLowerCase();
   if (blockType === "text" || blockType === "summary_text") {
@@ -699,6 +753,42 @@ function extractStructuredThinkingBlock(input: unknown, depth: number): string {
   }
 
   return "";
+}
+
+function isStructuredThinkingBlock(input: Record<string, unknown>): boolean {
+  const blockType = (firstString(input, ROLE_TYPE_KEYS) ?? "").toLowerCase();
+  return blockType === "thinking";
+}
+
+function isStructuredCommentaryTextBlock(input: Record<string, unknown>): boolean {
+  const blockType = (firstString(input, ROLE_TYPE_KEYS) ?? "").toLowerCase();
+  if (blockType !== "text" && blockType !== "summary_text") {
+    return false;
+  }
+  if (isInternalCommentaryPhase(firstString(input, ["phase", "textPhase"]))) {
+    return true;
+  }
+  const textSignature = firstString(input, ["textSignature", "signature"]);
+  if (!textSignature) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(textSignature) as unknown;
+    const signatureObj = asObject(parsed);
+    if (!signatureObj) {
+      return false;
+    }
+    return isInternalCommentaryPhase(firstString(signatureObj, ["phase", "kind"]));
+  } catch {
+    return false;
+  }
+}
+
+function isInternalCommentaryPhase(input: unknown): boolean {
+  const normalized = String(input ?? "")
+    .trim()
+    .toLowerCase();
+  return normalized === "commentary" || normalized === "progress" || normalized === "intermediate";
 }
 
 function extractRole(

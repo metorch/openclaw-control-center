@@ -111,23 +111,10 @@ export async function loadBestEffortOfficeSessionPresence(): Promise<OfficeSessi
     }
   }
 
-  let selectedWindowMs = ACTIVE_RECENCY_WINDOWS_MS[0] ?? 45 * 60 * 1000;
-  let selectedActiveByAgent = new Map<string, number>();
-  let totalActiveSessions = 0;
-
+  const selectedWindowMs = ACTIVE_RECENCY_WINDOWS_MS[0] ?? 45 * 60 * 1000;
   const nowMs = Date.now();
-  for (const windowMs of ACTIVE_RECENCY_WINDOWS_MS) {
-    const activeByAgent = deriveActiveSessionsByAgent(recordsByAgent, windowMs, nowMs);
-    const total = [...activeByAgent.values()].reduce((sum, value) => sum + value, 0);
-    selectedWindowMs = windowMs;
-    selectedActiveByAgent = activeByAgent;
-    totalActiveSessions = total;
-    if (total > 0) break;
-  }
-
-  const usedAdaptiveFallback =
-    totalActiveSessions > 0 &&
-    selectedWindowMs !== (ACTIVE_RECENCY_WINDOWS_MS[0] ?? selectedWindowMs);
+  const selectedActiveByAgent = deriveActiveSessionsByAgent(recordsByAgent, selectedWindowMs, nowMs);
+  const totalActiveSessions = [...selectedActiveByAgent.values()].reduce((sum, value) => sum + value, 0);
 
   if (parsedStores === 0 && parseErrors === 0) {
     return {
@@ -154,9 +141,6 @@ export async function loadBestEffortOfficeSessionPresence(): Promise<OfficeSessi
         ? ` Sources: ${[...connectedSources]
             .map((source) => (source === "workspace" ? "workspace" : "runtime-home"))
             .join(", ")}.`
-        : "") +
-      (usedAdaptiveFallback
-        ? ` Window auto-expanded from ${Math.round((ACTIVE_RECENCY_WINDOWS_MS[0] ?? selectedWindowMs) / 60000)}m after an all-zero pass.`
         : "") +
       (!runtimeDirReadable ? " Runtime-home directory could not be read cleanly." : "") +
       (parseErrors > 0 ? ` ${parseErrors} store(s) could not be parsed.` : ""),
@@ -265,9 +249,17 @@ function isSessionActive(item: Record<string, unknown>, recencyWindowMs: number,
     if (INACTIVE_SESSION_STATES.has(explicitState)) return false;
   }
 
+  if (isPassiveSessionTranscriptBinding(item)) return false;
+
   const updatedAtMs = readUpdatedAtMs(item);
   if (!Number.isFinite(updatedAtMs)) return false;
   return nowMs - updatedAtMs <= recencyWindowMs;
+}
+
+function isPassiveSessionTranscriptBinding(item: Record<string, unknown>): boolean {
+  const sessionFile = asString(item.sessionFile)?.trim();
+  if (!sessionFile) return false;
+  return true;
 }
 
 function readSessionState(item: Record<string, unknown>): string | undefined {

@@ -3,8 +3,16 @@ import { extname, basename, join, relative, resolve } from "node:path";
 import { readFile, readdir, stat } from "node:fs/promises";
 import type { ToolClient } from "../clients/tool-client";
 import { buildStructuredDocHubFromSessions, type StructuredChatDocEntry, type StructuredDocHubSnapshot } from "../runtime/doc-hub";
+import {
+  DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME,
+  humanizeOperatorDisplayName,
+} from "../runtime/operator-display";
 import type { ProjectSummary, ReadModelSnapshot } from "../types";
 import type { UiLanguage } from "../runtime/ui-preferences";
+import {
+  extractMarkdownHeading as extractMarkdownHeadingFromShared,
+  toPlainSummary as toPlainSummaryFromShared,
+} from "./server-shared";
 
 const CONTROL_CENTER_ROOT = resolve(process.cwd());
 const OPENCLAW_WORKSPACE_ROOT = resolve(process.cwd(), "..", "..", "..");
@@ -116,6 +124,7 @@ function normalizeInlineText(input: string): string {
 }
 
 function toPlainSummary(input: string, maxLength: number): string {
+  return toPlainSummaryFromShared(input, maxLength);
   const compact = input
     .replace(/`{1,3}[^`]*`{1,3}/g, " ")
     .replace(/[#>*_\-\[\]\(\)!]/g, " ")
@@ -127,12 +136,7 @@ function toPlainSummary(input: string, maxLength: number): string {
 }
 
 function extractMarkdownHeading(input: string): string | undefined {
-  const line = input
-    .split(/\r?\n/)
-    .map((row) => row.trim())
-    .find((row) => row.startsWith("#"));
-  if (!line) return undefined;
-  return line.replace(/^#+\s*/, "").trim() || undefined;
+  return extractMarkdownHeadingFromShared(input);
 }
 
 async function safeReadTextFile(path: string): Promise<string | undefined> {
@@ -156,9 +160,7 @@ function normalizeLookupKey(input: string): string {
 }
 
 function humanizeOperatorLabel(value: string): string {
-  const normalized = value.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
-  if (!normalized) return "Unknown";
-  return normalized.replace(/\b\w/g, (match) => match.toUpperCase());
+  return humanizeOperatorDisplayName(value) ?? "Unknown";
 }
 
 function toSortableMs(value: string | undefined): number {
@@ -509,7 +511,6 @@ export function renderDocPreviewModal(language: UiLanguage): string {
   const editLabel = pickUiText(language, "Modify", "修改");
   const cancelEditLabel = pickUiText(language, "Cancel edit", "取消修改");
   const saveLabel = pickUiText(language, "Save changes", "保存改动");
-  const tokenPlaceholder = pickUiText(language, "Safety passcode", "安全口令");
   const title = pickUiText(language, "Document preview", "文档预览");
   const hint = pickUiText(language, "Click any doc card to load the full text here.", "点击任意文档卡片后，会在这里加载正文。");
   const status = pickUiText(language, "Choose a document to preview.", "选择一份文档即可预览。");
@@ -523,7 +524,6 @@ export function renderDocPreviewModal(language: UiLanguage): string {
         <button class="doc-preview-close" type="button" data-doc-preview-close aria-label="${escapeHtml(closeLabel)}">${escapeHtml(closeLabel)}</button>
       </div>
       <div class="doc-preview-toolbar" data-doc-preview-toolbar hidden>
-        <input class="doc-preview-token" type="password" data-doc-preview-token placeholder="${escapeHtml(tokenPlaceholder)}" hidden />
         <button class="btn" type="button" data-doc-preview-edit>${escapeHtml(editLabel)}</button>
         <button class="btn" type="button" data-doc-preview-cancel-edit hidden>${escapeHtml(cancelEditLabel)}</button>
         <button class="btn" type="button" data-doc-preview-save hidden>${escapeHtml(saveLabel)}</button>
@@ -645,7 +645,8 @@ function renderAgentDocCoverageGrid(coverageRows: AgentDocCoverage[], language: 
 
 export async function renderDocsSection(input: DocsSectionInput): Promise<string> {
   const t = (en: string, zh: string): string => pickUiText(input.language, en, zh);
-  const mainDocumentFacetLabel = input.workspaceFacetOptions.find((item) => item.key === "main")?.label ?? "Main";
+  const mainDocumentFacetLabel =
+    input.workspaceFacetOptions.find((item) => item.key === "main")?.label ?? DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME;
   const mainDocumentCount = input.workspaceFiles.filter((entry) => entry.facetKey === "main").length;
   const documentViewsLabel = input.workspaceFacetOptions.map((item) => item.label).join(", ");
   const docEntries = await loadDocHubEntries(input.docHubSnapshot.items);

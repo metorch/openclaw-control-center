@@ -50,6 +50,60 @@ test("task card order persists and normalizes duplicates or blanks", async () =>
   }
 });
 
+test("collaboration chat preferences persist with expanded state and read cursor", async () => {
+  const original = await readMaybe(UI_PREFERENCES_PATH);
+
+  try {
+    await saveUiPreferences({
+      ...defaultUiPreferences(),
+      collaborationChat: {
+        expanded: true,
+        autoRefresh: false,
+        lastReadSequence: 42,
+      },
+      updatedAt: new Date().toISOString(),
+    });
+
+    const loaded = await loadUiPreferences();
+    assert.deepEqual(loaded.preferences.collaborationChat, {
+      expanded: true,
+      autoRefresh: false,
+      activeRoomId: "global",
+      lastReadSequence: 42,
+      roomReadCursors: {
+        global: 42,
+      },
+    });
+  } finally {
+    if (original === undefined) {
+      await rm(UI_PREFERENCES_PATH, { force: true });
+    } else {
+      await writeFile(UI_PREFERENCES_PATH, original, "utf8");
+    }
+  }
+});
+
+test("global write unlock preference persists after save and reload", async () => {
+  const original = await readMaybe(UI_PREFERENCES_PATH);
+
+  try {
+    await saveUiPreferences({
+      ...defaultUiPreferences(),
+      localMutationUnlock: true,
+      updatedAt: new Date().toISOString(),
+    });
+
+    const loaded = await loadUiPreferences();
+    assert.equal(loaded.preferences.localMutationUnlock, true);
+  } finally {
+    if (original === undefined) {
+      await rm(UI_PREFERENCES_PATH, { force: true });
+    } else {
+      await writeFile(UI_PREFERENCES_PATH, original, "utf8");
+    }
+  }
+});
+
 async function readMaybe(path: string): Promise<string | undefined> {
   try {
     return await readFile(path, "utf8");

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -8,6 +8,7 @@ const REFRESH_TIMEOUT_MS = 60_000;
 const REFRESH_MAX_BUFFER = 8 * 1024 * 1024;
 const REFRESH_LIMIT = 5;
 const PYTHON_COMMAND_CANDIDATES = ["py", "python", "python3"] as const;
+const DISPOSABLE_FIXTURE_DIRNAME = "control-ui-fixtures";
 
 type ContractFixturesPayload = {
   fixture_dir?: string;
@@ -17,6 +18,17 @@ type ContractFixturesPayload = {
 type StatusRefreshPayload = {
   status_file?: string;
   status?: Record<string, unknown>;
+};
+
+type PythonCommandResult = {
+  command: string;
+  stdout: string;
+};
+
+type AgentTeamRefreshDependencies = {
+  runPythonCommand: (args: string[], cwd: string) => Promise<PythonCommandResult>;
+  removeDisposableFixtureDir: (path: string) => Promise<void>;
+  readFileUpdatedAt: (path: string) => Promise<string | undefined>;
 };
 
 export interface AgentTeamRefreshResult {
@@ -36,6 +48,11 @@ export interface AgentTeamRefreshResult {
 }
 
 let refreshInFlight: Promise<AgentTeamRefreshResult> | undefined;
+const defaultRefreshDependencies: AgentTeamRefreshDependencies = {
+  runPythonCommand,
+  removeDisposableFixtureDir,
+  readFileUpdatedAt,
+};
 
 export async function refreshAgentTeamServeSessionSnapshot(input: {
   workspaceRoot: string;
@@ -45,19 +62,34 @@ export async function refreshAgentTeamServeSessionSnapshot(input: {
   if (refreshInFlight) {
     return refreshInFlight;
   }
-  refreshInFlight = refreshAgentTeamServeSessionSnapshotUncached(input).finally(() => {
+  refreshInFlight = refreshAgentTeamServeSessionSnapshotUncached(input, defaultRefreshDependencies).finally(() => {
     refreshInFlight = undefined;
   });
   return refreshInFlight;
+}
+
+export async function refreshAgentTeamServeSessionSnapshotForTest(
+  input: {
+    workspaceRoot: string;
+    targetDir?: string;
+    limit?: number;
+  },
+  overrides: Partial<AgentTeamRefreshDependencies>,
+): Promise<AgentTeamRefreshResult> {
+  return refreshAgentTeamServeSessionSnapshotUncached(input, {
+    ...defaultRefreshDependencies,
+    ...overrides,
+  });
 }
 
 async function refreshAgentTeamServeSessionSnapshotUncached(input: {
   workspaceRoot: string;
   targetDir?: string;
   limit?: number;
-}): Promise<AgentTeamRefreshResult> {
+}, dependencies: AgentTeamRefreshDependencies): Promise<AgentTeamRefreshResult> {
   const workspaceRoot = input.workspaceRoot.trim();
   const targetDir = input.targetDir?.trim() || join(workspaceRoot, "team", "runtime", "runs", "serve-session");
+  const disposableFixtureDir = join(targetDir, DISPOSABLE_FIXTURE_DIRNAME);
   const limit = Number.isFinite(input.limit) && (input.limit ?? 0) > 0 ? Math.floor(input.limit as number) : REFRESH_LIMIT;
   const statusRefreshArgs = [
     "-m",
@@ -82,23 +114,28 @@ async function refreshAgentTeamServeSessionSnapshotUncached(input: {
     String(limit),
   ];
 
-  const statusRefresh = await runPythonCommand(statusRefreshArgs, workspaceRoot);
+  const statusRefresh = await dependencies.runPythonCommand(statusRefreshArgs, workspaceRoot);
   const statusRefreshPayload = parseStatusRefreshPayload(statusRefresh.stdout);
   const schedulerStatusPath =
     asNonEmptyString(statusRefreshPayload?.status_file) ?? join(targetDir, "status.json");
   const schedulerStatusUpdatedAt =
     asNonEmptyString(asRecord(statusRefreshPayload?.status)["updated_at"]) ??
-    (await readFileUpdatedAt(schedulerStatusPath));
-  const executed = await runPythonCommand(args, workspaceRoot);
+    (await dependencies.readFileUpdatedAt(schedulerStatusPath));
+  const executed = await runContractFixturesRefresh({
+    args,
+    workspaceRoot,
+    disposableFixtureDir,
+    dependencies,
+  });
   const payload = parseContractFixturesPayload(executed.stdout);
-  const fixtureDir = asNonEmptyString(payload?.fixture_dir) ?? join(targetDir, "control-ui-fixtures");
+  const fixtureDir = asNonEmptyString(payload?.fixture_dir) ?? disposableFixtureDir;
   const files = asRecord(payload?.files);
   const manifestPath = asNonEmptyString(files["manifest.json"]);
   const statusPath = asNonEmptyString(files["status.json"]) ?? join(fixtureDir, "status.json");
   const dashboardPath = asNonEmptyString(files["dashboard.json"]) ?? join(fixtureDir, "dashboard.json");
   const [statusFileUpdatedAt, dashboardFileUpdatedAt] = await Promise.all([
-    readFileUpdatedAt(statusPath),
-    readFileUpdatedAt(dashboardPath),
+    dependencies.readFileUpdatedAt(statusPath),
+    dependencies.readFileUpdatedAt(dashboardPath),
   ]);
 
   return {
@@ -118,10 +155,36 @@ async function refreshAgentTeamServeSessionSnapshotUncached(input: {
   };
 }
 
-async function runPythonCommand(
-  args: string[],
-  cwd: string,
-): Promise<{ command: string; stdout: string }> {
+async function runContractFixturesRefresh(input: {
+  args: string[];
+  workspaceRoot: string;
+  disposableFixtureDir: string;
+  dependencies: AgentTeamRefreshDependencies;
+}): Promise<PythonCommandResult> {
+  await input.dependencies.removeDisposableFixtureDir(input.disposableFixtureDir);
+  try {
+    return await input.dependencies.runPythonCommand(input.args, input.workspaceRoot);
+  } catch (error) {
+    if (!shouldRetryContractFixturesRefresh(error)) {
+      throw error;
+    }
+    await input.dependencies.removeDisposableFixtureDir(input.disposableFixtureDir);
+    return input.dependencies.runPythonCommand(input.args, input.workspaceRoot);
+  }
+}
+
+function shouldRetryContractFixturesRefresh(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.message.includes("JSONDecodeError") ||
+    error.message.includes("json.decoder.JSONDecodeError") ||
+    error.message.includes("Expecting property name enclosed in double quotes")
+  );
+}
+
+async function runPythonCommand(args: string[], cwd: string): Promise<PythonCommandResult> {
   let lastError: unknown;
   for (const command of PYTHON_COMMAND_CANDIDATES) {
     try {
@@ -140,6 +203,10 @@ async function runPythonCommand(
     }
   }
   throw decorateRefreshError(PYTHON_COMMAND_CANDIDATES[0], args, lastError);
+}
+
+async function removeDisposableFixtureDir(path: string): Promise<void> {
+  await rm(path, { recursive: true, force: true });
 }
 
 function decorateRefreshError(command: string, args: string[], error: unknown): Error {

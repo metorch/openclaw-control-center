@@ -80,6 +80,41 @@ test("summarizeOpenClawConnection and update keep loading semantics when status 
   assert.equal(update.latestVersion, "2026.3.12");
 });
 
+test("summarizeOpenClawConnection keeps gateway and config in loading state when gateway payload is missing", () => {
+  const connection = summarizeOpenClawConnection(
+    {
+      sessions: { count: 10 },
+      agents: { agents: [{ agentId: "main", sessionsCount: 10 }] },
+    },
+    {},
+  );
+
+  assert.equal(connection.status, "info");
+  assert.deepEqual(
+    connection.items.map((item) => ({ key: item.key, status: item.status, value: item.value, detail: item.detail })),
+    [
+      {
+        key: "gateway",
+        status: "info",
+        value: "loading",
+        detail: "Gateway status is still loading",
+      },
+      {
+        key: "config",
+        status: "info",
+        value: "loading",
+        detail: "Config status is still loading",
+      },
+      {
+        key: "runtime",
+        status: "ok",
+        value: "10",
+        detail: "10 sessions visible across 1 agent",
+      },
+    ],
+  );
+});
+
 test("summarizeOpenClawSecurity keeps counts and remediation", () => {
   const summary = summarizeOpenClawSecurity({
     summary: { critical: 1, warn: 2, info: 1 },

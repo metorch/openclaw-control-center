@@ -23,12 +23,22 @@ export interface UiPreferencesTaskFilters {
   project?: string;
 }
 
+export interface UiPreferencesCollaborationChat {
+  expanded: boolean;
+  autoRefresh: boolean;
+  activeRoomId: string;
+  lastReadSequence: number;
+  roomReadCursors: Record<string, number>;
+}
+
 export interface UiPreferences {
   language: UiLanguage;
   compactStatusStrip: boolean;
   quickFilter: UiQuickFilter;
   taskFilters: UiPreferencesTaskFilters;
   taskCardOrder: string[];
+  localMutationUnlock: boolean;
+  collaborationChat: UiPreferencesCollaborationChat;
   updatedAt: string;
 }
 
@@ -45,6 +55,16 @@ export function defaultUiPreferences(now = new Date().toISOString()): UiPreferen
     quickFilter: "all",
     taskFilters: {},
     taskCardOrder: [],
+    localMutationUnlock: false,
+    collaborationChat: {
+      expanded: false,
+      autoRefresh: true,
+      activeRoomId: "global",
+      lastReadSequence: 0,
+      roomReadCursors: {
+        global: 0,
+      },
+    },
     updatedAt: now,
   };
 }
@@ -148,6 +168,8 @@ function normalizeUiPreferences(input: unknown): { preferences: UiPreferences; i
     taskFilters.status = quickFilter;
   }
   const taskCardOrder = normalizeTaskCardOrder(obj.taskCardOrder, issues);
+  const localMutationUnlock = normalizeLocalMutationUnlock(obj.localMutationUnlock, issues);
+  const collaborationChat = normalizeCollaborationChat(obj.collaborationChat, issues);
 
   let updatedAt = now;
   if (typeof obj.updatedAt === "string" && !Number.isNaN(Date.parse(obj.updatedAt))) {
@@ -163,6 +185,8 @@ function normalizeUiPreferences(input: unknown): { preferences: UiPreferences; i
         quickFilter,
         taskFilters,
         taskCardOrder,
+        localMutationUnlock,
+        collaborationChat,
         updatedAt,
       },
     issues,
@@ -204,6 +228,98 @@ function normalizeTaskFilters(
   return out;
 }
 
+function normalizeCollaborationChat(
+  input: unknown,
+  issues: string[],
+): UiPreferencesCollaborationChat {
+  const base = defaultUiPreferences().collaborationChat;
+  if (input === undefined) return base;
+
+  const obj = asObject(input);
+  if (!obj) {
+    issues.push("collaborationChat must be an object");
+    return base;
+  }
+
+  let expanded = base.expanded;
+  if (obj.expanded !== undefined) {
+    if (typeof obj.expanded === "boolean") {
+      expanded = obj.expanded;
+    } else {
+      issues.push("collaborationChat.expanded must be a boolean");
+    }
+  }
+
+  let autoRefresh = base.autoRefresh;
+  if (obj.autoRefresh !== undefined) {
+    if (typeof obj.autoRefresh === "boolean") {
+      autoRefresh = obj.autoRefresh;
+    } else {
+      issues.push("collaborationChat.autoRefresh must be a boolean");
+    }
+  }
+
+  let activeRoomId = base.activeRoomId;
+  if (obj.activeRoomId !== undefined) {
+    if (typeof obj.activeRoomId === "string" && obj.activeRoomId.trim() !== "") {
+      activeRoomId = obj.activeRoomId.trim().slice(0, 120);
+    } else {
+      issues.push("collaborationChat.activeRoomId must be a non-empty string");
+    }
+  }
+
+  let lastReadSequence = base.lastReadSequence;
+  if (obj.lastReadSequence !== undefined) {
+    if (typeof obj.lastReadSequence === "number" && Number.isInteger(obj.lastReadSequence) && obj.lastReadSequence >= 0) {
+      lastReadSequence = obj.lastReadSequence;
+    } else {
+      issues.push("collaborationChat.lastReadSequence must be a non-negative integer");
+    }
+  }
+
+  const roomReadCursors = normalizeRoomReadCursors(obj.roomReadCursors, issues, activeRoomId, lastReadSequence);
+  if (!(activeRoomId in roomReadCursors)) {
+    roomReadCursors[activeRoomId] = lastReadSequence;
+  }
+
+  return {
+    expanded,
+    autoRefresh,
+    activeRoomId,
+    lastReadSequence,
+    roomReadCursors,
+  };
+}
+
+function normalizeRoomReadCursors(
+  input: unknown,
+  issues: string[],
+  activeRoomId: string,
+  lastReadSequence: number,
+): Record<string, number> {
+  const out: Record<string, number> = {
+    [activeRoomId]: lastReadSequence,
+  };
+  if (input === undefined) return out;
+  const obj = asObject(input);
+  if (!obj) {
+    issues.push("collaborationChat.roomReadCursors must be an object");
+    return out;
+  }
+
+  for (const [key, value] of Object.entries(obj)) {
+    const roomId = key.trim();
+    if (!roomId) continue;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+      issues.push(`collaborationChat.roomReadCursors.${roomId} must be a non-negative integer`);
+      continue;
+    }
+    out[roomId.slice(0, 120)] = value;
+  }
+
+  return out;
+}
+
 function normalizeTaskCardOrder(input: unknown, issues: string[]): string[] {
   if (input === undefined) return [];
   if (!Array.isArray(input)) {
@@ -240,6 +356,16 @@ function normalizeTaskCardOrder(input: unknown, issues: string[]): string[] {
   }
 
   return out;
+}
+
+function normalizeLocalMutationUnlock(input: unknown, issues: string[]): boolean {
+  const defaults = defaultUiPreferences().localMutationUnlock;
+  if (input === undefined) return defaults;
+  if (typeof input !== "boolean") {
+    issues.push("localMutationUnlock must be a boolean");
+    return defaults;
+  }
+  return input;
 }
 
 function normalizeOptionalString(

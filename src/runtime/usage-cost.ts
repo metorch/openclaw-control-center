@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME } from "./operator-display";
 import type { AgentRunState, ReadModelSnapshot } from "../types";
 
 const RUNTIME_DIR = join(process.cwd(), "runtime");
@@ -31,6 +32,7 @@ const SUBSCRIPTION_SNAPSHOT_PATHS = [
 const RUNTIME_USAGE_EVENTS_CONNECTOR_PATH = join(OPENCLAW_AGENTS_DIR, "*", "sessions", "*.jsonl");
 const RUNTIME_SESSION_INDEX_CONNECTOR_PATH = join(OPENCLAW_AGENTS_DIR, "*", "sessions", "sessions.json");
 const SUBSCRIPTION_BUDGET_FALLBACK_SOURCE = "snapshot budgetSummary (30d cost limit)";
+const PRIMARY_INTERNAL_SESSION_LABEL = `${DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME}/内部会话` as const;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CONTEXT_WARN_RATIO = 0.7;
@@ -1287,7 +1289,7 @@ function buildSessionTypeBreakdownFromSessionContexts(
   const uniqueSessions = dedupeSessionContexts(contexts);
   if (uniqueSessions.length === 0) return [];
 
-  const order = ["Cron", "Discord", "Telegram", "Main/内部会话"] as const;
+  const order = ["Cron", "Discord", "Telegram", PRIMARY_INTERNAL_SESSION_LABEL] as const;
   const buckets = new Map<string, UsageBreakdownRow>(
     order.map((label) => [
       label,
@@ -1322,7 +1324,7 @@ function buildSessionTypeBreakdownFromRuntimeEvents(
   sourceStatus: ConnectionStatus,
 ): UsageBreakdownRow[] {
   if (sourceStatus === "not_connected" || events.length === 0) return [];
-  const order = ["Cron", "Discord", "Telegram", "Main/内部会话"] as const;
+  const order = ["Cron", "Discord", "Telegram", PRIMARY_INTERNAL_SESSION_LABEL] as const;
   const buckets = new Map<string, UsageBreakdownRow>(
     order.map((label) => [
       label,
@@ -1520,7 +1522,9 @@ function dedupeSessionContexts(contexts: RuntimeSessionContext[]): RuntimeSessio
   return [...byIdentity.values()];
 }
 
-function classifySessionTypeLabel(context: RuntimeSessionContext): "Cron" | "Discord" | "Telegram" | "Main/内部会话" {
+function classifySessionTypeLabel(
+  context: RuntimeSessionContext,
+): "Cron" | "Discord" | "Telegram" | typeof PRIMARY_INTERNAL_SESSION_LABEL {
   const key = context.sessionKey.trim().toLowerCase();
   const channel = context.channel?.trim().toLowerCase() ?? "";
   const surface = context.surface?.trim().toLowerCase() ?? "";
@@ -1544,16 +1548,18 @@ function classifySessionTypeLabel(context: RuntimeSessionContext): "Cron" | "Dis
   ) {
     return "Telegram";
   }
-  return "Main/内部会话";
+  return PRIMARY_INTERNAL_SESSION_LABEL;
 }
 
-function classifySessionTypeFromSessionKey(sessionKey: string | undefined): "Cron" | "Discord" | "Telegram" | "Main/内部会话" {
+function classifySessionTypeFromSessionKey(
+  sessionKey: string | undefined,
+): "Cron" | "Discord" | "Telegram" | typeof PRIMARY_INTERNAL_SESSION_LABEL {
   const key = sessionKey?.trim().toLowerCase() ?? "";
-  if (!key) return "Main/内部会话";
+  if (!key) return PRIMARY_INTERNAL_SESSION_LABEL;
   if (key.includes(":cron:") || key.startsWith("cron:")) return "Cron";
   if (key.includes(":discord:") || key.startsWith("discord:")) return "Discord";
   if (key.includes(":telegram:") || key.startsWith("telegram:")) return "Telegram";
-  return "Main/内部会话";
+  return PRIMARY_INTERNAL_SESSION_LABEL;
 }
 
 function parseCronJobIdFromSessionKey(sessionKey: string): string | undefined {

@@ -12,6 +12,7 @@ import type {
   TaskStoreSnapshot,
 } from "../types";
 import { DEFAULT_BUDGET_POLICY } from "./budget-policy";
+import { DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME, humanizeOperatorDisplayName, isPrimaryOperatorAgentId } from "./operator-display";
 
 const DEFAULT_WARN_RATIO = 0.8;
 
@@ -27,7 +28,8 @@ export function computeBudgetSummary(
   const agentBySessionKey = buildAgentMap(sessions);
   const projectById = new Map(projects.projects.map((project) => [project.projectId, project]));
 
-  for (const agentBudget of tasks.agentBudgets) {
+  const agentPlans = buildAgentBudgetPlans(tasks, policy);
+  for (const agentBudget of agentPlans) {
     const keys: string[] = [];
     for (const [sessionKey, agentId] of agentBySessionKey.entries()) {
       if (agentId === agentBudget.agentId) keys.push(sessionKey);
@@ -38,7 +40,7 @@ export function computeBudgetSummary(
         "agent",
         agentBudget.agentId,
         agentBudget.label ?? agentBudget.agentId,
-        resolveThresholds("agent", agentBudget.agentId, agentBudget.thresholds, policy),
+        resolveThresholds("agent", agentBudget.agentId, agentBudget.thresholds ?? {}, policy),
         aggregateUsage(statusBySessionKey, keys),
       ),
     );
@@ -100,9 +102,36 @@ function buildAgentMap(sessions: SessionSummary[]): Map<string, string> {
   const map = new Map<string, string>();
   for (const session of sessions) {
     if (!session.agentId) continue;
-    map.set(session.sessionKey, session.agentId);
+    map.set(session.sessionKey, canonicalizeAgentScopeId(session.agentId));
   }
   return map;
+}
+
+function buildAgentBudgetPlans(
+  tasks: TaskStoreSnapshot,
+  policy: BudgetPolicyConfig,
+): Array<{ agentId: string; label?: string; thresholds: BudgetThresholds }> {
+  const plans = new Map<string, { agentId: string; label?: string; thresholds: BudgetThresholds }>();
+
+  const ensurePlan = (rawAgentId: string, label?: string, thresholds: BudgetThresholds = {}): void => {
+    const agentId = canonicalizeAgentScopeId(rawAgentId);
+    if (!agentId) return;
+    const existing = plans.get(agentId);
+    plans.set(agentId, {
+      agentId,
+      label: existing?.label ?? label ?? defaultAgentBudgetLabel(agentId),
+      thresholds: existing?.thresholds ?? thresholds,
+    });
+  };
+
+  for (const agentBudget of tasks.agentBudgets) {
+    ensurePlan(agentBudget.agentId, agentBudget.label, agentBudget.thresholds);
+  }
+  for (const agentId of Object.keys(policy.agent)) {
+    ensurePlan(agentId);
+  }
+
+  return [...plans.values()].sort((a, b) => a.agentId.localeCompare(b.agentId, "en"));
 }
 
 function aggregateUsage(
@@ -159,7 +188,7 @@ function resolveThresholds(
 ): BudgetThresholds {
   const scopeOverrides =
     scope === "agent"
-      ? policy.agent[scopeId]
+      ? resolveAgentPolicyThresholds(scopeId, policy)
       : scope === "project"
         ? policy.project[scopeId]
         : scope === "task"
@@ -171,6 +200,39 @@ function resolveThresholds(
     ...scopeOverrides,
     ...raw,
   });
+}
+
+function resolveAgentPolicyThresholds(scopeId: string, policy: BudgetPolicyConfig): BudgetThresholds | undefined {
+  const keys = agentPolicyLookupOrder(scopeId);
+  if (keys.length === 0) return undefined;
+  let merged: BudgetThresholds | undefined;
+  for (const key of keys) {
+    const thresholds = policy.agent[key];
+    if (!thresholds) continue;
+    merged = {
+      ...(merged ?? {}),
+      ...thresholds,
+    };
+  }
+  return merged;
+}
+
+function agentPolicyLookupOrder(scopeId: string): string[] {
+  const canonical = canonicalizeAgentScopeId(scopeId);
+  if (!canonical) return [];
+  if (!isPrimaryOperatorAgentId(canonical)) return [canonical];
+  return ["jarvis", "main"];
+}
+
+function canonicalizeAgentScopeId(value: string | undefined): string {
+  const trimmed = String(value || "").trim().toLowerCase();
+  if (!trimmed) return "";
+  return isPrimaryOperatorAgentId(trimmed) ? "main" : trimmed;
+}
+
+function defaultAgentBudgetLabel(agentId: string): string {
+  if (isPrimaryOperatorAgentId(agentId)) return DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME;
+  return humanizeOperatorDisplayName(agentId) ?? agentId;
 }
 
 function addMetric(

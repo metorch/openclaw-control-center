@@ -104,8 +104,8 @@ test("office session presence parses array-shaped stores with acp state", async 
   }
 });
 
-test("office session presence auto-expands recency window when initial pass is all-zero", async () => {
-  const home = await mkdtemp(join(tmpdir(), "control-center-office-presence-fallback-"));
+test("office session presence keeps stale recency-only sessions inactive", async () => {
+  const home = await mkdtemp(join(tmpdir(), "control-center-office-presence-stale-"));
   const originalHome = process.env.OPENCLAW_HOME;
 
   try {
@@ -134,9 +134,140 @@ test("office session presence auto-expands recency window when initial pass is a
     const snapshot = await loadBestEffortOfficeSessionPresence();
 
     assert.equal(snapshot.status, "connected");
+    assert.equal(snapshot.totalActiveSessions, 0);
+    assert.equal(snapshot.activeSessionsByAgent.has("main"), false);
+    assert.equal(snapshot.detail.includes("Window auto-expanded"), false);
+  } finally {
+    if (originalHome === undefined) delete process.env.OPENCLAW_HOME;
+    else process.env.OPENCLAW_HOME = originalHome;
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("office session presence ignores recency-only transcript-backed sessions", async () => {
+  const home = await mkdtemp(join(tmpdir(), "control-center-office-presence-transcript-"));
+  const originalHome = process.env.OPENCLAW_HOME;
+
+  try {
+    const sessionsDir = join(home, "agents", "main", "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    const nowIso = new Date().toISOString();
+    await writeFile(
+      join(sessionsDir, "sessions.json"),
+      JSON.stringify(
+        {
+          sessions: {
+            "agent:main:main": {
+              sessionId: "session-1",
+              sessionKey: "agent:main:main",
+              updatedAt: nowIso,
+              sessionFile: join(sessionsDir, "room.jsonl"),
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    process.env.OPENCLAW_HOME = home;
+    const { loadBestEffortOfficeSessionPresence } = await import("../src/runtime/office-session-presence");
+    const snapshot = await loadBestEffortOfficeSessionPresence();
+
+    assert.equal(snapshot.status, "connected");
+    assert.equal(snapshot.totalActiveSessions, 0);
+    assert.equal(snapshot.activeSessionsByAgent.has("main"), false);
+  } finally {
+    if (originalHome === undefined) delete process.env.OPENCLAW_HOME;
+    else process.env.OPENCLAW_HOME = originalHome;
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("office session presence still honors explicit running webchat sessions", async () => {
+  const home = await mkdtemp(join(tmpdir(), "control-center-office-presence-webchat-running-"));
+  const originalHome = process.env.OPENCLAW_HOME;
+
+  try {
+    const sessionsDir = join(home, "agents", "main", "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    const nowIso = new Date().toISOString();
+    await writeFile(
+      join(sessionsDir, "sessions.json"),
+      JSON.stringify(
+        {
+          sessions: {
+            "agent:main:main": {
+              sessionId: "session-1",
+              sessionKey: "agent:main:main",
+              updatedAt: nowIso,
+              state: "running",
+              sessionFile: join(sessionsDir, "room.jsonl"),
+              chatType: "direct",
+              lastChannel: "webchat",
+              origin: {
+                provider: "webchat",
+                surface: "webchat",
+                chatType: "direct",
+              },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    process.env.OPENCLAW_HOME = home;
+    const { loadBestEffortOfficeSessionPresence } = await import("../src/runtime/office-session-presence");
+    const snapshot = await loadBestEffortOfficeSessionPresence();
+
+    assert.equal(snapshot.status, "connected");
     assert.equal(snapshot.totalActiveSessions, 1);
     assert.equal(snapshot.activeSessionsByAgent.get("main"), 1);
-    assert(snapshot.detail.includes("Window auto-expanded"), "Expected adaptive fallback detail in snapshot.");
+  } finally {
+    if (originalHome === undefined) delete process.env.OPENCLAW_HOME;
+    else process.env.OPENCLAW_HOME = originalHome;
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("office session presence ignores stale subagent transcript bindings without explicit active state", async () => {
+  const home = await mkdtemp(join(tmpdir(), "control-center-office-presence-subagent-"));
+  const originalHome = process.env.OPENCLAW_HOME;
+
+  try {
+    const sessionsDir = join(home, "agents", "architect", "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    const updatedAtIso = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    await writeFile(
+      join(sessionsDir, "sessions.json"),
+      JSON.stringify(
+        {
+          sessions: {
+            "agent:architect:main": {
+              sessionId: "session-1",
+              sessionKey: "agent:architect:main",
+              updatedAt: updatedAtIso,
+              sessionFile: join(sessionsDir, "architect.jsonl"),
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    process.env.OPENCLAW_HOME = home;
+    const { loadBestEffortOfficeSessionPresence } = await import("../src/runtime/office-session-presence");
+    const snapshot = await loadBestEffortOfficeSessionPresence();
+
+    assert.equal(snapshot.status, "connected");
+    assert.equal(snapshot.totalActiveSessions, 0);
+    assert.equal(snapshot.activeSessionsByAgent.has("architect"), false);
   } finally {
     if (originalHome === undefined) delete process.env.OPENCLAW_HOME;
     else process.env.OPENCLAW_HOME = originalHome;

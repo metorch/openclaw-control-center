@@ -1,4 +1,6 @@
 import type {
+  AgentTurnRequest,
+  AgentTurnResponse,
   ApprovalsActionResponse,
   ApprovalsApproveRequest,
   ApprovalsGetResponse,
@@ -19,6 +21,7 @@ export interface ToolClient {
   approvalsGet(): Promise<ApprovalsGetResponse>;
   approvalsApprove(request: ApprovalsApproveRequest): Promise<ApprovalsActionResponse>;
   approvalsReject(request: ApprovalsRejectRequest): Promise<ApprovalsActionResponse>;
+  agentTurn(request: AgentTurnRequest): Promise<AgentTurnResponse>;
 }
 
 export class ReadonlyToolClient implements ToolClient {
@@ -75,6 +78,17 @@ export class ReadonlyToolClient implements ToolClient {
       approvalId: request.approvalId,
       reason: request.reason,
       rawText: "readonly client has no reject capability",
+    };
+  }
+
+  async agentTurn(request: AgentTurnRequest): Promise<AgentTurnResponse> {
+    return {
+      ok: false,
+      agentId: request.agentId,
+      replyText: "",
+      durationMs: 0,
+      rawText: "readonly client has no agent turn capability",
+      failureReason: "readonly client has no agent turn capability",
     };
   }
 }

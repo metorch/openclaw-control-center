@@ -61,7 +61,8 @@ test("usage-cost snapshot uses runtime session events for real requests, trends,
     costLimit: 50,
   });
 
-  const now = Date.now();
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const now = Date.parse(`${todayIso}T12:00:00.000Z`);
   const usage = computeUsageCostSnapshot(snapshot, [], [], {
     sourceStatus: "connected",
     sessionContexts: [
@@ -106,7 +107,7 @@ test("usage-cost snapshot uses runtime session events for real requests, trends,
   assert.equal(usage.breakdownToday.byAgent[0]?.tokens, 3000);
   assert.equal(usage.breakdownToday.byAgent[0]?.requests, 2);
   assert.equal(usage.breakdownToday.byTask[0]?.tokens, 3000);
-  assert.equal(usage.breakdownToday.bySessionType[0]?.label, "Main/内部会话");
+  assert(usage.breakdownToday.bySessionType[0]?.label?.startsWith("Jarvis/"));
   assert.equal(usage.connectors.requestCounts, "connected");
   assert(!usage.connectors.todos.some((item) => item.id === "request_counter"));
   assert(!usage.connectors.todos.some((item) => item.id === "context_catalog"));
@@ -307,7 +308,7 @@ test("usage-cost snapshot reports session-type share and cron-job share from ded
   assert.equal(byType.find((item) => item.label === "Cron")?.tokens, 1000);
   assert.equal(byType.find((item) => item.label === "Discord")?.tokens, 100);
   assert.equal(byType.find((item) => item.label === "Telegram")?.tokens, 50);
-  assert.equal(byType.find((item) => item.label === "Main/内部会话")?.tokens, 25);
+  assert.equal(byType.find((item) => item.label.startsWith("Jarvis/"))?.tokens, 25);
 
   const cronTop = usage.breakdown.byCronJob[0];
   assert(cronTop);

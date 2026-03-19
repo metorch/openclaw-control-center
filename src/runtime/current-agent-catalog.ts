@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { humanizeOperatorDisplayName } from "./operator-display";
 import { compareAgentHierarchy } from "./team-hierarchy";
 
 export type CurrentAgentCatalogStatus = "connected" | "partial" | "not_connected";
@@ -16,6 +17,8 @@ export interface CurrentAgentCatalog {
   sourcePath: string;
   detail: string;
   entries: CurrentAgentCatalogEntry[];
+  primaryAgentId?: string;
+  primaryDisplayName?: string;
 }
 
 export async function loadCurrentAgentCatalog(): Promise<CurrentAgentCatalog> {
@@ -40,20 +43,25 @@ export async function loadCurrentAgentCatalog(): Promise<CurrentAgentCatalog> {
       merged.set(key, {
         agentId,
         displayName:
-          asString(obj.name)?.trim() ||
-          asString(identity?.name)?.trim() ||
-          agentId,
+          humanizeOperatorDisplayName(
+            asString(obj.name)?.trim() ||
+              asString(identity?.name)?.trim() ||
+              agentId,
+          ) || agentId,
         workspace: workspace && workspace.length > 0 ? workspace : undefined,
       });
     }
 
     const entries = [...merged.values()].sort((a, b) => compareAgentHierarchy(a.agentId, b.agentId));
+    const primary = resolvePrimaryAgentEntry(entries);
     if (entries.length === 0) {
       return {
         status: "partial",
         sourcePath,
         detail: "openclaw.json found but agents.list is empty.",
         entries: [],
+        primaryAgentId: undefined,
+        primaryDisplayName: undefined,
       };
     }
 
@@ -62,6 +70,8 @@ export async function loadCurrentAgentCatalog(): Promise<CurrentAgentCatalog> {
       sourcePath,
       detail: `loaded ${entries.length} current agent(s) from openclaw.json.`,
       entries,
+      primaryAgentId: primary?.agentId,
+      primaryDisplayName: primary?.displayName,
     };
   } catch (error) {
     if (isFsNotFound(error)) {
@@ -70,6 +80,8 @@ export async function loadCurrentAgentCatalog(): Promise<CurrentAgentCatalog> {
         sourcePath,
         detail: "openclaw.json not found.",
         entries: [],
+        primaryAgentId: undefined,
+        primaryDisplayName: undefined,
       };
     }
     return {
@@ -77,6 +89,8 @@ export async function loadCurrentAgentCatalog(): Promise<CurrentAgentCatalog> {
       sourcePath,
       detail: "openclaw.json exists but could not be parsed.",
       entries: [],
+      primaryAgentId: undefined,
+      primaryDisplayName: undefined,
     };
   }
 }
@@ -103,6 +117,20 @@ function isFsNotFound(error: unknown): boolean {
 
 function normalizeKey(input: string): string {
   return input.trim().toLowerCase();
+}
+
+function resolvePrimaryAgentEntry(
+  entries: CurrentAgentCatalogEntry[],
+): CurrentAgentCatalogEntry | undefined {
+  if (entries.length === 0) return undefined;
+  return (
+    entries.find((entry) => {
+      const key = normalizeKey(entry.agentId);
+      return key === "main" || key === "jarvis";
+    }) ??
+    entries.find((entry) => normalizeKey(entry.displayName) === "jarvis") ??
+    entries[0]
+  );
 }
 
 function asObject(input: unknown): Record<string, unknown> | undefined {

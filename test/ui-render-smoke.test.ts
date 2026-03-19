@@ -179,6 +179,164 @@ test("legacy mission-control routes resolve to dashboard sections", async () => 
   assert.equal(resolveDashboardSection(new URLSearchParams("section=replay-audit")), "overview");
 });
 
+test("collaboration chat overlay exposes inline image preview and save actions", async () => {
+  const { renderCollaborationChatOverlay } = await import("../src/ui/collaboration-chat-widget");
+
+  const html = renderCollaborationChatOverlay({
+    language: "en",
+    preferences: {
+      expanded: true,
+      autoRefresh: true,
+      lastReadSequence: 7,
+    },
+    primaryAgentId: "jarvis",
+    primaryDisplayName: "Jarvis",
+    participants: [
+      {
+        agentId: "jarvis",
+        displayName: "Jarvis",
+        aliases: ["main", "jarvis"],
+        mention: "jarvis",
+        primary: true,
+        statusTone: "working",
+        statusDotLabel: "Working",
+        currentWorkLabel: "Working on",
+        currentWork: "Reviewing handoff notes",
+        recentOutput: "Summarized the latest delivery notes.",
+        identity: {
+          accent: "#0f62fe",
+          imageHref: "/avatars/jarvis.png",
+        },
+      },
+    ],
+    writeAccessEnabled: true,
+    writeAccessAvailable: true,
+  });
+
+  assert(html.includes('data-collab-chat'));
+  assert(html.includes('"save":"Save"'));
+  assert(html.includes('data-collab-chat-roster'));
+  assert(html.includes('data-collab-chat-unread hidden'));
+  assert(html.includes('data-collab-chat-panel-unread hidden'));
+  assert(html.includes('data-collab-room-trigger'));
+  assert(html.includes('data-collab-room-trigger-title'));
+  assert(html.includes('data-collab-room-trigger-meta'));
+  assert(html.includes('class="collab-chat-input-shell"'));
+  assert(html.includes('.collab-chat-empty[hidden]'));
+  assert(html.includes('.collab-chat-launcher-unread[hidden]'));
+  assert(html.includes('data-collab-chat-person-card'));
+  assert(html.includes('data-person-agent="jarvis"'));
+  assert(html.includes('collab-chat-avatar-state working'));
+  assert(html.includes('"mention":"jarvis"'));
+  assert(html.includes('pendingScrollToLatestRoomId'));
+  assert(html.includes('scrollEventsToBottom'));
+  assert(html.includes('eventsList.scrollTop = eventsList.scrollHeight'));
+  assert(html.includes('data-collab-chat-tool-event'));
+  assert(html.includes('collab-chat-event-fold-summary'));
+  assert(html.includes('Show tool details'));
+  assert(html.includes("attachment.kind === 'image'"));
+  assert(html.includes("attachment.sourceLocalPath"));
+  assert(html.includes("data-save-attachment"));
+  assert(html.includes("showSaveFilePicker"));
+  assert(!html.includes('data-collab-chat-people'));
+});
+
+test("collaboration room merge keeps transcript updates without reintroducing relay prompts", async () => {
+  const { mergeCollaborationRoomApiEventsForSmoke } = await import("../src/ui/server");
+
+  const merged = mergeCollaborationRoomApiEventsForSmoke({
+    lastLocalSequence: 2,
+    localEvents: [
+      {
+        sequence: 1,
+        eventId: "local-user",
+        type: "user_message",
+        createdAt: "2026-03-16T12:00:00.000Z",
+        authorRole: "user",
+        label: "User message",
+        message: "@Jarvis sync this room",
+        detail: "Jarvis",
+        targetAgentIds: ["jarvis"],
+        targetDisplayNames: ["Jarvis"],
+        attachmentIds: [],
+        attachments: [],
+      },
+      {
+        sequence: 2,
+        eventId: "local-reply",
+        type: "agent_reply",
+        createdAt: "2026-03-16T12:00:05.000Z",
+        authorRole: "agent",
+        agentId: "jarvis",
+        agentDisplayName: "Jarvis",
+        label: "Jarvis replied",
+        message: "Done. The room is synced.",
+        detail: "Jarvis replied in 5s.",
+        targetAgentIds: [],
+        targetDisplayNames: [],
+        attachmentIds: [],
+        attachments: [],
+      },
+    ],
+    transcriptEvents: [
+      {
+        sequence: 1,
+        eventId: "transcript-prompt",
+        type: "user_message",
+        createdAt: "2026-03-16T12:00:01.000Z",
+        authorRole: "user",
+        label: "User message",
+        message:
+          "You are Jarvis in the OpenClaw collaboration room. Primary controller: Jarvis (main). Current user message: @Jarvis sync this room",
+        detail: "",
+        targetAgentIds: [],
+        targetDisplayNames: [],
+        attachmentIds: [],
+        attachments: [],
+      },
+      {
+        sequence: 2,
+        eventId: "transcript-duplicate-reply",
+        type: "agent_reply",
+        createdAt: "2026-03-16T12:00:06.000Z",
+        authorRole: "agent",
+        agentId: "jarvis",
+        agentDisplayName: "Jarvis",
+        label: "Jarvis replied",
+        message: "Done. The room is synced.",
+        detail: "",
+        targetAgentIds: [],
+        targetDisplayNames: [],
+        attachmentIds: [],
+        attachments: [],
+      },
+      {
+        sequence: 3,
+        eventId: "transcript-follow-up",
+        type: "agent_reply",
+        createdAt: "2026-03-16T12:00:09.000Z",
+        authorRole: "agent",
+        agentId: "jarvis",
+        agentDisplayName: "Jarvis",
+        label: "Jarvis replied",
+        message: "Latest OpenClaw transcript entry arrived after the room event.",
+        detail: "",
+        targetAgentIds: [],
+        targetDisplayNames: [],
+        attachmentIds: [],
+        attachments: [],
+      },
+    ],
+  });
+
+  assert.equal(merged.length, 3);
+  assert.deepEqual(
+    merged.map((event) => event.eventId),
+    ["local-user", "local-reply", "transcript-follow-up"],
+  );
+  assert.equal(merged[2]?.sequence, 3);
+});
+
 test("session activity timestamp prefers the fresher runtime signal over older history", async () => {
   const { pickLatestSessionActivityTimestampForSmoke } = await import("../src/ui/server");
 
@@ -247,8 +405,8 @@ test("tasks section centers the merged task-and-schedule card wall before second
   assert(source.includes('label: "关键写入保护"'));
   assert(source.includes('label: "安全口令配置"'));
   assert(source.includes('label: "当前保护状态"'));
-  assert(source.includes("Enter the safety passcode before saving board order."));
-  assert(source.includes("保存看板顺序前请先输入安全口令。"));
+  assert(source.includes("Write access is off. Turn on the top toolbar unlock before saving board order."));
+  assert(source.includes("写入解锁已关闭，请先在顶部工具栏开启后再保存看板顺序。"));
   assert(source.includes('<label for="owner">${escapeHtml(t("Agent", "员工"))}</label>'));
   assert(source.includes('<label for="project">${escapeHtml(t("Project", "项目"))}</label>'));
   assert(source.includes('class="meta task-top-intro"'));
@@ -278,7 +436,8 @@ test("collaboration section is a standalone dashboard page with inline thread ex
   assert(source.includes('t("Collaboration threads", "协作线程")'));
   assert(source.includes('data-collab-root'));
   assert(source.includes('data-collab-filter="multi-agent"'));
-  assert(source.includes('data-collab-filter="main-dispatched"'));
+  assert(source.includes('data-collab-filter="primary-dispatched"'));
+  assert(!source.includes('data-collab-filter="main-dispatched"'));
   assert(source.includes('collaboration-route-avatars'));
   assert(source.includes('collaboration-participant-label'));
   assert(source.includes('collaboration-thread-card'));
@@ -290,20 +449,80 @@ test("collaboration section is a standalone dashboard page with inline thread ex
   assert(source.includes('pickUiText(input.language, "Parent accepted work", "父会话接到任务")'));
   assert(source.includes('pickUiText(input.language, "Parent opened child session", "父会话发起子会话")'));
   assert(source.includes('pickUiText(input.language, "Child session reply", "子会话最近回复")'));
-  assert(source.includes('renderCollaborationThreadCards(collaborationThreadCards, options.language)'));
+  assert(source.includes('attachCollaborationRoomRefsToCards(collaborationThreadCards, collaborationRoomStates, options.language)'));
+  assert(source.includes('renderCollaborationThreadCards(collaborationThreadCardsWithRoomRefs, options.language)'));
   assert(source.includes("renderAgentAvatarFrame({"));
   assert(source.includes('extraClassName: `collaboration-avatar${participant.current ? " is-current" : ""}`'));
   assert(source.includes(".collaboration-avatar.has-photo .agent-photo-image {"));
   assert(source.includes("object-position: center 34%;"));
   assert(source.includes('if (options.section === "collaboration") sectionBody = collaborationSection;'));
   assert(!source.includes('当前还没有看到跨智能体协作'));
+  assert(!source.includes("Showing collaboration dispatched by Main"));
+});
+
+test("collaboration chat widget renders real avatar images when provided", async () => {
+  const { renderCollaborationChatOverlay } = await import("../src/ui/collaboration-chat-widget");
+
+  const html = renderCollaborationChatOverlay({
+    language: "zh",
+    preferences: {
+      expanded: true,
+      autoRefresh: true,
+      lastReadSequence: 3,
+    },
+    primaryAgentId: "jarvis",
+    primaryDisplayName: "Jarvis",
+    writeAccessEnabled: true,
+    writeAccessAvailable: true,
+    participants: [
+      {
+        agentId: "jarvis",
+        displayName: "Jarvis",
+        aliases: ["jarvis"],
+        primary: true,
+        statusTone: "idle",
+        statusDotLabel: "空闲",
+        currentWorkLabel: "正在处理什么",
+        currentWork: "当前无实时任务",
+        recentOutput: "最近暂无产出。",
+        identity: {
+          accent: "#0f62fe",
+          imageHref: "/avatars/jarvis.png",
+        },
+      },
+    ],
+  });
+
+  assert(html.includes('class="collab-chat-avatar has-photo"'));
+  assert(html.includes('class="collab-chat-avatar-image" src="/avatars/jarvis.png"'));
+  assert(html.includes("collab-chat-person-label"));
+  assert(html.includes('data-collab-chat-roster'));
+  assert(html.includes('data-collab-room-trigger'));
+  assert(html.includes('data-collab-room-trigger-title'));
+  assert(html.includes('data-collab-room-trigger-meta'));
+  assert(html.includes('class="collab-chat-input-shell"'));
+  assert(html.includes('data-collab-chat-person-card'));
+  assert(html.includes('data-person-agent="jarvis"'));
+  assert(html.includes('collab-chat-avatar-state idle'));
+  assert(html.includes("collab-chat-event-headline"));
+  assert(html.includes('data-write-enabled="1"'));
+  assert(html.includes('data-write-available="1"'));
+  assert(!html.includes('data-collab-chat-people'));
+});
+
+test("editable file workbench keeps shared files visible under each facet", async () => {
+  const source = await readFile("src/ui/server-editable-files.ts", "utf8");
+
+  assert(source.includes('const key = `${entry.facetKey ?? ""}::${resolve(entry.sourcePath)}`;'));
 });
 
 test("dashboard renders manual refresh and auto refresh controls with edit guards", async () => {
   const source = await readFile("src/ui/server.ts", "utf8");
+  const dashboardRuntimeSource = await readFile("src/ui/server-dashboard-runtime.ts", "utf8");
   assert(source.includes('data-dashboard-refresh-root'));
   assert(source.includes('data-dashboard-refresh-now'));
   assert(source.includes('data-dashboard-auto-refresh-toggle'));
+  assert(source.includes('data-dashboard-mutation-toggle'));
   assert(source.includes('data-dashboard-auto-refresh-interval'));
   assert(source.includes('data-dashboard-refresh-status'));
   assert(source.includes("const dashboardRefreshGeneratedAt ="));
@@ -312,14 +531,26 @@ test("dashboard renders manual refresh and auto refresh controls with edit guard
   assert(source.includes('data-refresh-generated-at="${escapeHtml(dashboardRefreshGeneratedAt ?? "")}"'));
   assert(source.includes("openclaw:dashboard-refresh:v1"));
   assert(source.includes("window.__openclawSetRefreshGuard = setRefreshGuard;"));
+  assert(source.includes("window.__openclawGetMutationAuthState = getMutationAuthState;"));
+  assert(source.includes("window.__openclawGetMutationAuthHeaders = getMutationAuthHeaders;"));
   assert(source.includes("'doc-preview'"));
   assert(source.includes("'file-editor:' + scope"));
   assert(source.includes("'staff-model:' + agentId"));
   assert(source.includes('const refreshEndpoint = \'/api/dashboard/refresh\';'));
+  assert(source.includes('const preferencesEndpoint = \'/api/ui/preferences\';'));
   assert(source.includes("await window.fetch(refreshEndpoint, {"));
   assert(source.includes("if (method === \"POST\" && path === \"/api/dashboard/refresh\") {"));
   assert(source.includes("async function refreshDashboardSources(toolClient: ToolClient): Promise<DashboardRefreshResult> {"));
-  assert(source.includes("invalidateDashboardRefreshCaches();"));
+  assert(source.includes('const { createDashboardRuntimeHelpers } = require("./server-dashboard-runtime");'));
+  assert(source.includes("const dashboardRuntimeHelpers = createDashboardRuntimeHelpers({"));
+  assert(dashboardRuntimeSource.includes("const refresh = await refreshAgentTeamServeSessionSnapshot({ workspaceRoot });"));
+  assert(dashboardRuntimeSource.includes("invalidateDashboardRefreshCaches();"));
+  assert(
+    dashboardRuntimeSource.indexOf("const refresh = await refreshAgentTeamServeSessionSnapshot({ workspaceRoot });") <
+      dashboardRuntimeSource.indexOf("invalidateDashboardRefreshCaches();"),
+  );
+  assert(dashboardRuntimeSource.includes("const docHubSnapshot = await loadStructuredDocHubSnapshot(snapshot, toolClient);"));
+  assert(dashboardRuntimeSource.includes("agentTeamEmbed.runtime.updatedAt"));
   assert(source.includes("docsHubGeneratedAt"));
   assert(source.includes("docsHubEntryCount"));
   assert(source.includes("scopeLabels"));
@@ -441,7 +672,7 @@ test("execution chain cards keep raw JSON out of visible titles and summaries", 
   const source = await readFile("src/ui/server.ts", "utf8");
 
   const zh = renderTaskExecutionChainCardsForSmoke("zh");
-  assert(zh.includes("Main"));
+  assert(zh.includes("Jarvis"));
   assert(zh.includes("locked"));
   assert(zh.includes("30"));
   // assert(zh.includes("宸叉帴鍗?路 宸叉淳鍙?路 浼氳瘽閿帹鏂?路 鎺ㄦ柇鍊?));
@@ -461,6 +692,7 @@ test("execution chain cards keep raw JSON out of visible titles and summaries", 
 
 test("dashboard keeps global visibility as overview-only block", async () => {
   const source = await readFile("src/ui/server.ts", "utf8");
+  const readModelSource = await readFile("src/ui/server-read-model.ts", "utf8");
   const usageSource = await readFile("src/runtime/usage-cost.ts", "utf8");
   assert(source.includes('data-ui-polish="apple-native-v3"'));
   assert(source.includes("const globalVisibilityCard = renderGlobalVisibilityCard(globalVisibilityModel, options.language);"));
@@ -505,13 +737,17 @@ test("dashboard keeps global visibility as overview-only block", async () => {
   assert(source.includes("loadCachedUsageCost(snapshot, usageCostMode)"));
   assert(source.includes("loadCachedOfficeSessionPresence()"));
   assert(source.includes("loadCachedTaskEvidenceSessions("));
-  assert(source.includes("const taskSignalItems = mergeSessionConversationItems(taskEvidenceItems, sessionPreview.items);"));
+  assert(source.includes("const collaborationPreviewSessionKeys = new Set(collaborationPreview.items.map(item => item.sessionKey.trim()).filter(Boolean));"));
+  assert(source.includes("const taskSignalItems = needsCollaborationThreads ? collaborationPreview.items : mergeSessionConversationItems(taskEvidenceItems, sessionPreview.items);"));
+  assert(source.includes("const collaborationSessionKeys = needsCollaborationThreads ? collectCollaborationEvidenceSessionKeys(collaborationPreview.items) : [];"));
+  assert(source.includes("const collaborationEvidenceItems = needsCollaborationThreads && collaborationSessionKeys.length > 0 ? await loadCachedTaskEvidenceSessions(snapshot, toolClient, collaborationSessionKeys, 6) : [];"));
+  assert(source.includes("includeSnapshotUnmappedSessions: !needsCollaborationThreads"));
   assert(source.includes("const liveSessionCount = officePresence.totalActiveSessions;"));
   assert(source.includes("buildTaskDetailHref(task.taskId, input.language)"));
   assert(source.includes('const language = resolveUiLanguage(url.searchParams, "zh");'));
   assert(source.includes('buildUsageCostSnapshot(snapshot, mode)'));
   assert(source.includes('const needsSessionPreview ='));
-  assert(source.includes('activeSection === "overview" || activeSection === "collaboration";'));
+  assert(source.includes('activeSection === "projects-tasks" || activeSection === "overview";'));
   assert(source.includes("const allApprovals = [...(snapshot.approvals ?? [])].sort(compareApprovals);"));
   assert(source.includes('const pendingApprovalsCount = allApprovals.filter((item) => item.status === "pending").length;'));
   assert(source.includes("replayPreview.stats.timeline.total"));
@@ -521,8 +757,10 @@ test("dashboard keeps global visibility as overview-only block", async () => {
   assert(source.includes('route: "/audit"'));
   assert(source.includes('route: "/digest/latest"'));
   assert(source.includes("void primeUiRenderCaches(toolClient);"));
-  assert(source.includes("const sourceStamp = await readReadModelSourceStamp();"));
-  assert(source.includes("const sessions = mapSessionsListToSummaries(live);"));
+  assert(source.includes('const { createReadModelHelpers } = require("./server-read-model");'));
+  assert(source.includes("const readModelHelpers = createReadModelHelpers({"));
+  assert(readModelSource.includes("const sourceStamp = await readReadModelSourceStamp();"));
+  assert(readModelSource.includes("const sessions = mapSessionsListToSummaries(live);"));
   assert(!source.includes('state: item.active ? "running" : "idle"'));
   assert(usageSource.includes("const USAGE_SOURCE_CACHE_TTL_MS = 10_000;"));
   assert(usageSource.includes("loadCachedRuntimeUsageData()"));
@@ -589,11 +827,13 @@ test("dashboard wires CLI insight cards into overview, usage, memory, and settin
   assert(source.includes('pickUiText(language, "System environment status", "系统环境状态")'));
   assert(source.includes("renderSettingsEnvironmentStatusCard("));
   assert(source.includes("renderSettingsConfigAccessCard("));
+  assert(source.includes("settingsBudgetLimitCard"));
   assert(source.includes("renderSettingsConnectionPanel("));
   assert(source.includes("renderSettingsSecurityPanel("));
   assert(source.includes("renderSettingsUpdatePanel("));
   assert(normalizedSource.includes("const settingsSection = `\n    ${settingsEnvironmentStatusCard}"));
-  assert(normalizedSource.includes("${settingsConfigAccessCard}\n    <section class=\"card\">"));
+  assert(normalizedSource.includes("${settingsConfigAccessCard}"));
+  assert(!normalizedSource.includes("${settingsConfigAccessCard}\n    ${settingsBudgetLimitCard}\n    <section class=\"card\">"));
   assert(source.includes('id="session-context-pressure"'));
   assert(source.includes('pickUiText(language, "Context pressure", "上下文压力")'));
   assert(normalizedSource.includes("</section>\n    ${contextPressureCard}\n    <details class=\"card compact-details\">"));
@@ -609,6 +849,19 @@ test("dashboard wires CLI insight cards into overview, usage, memory, and settin
   assert(source.includes('pickUiText(language, "Update status", "更新状态")'));
   assert(source.includes('id="tool-connectors"'));
   assert(source.includes('t("System config and data access", "系统配置与数据接入")'));
+  assert(source.includes('id="settings-budget-limit"'));
+  assert(source.includes('data-budget-limit-root'));
+  assert(source.includes('renderSettingsBudgetLimitCard('));
+  assert(source.includes('"embedded"'));
+  assert(source.includes('settings-inline-budget'));
+  assert(source.includes('renderSettingsConfigAccessCard(\n    importGuardRows,\n    usageConnectorTodos,\n    settingsBudgetLimitCard,\n    options.language,'));
+  assert(source.includes("/api/settings/budget-limit"));
+  assert(source.includes('scope: "runtime"'));
+  assert(source.includes("agent.main.cost"));
+  assert(source.includes("data-budget-limit-input"));
+  assert(source.includes("data-budget-limit-save"));
+  assert(source.includes("data-budget-limit-clear"));
+  assert(!source.includes('高级预算 JSON 工作台'));
   assert(source.includes('t("Safety switches", "安全开关")'));
   assert(source.includes('t("Recommended data connections", "数据接入建议")'));
   assert(source.includes(".settings-status-grid {"));
@@ -616,15 +869,23 @@ test("dashboard wires CLI insight cards into overview, usage, memory, and settin
   assert(source.includes('if (label === "stable (default)") return "稳定版（默认）";'));
 });
 
-test("memory and workspace sections expose editable file workbenches", async () => {
+test("memory, workspace, and runtime sections expose editable file workbenches", async () => {
   const serverSource = (await readFile("src/ui/server.ts", "utf8")).replace(/\r\n/g, "\n");
   const docsHubSource = (await readFile("src/ui/docs-hub.ts", "utf8")).replace(/\r\n/g, "\n");
   const source = `${serverSource}\n${docsHubSource}`;
   assert(source.includes("/api/files"));
   assert(source.includes("/api/files/content"));
-  assert(source.includes("scope must be one of: memory, workspace"));
+  assert(source.includes('const EDITABLE_FILE_SCOPES = ["memory", "workspace", "runtime"] as const;'));
+  assert(source.includes("const EDITABLE_FILE_SCOPE_ERROR = `scope must be one of: ${EDITABLE_FILE_SCOPES.join(\", \")}`;"));
   assert(source.includes('title: t("Memory file workbench",'));
-  assert(source.includes('const mainMemoryFacetLabel = memoryFacetOptions.find((item) => item.key === "main")?.label ?? "Main";'));
+  assert(source.includes('buildRuntimeBudgetPolicyStarterContent()'));
+  assert(source.includes("renderSettingsBudgetLimitScript("));
+  assert(source.includes("window.__openclawTriggerDashboardRefresh('manual')"));
+  assert(
+    source.includes(
+      'const mainMemoryFacetLabel =\n    memoryFacetOptions.find((item) => item.key === "main")?.label ?? DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME;',
+    ),
+  );
   assert(source.includes('${escapeHtml(mainMemoryFacetLabel)} ${escapeHtml(t("memories",'));
   assert(source.includes('${escapeHtml(t("Available views",'));
   assert(source.includes('const agentProfileFiles = ["MEMORY.md"];'));
@@ -663,7 +924,11 @@ test("memory and workspace sections expose editable file workbenches", async () 
   assert(source.includes(".file-facet-switch .segment-item.active {"));
   // assert(source.includes("鏂囨。宸ヤ綔鍙?));
   assert(source.includes('t("Document overview",'));
-  assert(source.includes('const mainDocumentFacetLabel = input.workspaceFacetOptions.find((item) => item.key === "main")?.label ?? "Main";'));
+  assert(
+    source.includes(
+      'const mainDocumentFacetLabel =\n    input.workspaceFacetOptions.find((item) => item.key === "main")?.label ?? DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME;',
+    ),
+  );
   assert(source.includes('${escapeHtml(mainDocumentFacetLabel)} ${escapeHtml(t("documents",'));
   assert(source.includes('const docsSection = await renderDocsSectionFromDocsHub({'));
   assert(source.includes('const docEntries = await loadDocHubEntries(input.docHubSnapshot.items);'));
@@ -727,23 +992,27 @@ test("memory and workspace sections expose editable file workbenches", async () 
   assert(source.includes("new Intl.DateTimeFormat(undefined"));
   assert(source.includes("OPENCLAW_WORKSPACE_ROOT"));
   // assert(source.includes("淇濆瓨鍚庝細鐩存帴鍐欏洖婧愭枃浠?));
-  assert(source.includes('t("Enter the local safety passcode when saving.", "保存前输入这台机器的安全口令。")'));
+  assert(source.includes('t("Write access is on. Changes save straight back to the source file.", "写入解锁已开启，改动会直接写回源文件。")'));
+  assert(source.includes('t("Write access is off. Use the top toolbar unlock before editing or saving.", "写入解锁已关闭，请先在顶部工具栏开启后再编辑或保存。")'));
   assert(source.includes('t("This machine has not set a safety passcode yet, so saving is blocked for now.", "这台机器还没设置安全口令，所以这里暂时不能保存。")'));
-  assert(source.includes('placeholder="${escapeHtml(t("Safety passcode", "安全口令"))}"'));
+  assert(!source.includes('data-file-token'));
   assert(!source.includes('LOCAL_API_TOKEN is not configured in this environment.'));
   assert(source.includes("renderFileWorkbenchScript()"));
   assert(source.includes('t("Staff overview",'));
   assert(source.includes('t("The default view shows only name, role, current status, current work, recent output, and whether each person is on the schedule."'));
   assert(source.includes('id="agent-team-team-panel"'));
   assert(source.includes('t("Open project role mapping", "查看项目角色映射")'));
+  const staffOverviewSource = await readFile("src/ui/server-staff-overview.ts", "utf8");
   assert(source.includes("async function resolveStaffRoleLabel("));
-  assert(source.includes('return pickUiText(language, "YouTube to article writing",'));
-  assert(source.includes('return pickUiText(language, "High-value content creation",'));
-  assert(source.includes('return pickUiText(language, "Control Center delivery",'));
-  assert(source.includes('return pickUiText(language, "Daily news and trend briefings",'));
-  assert(source.includes('return pickUiText(language, "Personal assistance and reminders",'));
-  assert(source.includes('return pickUiText(language, "Security and updates",'));
-  assert(source.includes('return pickUiText(language, "Role not defined in workspace",'));
+  assert(source.includes('const { createStaffOverviewHelpers } = require("./server-staff-overview");'));
+  assert(source.includes("const staffOverviewHelpers = createStaffOverviewHelpers({"));
+  assert(staffOverviewSource.includes('return pickUiText(language, "YouTube to article writing",'));
+  assert(staffOverviewSource.includes('return pickUiText(language, "High-value content creation",'));
+  assert(staffOverviewSource.includes('return pickUiText(language, "Control Center delivery",'));
+  assert(staffOverviewSource.includes('return pickUiText(language, "Daily news and trend briefings",'));
+  assert(staffOverviewSource.includes('return pickUiText(language, "Personal assistance and reminders",'));
+  assert(staffOverviewSource.includes('return pickUiText(language, "Security and updates",'));
+  assert(staffOverviewSource.includes('return pickUiText(language, "Role not defined in workspace",'));
   assert(source.includes('function staffStatusLabel('));
   assert(source.includes('function resolveStaffStatusDotTone('));
   assert(source.includes('function staffStatusDotLabel('));
@@ -956,7 +1225,7 @@ test("editable agent scopes follow configured agents before workspace folders", 
     guardedScopes.map((item) => item.facetKey),
     ["main"],
   );
-  assert.equal(guardedScopes[0]?.facetLabel, "Main");
+  assert.equal(guardedScopes[0]?.facetLabel, "Jarvis");
 });
 
 test("search helpers keep total matches separate from returned rows", async () => {
@@ -1222,4 +1491,36 @@ test("subscription card normalizes near-week minute labels before rendering", as
   assert(html.includes(">Week<"));
   assert(!html.includes(">300m<"));
   assert(!html.includes(">10081m<"));
+});
+
+test("collaboration source includes primary dispatcher filter and floating room chat", async () => {
+  const serverSource = await readFile("src/ui/server.ts", "utf8");
+  const widgetSource = await readFile("src/ui/collaboration-chat-widget.ts", "utf8");
+
+  assert(serverSource.includes("primaryDispatcherFilterLabel"));
+  assert(serverSource.includes('data-collab-primary-dispatched'));
+  assert(serverSource.includes('renderCollaborationChatOverlay'));
+  assert(serverSource.includes('data-collab-filter="primary-dispatched"'));
+  assert(widgetSource.includes('data-collab-chat'));
+  assert(widgetSource.includes('/api/collaboration/room'));
+  assert(widgetSource.includes('/api/collaboration/room/uploads'));
+  assert(widgetSource.includes('/api/collaboration/room/messages'));
+  assert(widgetSource.includes('data-collab-mentions'));
+  assert(widgetSource.includes('participant.mention'));
+  assert(!widgetSource.includes('participant.aliases[0]'));
+  assert(widgetSource.includes('data-write-enabled'));
+  assert(widgetSource.includes('data-write-available'));
+  assert(widgetSource.includes('roomLockMessage'));
+  assert(widgetSource.includes('window.__openclawGetMutationAuthState'));
+  assert(widgetSource.includes('window.__openclawSetRefreshGuard'));
+  assert(widgetSource.includes('@media (max-width: 480px)'));
+  assert(widgetSource.includes('grid-template-columns: minmax(0, 1fr);'));
+  assert(widgetSource.includes('data-collab-room-trigger'));
+  assert(serverSource.includes('loadExistingCollaborationRoom(input.roomId)'));
+  assert(widgetSource.includes('.collab-chat-room-dropdown {'));
+  assert(widgetSource.includes('data-collab-chat-person-card'));
+  assert(widgetSource.includes('data-person-agent'));
+  assert(widgetSource.includes('collab-chat-avatar-state'));
+  assert(widgetSource.includes('max-height: min(16.5rem, calc(100vh - 8rem));'));
+  assert(widgetSource.includes('white-space: pre-wrap;'));
 });

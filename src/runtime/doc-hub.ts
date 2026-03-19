@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type { ToolClient } from "../clients/tool-client";
 import {
   getSessionConversationDetail,
+  invalidateSessionConversationHistoryCache,
   type SessionConversationDetailResult,
   type SessionHistoryMessage,
 } from "./session-conversations";
@@ -57,6 +58,7 @@ export function invalidateStructuredDocHubCache(): void {
   cachedSnapshot = undefined;
   cacheAtMs = 0;
   cachePath = "";
+  invalidateSessionConversationHistoryCache();
 }
 
 export async function buildStructuredDocHubFromSessions(

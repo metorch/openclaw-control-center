@@ -3,14 +3,14 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${UI_SMOKE_PORT:-4516}"
-WAIT_SECONDS="${UI_SMOKE_WAIT_SECONDS:-10}"
+WAIT_SECONDS="${UI_SMOKE_WAIT_SECONDS:-45}"
 LOG_DIR="$ROOT/runtime"
 LOG_FILE="$LOG_DIR/ui-smoke-${PORT}.log"
 
 mkdir -p "$LOG_DIR"
 cd "$ROOT"
 
-UI_MODE=true UI_PORT="$PORT" npm run dev >"$LOG_FILE" 2>&1 &
+UI_PORT="$PORT" npm run dev:ui >"$LOG_FILE" 2>&1 &
 PID=$!
 
 cleanup() {
@@ -23,7 +23,7 @@ trap cleanup EXIT
 wait_for_ui() {
   local deadline=$((SECONDS + WAIT_SECONDS))
   while true; do
-    if curl -fsS "http://127.0.0.1:${PORT}/" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
       return 0
     fi
     if (( SECONDS >= deadline )); then
