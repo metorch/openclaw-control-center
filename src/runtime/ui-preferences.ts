@@ -26,6 +26,9 @@ export interface UiPreferencesTaskFilters {
 export interface UiPreferencesCollaborationChat {
   expanded: boolean;
   autoRefresh: boolean;
+  // Viewer-scoped collaboration room state.
+  // Shared collaboration content still lives in collaboration-room storage,
+  // but the selected room and read cursors belong to the current UI viewer.
   activeRoomId: string;
   lastReadSequence: number;
   roomReadCursors: Record<string, number>;

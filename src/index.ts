@@ -15,10 +15,12 @@ import {
   TASK_HEARTBEAT_MAX_TASKS_PER_RUN,
 } from "./config";
 import { buildExportBundle, writeExportBundle } from "./runtime/export-bundle";
+import { runHeartRateMonitor } from "./runtime/heart-rate-monitor";
 import { validateExportFileDryRun } from "./runtime/import-dry-run";
 import { monitorIntervalMs, runMonitorOnce } from "./runtime/monitor";
 import { pruneStaleAcks } from "./runtime/notification-center";
 import { appendOperationAudit } from "./runtime/operation-audit";
+import { startSerialIntervalLoop } from "./runtime/serial-interval-loop";
 import { runTaskHeartbeat, runtimeTaskHeartbeatGate } from "./runtime/task-heartbeat";
 import { startUiServer } from "./ui/server";
 
@@ -59,24 +61,32 @@ async function start(): Promise<void> {
     return;
   }
 
-  await runMonitorOnce(adapter);
-
-  if (CONTINUOUS_MODE) {
-    const intervalMs = monitorIntervalMs();
-    setInterval(() => {
-      void runMonitorOnce(adapter);
-    }, intervalMs);
-  }
-
   if (UI_MODE) {
     startUiServer(UI_PORT, client);
+  }
+
+  const runMonitorSafely = async (): Promise<void> => {
+    try {
+      await runMonitorOnce(adapter, client);
+    } catch (error) {
+      console.error("[mission-control] monitor run failed", error);
+    }
+  };
+
+  await runMonitorSafely();
+
+  if (CONTINUOUS_MODE) {
+    startSerialIntervalLoop({
+      intervalMs: monitorIntervalMs(),
+      runOnce: runMonitorSafely,
+    });
   }
 }
 
 void start();
 
 async function runCommand(
-  command: "backup-export" | "import-validate" | "acks-prune" | "task-heartbeat",
+  command: "backup-export" | "import-validate" | "acks-prune" | "task-heartbeat" | "heart-rate-monitor",
   adapter: OpenClawReadonlyAdapter,
   arg?: string,
 ): Promise<void> {
@@ -179,6 +189,28 @@ async function runCommand(
     return;
   }
 
+  if (command === "heart-rate-monitor") {
+    const dryRun = resolveHeartRateMonitorDryRun(arg);
+    const report = await runHeartRateMonitor(createToolClient(), {
+      dryRun,
+    });
+    await appendOperationAudit({
+      action: "heart_rate_monitor",
+      source: "command",
+      ok: true,
+      requestId: "cmd-heart-rate-monitor",
+      detail: `${dryRun ? "dry_run" : "live"} attempted ${report.summary.attemptedRecoveries} recoveries, resumed ${report.summary.successfulRecoveries}`,
+      metadata: {
+        dryRun,
+        candidates: report.summary.recoveryCandidates,
+        attempted: report.summary.attemptedRecoveries,
+        resumed: report.summary.successfulRecoveries,
+      },
+    });
+    console.log("[mission-control] heart rate monitor", report.summary);
+    return;
+  }
+
   if (!arg) {
     throw new Error(
       "import-validate requires a file path argument. Example: APP_COMMAND=import-validate COMMAND_ARG=<file.json> npm run dev",
@@ -205,7 +237,7 @@ async function runCommand(
 }
 
 function assertCommandOperationGate(
-  command: "backup-export" | "import-validate" | "acks-prune" | "task-heartbeat",
+  command: "backup-export" | "import-validate" | "acks-prune" | "task-heartbeat" | "heart-rate-monitor",
 ): void {
   if (!LOCAL_TOKEN_AUTH_REQUIRED) return;
   if (LOCAL_API_TOKEN !== "") return;
@@ -216,7 +248,7 @@ function assertCommandOperationGate(
 
 function normalizeCommand(
   input: string | undefined,
-): "backup-export" | "import-validate" | "acks-prune" | "task-heartbeat" | undefined {
+): "backup-export" | "import-validate" | "acks-prune" | "task-heartbeat" | "heart-rate-monitor" | undefined {
   if (!input) return undefined;
   const trimmed = input.trim().toLowerCase();
   if (trimmed === "") return undefined;
@@ -224,8 +256,9 @@ function normalizeCommand(
   if (trimmed === "import-validate") return "import-validate";
   if (trimmed === "acks-prune") return "acks-prune";
   if (trimmed === "task-heartbeat") return "task-heartbeat";
+  if (trimmed === "heart-rate-monitor") return "heart-rate-monitor";
   throw new Error(
-    `Unknown command '${input}'. Supported: backup-export, import-validate, acks-prune, task-heartbeat.`,
+    `Unknown command '${input}'. Supported: backup-export, import-validate, acks-prune, task-heartbeat, heart-rate-monitor.`,
   );
 }
 
@@ -247,4 +280,12 @@ function resolveTaskHeartbeatDryRun(arg: string | undefined, fallback: boolean):
   if (normalized === "--dry-run" || normalized === "dry-run") return true;
   if (normalized === "--live" || normalized === "live") return false;
   throw new Error("task-heartbeat optional arg must be one of: --dry-run, dry-run, --live, live.");
+}
+
+function resolveHeartRateMonitorDryRun(arg: string | undefined): boolean {
+  if (!arg) return false;
+  const normalized = arg.trim().toLowerCase();
+  if (normalized === "" || normalized === "--live" || normalized === "live") return false;
+  if (normalized === "--dry-run" || normalized === "dry-run") return true;
+  throw new Error("heart-rate-monitor optional arg must be one of: --dry-run, dry-run, --live, live.");
 }

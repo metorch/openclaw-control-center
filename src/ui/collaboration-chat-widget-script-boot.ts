@@ -169,6 +169,22 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
     link.remove();
   };
 
+  const openAttachment = (attachmentId) => {
+    const attachment = state.attachmentIndex.get(attachmentId);
+    if (!attachment) return;
+    const href = attachment.contentHref || attachment.downloadHref;
+    if (!href) return;
+    const opened = window.open(href, '_blank', 'noopener,noreferrer');
+    if (opened) return;
+    const link = document.createElement('a');
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
   const stopResize = (persist = true) => {
     if (!state.resizeSession) return;
     state.resizeSession = null;
@@ -221,6 +237,21 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
     target instanceof Node && (roomTrigger.contains(target) || roomList.contains(target));
   const findPersonButton = (target) =>
     target instanceof HTMLElement ? target.closest('[data-person-agent]') : null;
+  const beginFileDrag = () => {
+    state.fileDragDepth += 1;
+    syncFileDropState(true);
+  };
+  const endFileDrag = () => {
+    state.fileDragDepth = Math.max(0, state.fileDragDepth - 1);
+    if (state.fileDragDepth === 0) clearFileDropState();
+  };
+  const handleTransferQueue = (files, source = 'drop') => {
+    if (!Array.isArray(files) || files.length === 0) return;
+    queueFiles(files);
+    if (source === 'paste' || source === 'drop') {
+      inputNode.focus();
+    }
+  };
 
   toggleButton.addEventListener('click', () => {
     setExpanded(!state.expanded);
@@ -232,13 +263,38 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
   });
   autoButton.addEventListener('click', () => { setAutoRefresh(!state.autoRefresh); });
   createButton.addEventListener('click', () => { void createRoom(); });
-  deleteButton.addEventListener('click', () => { void deleteRoom(); });
   sendButton.addEventListener('click', () => { void sendCurrentMessage(); });
-  fileInput.addEventListener('change', () => { queueFiles(fileInput.files); });
+  fileInput.addEventListener('change', () => {
+    queueFiles(fileInput.files);
+    fileInput.value = '';
+  });
   resizeHandle.addEventListener('pointerdown', beginResize);
   roomTrigger.addEventListener('click', () => {
     if (roomTrigger.disabled) return;
     setRoomMenuOpen(!state.roomMenuOpen);
+  });
+  panel.addEventListener('dragenter', (event) => {
+    if (!state.expanded || !hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    beginFileDrag();
+  });
+  panel.addEventListener('dragover', (event) => {
+    if (!state.expanded || !hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    syncFileDropState(true);
+  });
+  panel.addEventListener('dragleave', (event) => {
+    if (!state.expanded || !hasFileTransfer(event.dataTransfer)) return;
+    if (event.relatedTarget instanceof Node && panel.contains(event.relatedTarget)) return;
+    endFileDrag();
+  });
+  panel.addEventListener('drop', (event) => {
+    if (!state.expanded || !hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    const files = collectTransferFiles(event.dataTransfer);
+    clearFileDropState();
+    handleTransferQueue(files, 'drop');
   });
 
   inputNode.addEventListener('input', () => {
@@ -266,6 +322,10 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
       return;
     }
     if (event.key === 'Escape') {
+      if (state.pendingDeleteRoomId) {
+        closeDeleteConfirm();
+        return;
+      }
       if (state.roomMenuOpen) setRoomMenuOpen(false);
       if (!mentionsNode.hidden) {
         mentionsNode.hidden = true;
@@ -282,12 +342,40 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
   inputNode.addEventListener('focus', () => {
     renderMentionMenu();
   });
+  inputNode.addEventListener('paste', (event) => {
+    if (!state.expanded || !hasFileTransfer(event.clipboardData)) return;
+    const files = collectTransferFiles(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    handleTransferQueue(files, 'paste');
+  });
 
   roomList.addEventListener('click', (event) => {
+    const deleteTarget = event.target instanceof HTMLElement ? event.target.closest('[data-room-delete]') : null;
+    if (deleteTarget instanceof HTMLButtonElement) {
+      event.preventDefault();
+      event.stopPropagation();
+      requestDeleteRoom(deleteTarget.getAttribute('data-room-delete') || '');
+      return;
+    }
     const target = event.target instanceof HTMLElement ? event.target.closest('[data-room-switch]') : null;
     if (!(target instanceof HTMLButtonElement)) return;
     const roomId = target.getAttribute('data-room-switch') || '';
-    void activateRoom(roomId, true);
+      void activateRoom(roomId);
+  });
+  deleteDialog.addEventListener('click', (event) => {
+    if (state.roomMutationPending) return;
+    if (event.target !== deleteDialog) return;
+    closeDeleteConfirm();
+  });
+  deleteDialogSurface.addEventListener('click', (event) => {
+    event.stopPropagation();
+  });
+  deleteDialogCancel.addEventListener('click', () => {
+    closeDeleteConfirm();
+  });
+  deleteDialogConfirm.addEventListener('click', () => {
+    void deleteRoom(state.pendingDeleteRoomId || state.activeRoomId);
   });
   rosterList.addEventListener('click', (event) => {
     const target = findPersonButton(event.target);
@@ -318,11 +406,18 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
     scheduleHidePersonCard();
   });
   uploadList.addEventListener('click', (event) => {
+    const retryTarget = event.target instanceof HTMLElement ? event.target.closest('[data-upload-retry]') : null;
+    if (retryTarget instanceof HTMLButtonElement) {
+      const uploadId = retryTarget.getAttribute('data-upload-retry') || '';
+      void retryUpload(uploadId);
+      return;
+    }
     const target = event.target instanceof HTMLElement ? event.target.closest('[data-upload-remove]') : null;
     if (!(target instanceof HTMLButtonElement)) return;
     const uploadId = target.getAttribute('data-upload-remove') || '';
     state.uploads = state.uploads.filter((item) => item.id !== uploadId);
     renderUploads();
+    renderRooms();
     syncComposerState();
   });
   mentionsNode.addEventListener('click', (event) => {
@@ -332,8 +427,27 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
   });
   eventsList.addEventListener('click', (event) => {
     const target = event.target instanceof HTMLElement ? event.target.closest('[data-save-attachment]') : null;
-    if (!(target instanceof HTMLButtonElement)) return;
-    void saveAttachment(target.getAttribute('data-save-attachment') || '');
+    if (target instanceof HTMLButtonElement) {
+      event.preventDefault();
+      event.stopPropagation();
+      void saveAttachment(target.getAttribute('data-save-attachment') || '');
+      return;
+    }
+    const openTarget = event.target instanceof HTMLElement ? event.target.closest('[data-open-attachment]') : null;
+    if (!(openTarget instanceof HTMLElement)) return;
+    const attachmentId = openTarget.getAttribute('data-open-attachment') || '';
+    if (!attachmentId) return;
+    event.preventDefault();
+    openAttachment(attachmentId);
+  });
+  eventsList.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const target = event.target instanceof HTMLElement ? event.target.closest('[data-open-attachment]') : null;
+    if (!(target instanceof HTMLElement)) return;
+    const attachmentId = target.getAttribute('data-open-attachment') || '';
+    if (!attachmentId) return;
+    event.preventDefault();
+    openAttachment(attachmentId);
   });
 
   window.addEventListener(mutationEventName, () => {
@@ -343,9 +457,23 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
   window.addEventListener('resize', () => {
     applyPanelSize(false);
     setRoomMenuOpen(false);
+    clearFileDropState();
     hidePersonCard();
     renderRooms();
     renderRoster();
+  });
+  document.addEventListener('dragover', (event) => {
+    if (!state.expanded || !hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+  });
+  document.addEventListener('drop', (event) => {
+    if (!state.expanded || !hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    if (panel.contains(event.target instanceof Node ? event.target : null)) return;
+    clearFileDropState();
+  });
+  document.addEventListener('dragend', () => {
+    clearFileDropState();
   });
   document.addEventListener('pointerdown', (event) => {
     if (!state.roomMenuOpen) return;
@@ -359,10 +487,15 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
   });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
+    if (state.pendingDeleteRoomId) {
+      closeDeleteConfirm();
+      return;
+    }
     if (state.roomMenuOpen) setRoomMenuOpen(false);
     hidePersonCard();
   });
   document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') clearFileDropState();
     void refreshFromPresenceChange();
   });
   window.addEventListener('focus', () => {

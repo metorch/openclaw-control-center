@@ -28,7 +28,14 @@ function createTeamPanelRenderers(deps) {
     }
     const modelCopy = {
       model: pickUiText(language, "Model", "\u6A21\u578B"),
+      fallbackModel: pickUiText(language, "Fallback model", "\u5907\u7528\u6A21\u578B"),
+      noFallback: pickUiText(language, "No fallback", "\u65E0\u5907\u7528"),
       save: pickUiText(language, "Save model", "\u4FDD\u5B58\u6A21\u578B"),
+      more: pickUiText(language, "More settings", "\u66F4\u591A\u8BBE\u7F6E"),
+      schedule: pickUiText(language, "Schedule", "\u6392\u73ED"),
+      workspace: pickUiText(language, "Workspace", "\u5DE5\u4F5C\u533A"),
+      tools: pickUiText(language, "Tools", "\u5DE5\u5177"),
+      recentOutput: pickUiText(language, "Recent output", "\u6700\u8FD1\u4EA7\u51FA"),
       blocked: pickUiText(language, "Model change is blocked until this machine has a safety passcode.", "\u5F53\u524D\u673A\u5668\u8FD8\u6CA1\u8BBE\u7F6E\u5B89\u5168\u53E3\u4EE4\uFF0C\u6682\u65F6\u4E0D\u80FD\u4FDD\u5B58\u6A21\u578B\u3002"),
       locked: pickUiText(language, "Write access is off. Turn on the top toolbar unlock before changing models.", "\u5199\u5165\u89E3\u9501\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u5728\u9876\u90E8\u5DE5\u5177\u680F\u5F00\u542F\u540E\u518D\u4FEE\u6539\u6A21\u578B\u3002"),
       unavailable: pickUiText(language, "Model editing is unavailable until openclaw.json can be read.", "\u8981\u5148\u6210\u529F\u8BFB\u53D6 openclaw.json\uFF0C\u8FD9\u91CC\u624D\u80FD\u76F4\u63A5\u6539\u6A21\u578B\u3002"),
@@ -43,26 +50,64 @@ function createTeamPanelRenderers(deps) {
           <div class="staff-brief-identity">
             <h3>${escapeHtml(card.displayName)}</h3>
             <div class="staff-role">${escapeHtml(card.roleLabel)}</div>
+            <div class="staff-brief-status">${badge(card.statusTone, card.statusLabel)}</div>
           </div>
         </div>
-        <dl class="staff-brief-list">
-          <div class="staff-brief-row"><dt>${escapeHtml(pickUiText(language, "Status", "\u5F53\u524D\u72B6\u6001"))}</dt><dd class="staff-brief-value clamp-2">${escapeHtml(card.statusLabel)}</dd></div>
-          <div class="staff-brief-row"><dt>${escapeHtml(card.currentWorkLabel)}</dt><dd class="staff-brief-value clamp-2">${escapeHtml(card.currentWork)}</dd></div>
-          <div class="staff-brief-row"><dt>${escapeHtml(pickUiText(language, "Recent output", "\u6700\u8FD1\u4EA7\u51FA"))}</dt><dd class="staff-brief-value clamp-3">${escapeHtml(card.recentOutput)}</dd></div>
-          <div class="staff-brief-row"><dt>${escapeHtml(pickUiText(language, "In schedule", "\u662F\u5426\u5728\u6392\u73ED\u91CC"))}</dt><dd class="staff-brief-value clamp-2">${escapeHtml(card.scheduledLabel)}</dd></div>
-          <div class="staff-brief-row staff-config-row">
-            <dt>${escapeHtml(modelCopy.model)}</dt>
-            <dd>
-              <div class="staff-model-editor" data-staff-model-root data-agent-id="${escapeHtml(card.agentId)}" data-language="${escapeHtml(language)}" data-current-model="${escapeHtml(card.model)}" data-config-path="${escapeHtml(card.configPath)}" data-model-editable="${card.modelEditable ? "1" : "0"}">
-                <select class="staff-model-select" data-staff-model-select ${card.modelEditable && !saveBlocked ? "" : "disabled"}>
-                  ${card.modelOptions.map((option) => `<option value="${escapeHtml(option.value)}"${option.value === card.model ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
-                </select>
-                <button class="btn staff-model-save" type="button" data-staff-model-save ${card.modelEditable && !saveBlocked ? "" : "disabled"}>${escapeHtml(modelCopy.save)}</button>
+        <div class="staff-brief-primary">
+          <div class="staff-summary-block">
+            <div class="staff-summary-label">${escapeHtml(card.currentWorkLabel)}</div>
+            <div class="staff-summary-value clamp-2">${escapeHtml(card.currentWork)}</div>
+          </div>
+          <div class="staff-summary-block">
+            <div class="staff-summary-label">${escapeHtml(modelCopy.recentOutput)}</div>
+            <div class="staff-summary-value clamp-3">${escapeHtml(card.recentOutput)}</div>
+          </div>
+        </div>
+        <div class="staff-chip-row">
+          <span class="staff-chip">${escapeHtml(card.statusLabel)}</span>
+          <span class="staff-chip">${escapeHtml(card.scheduledLabel)}</span>
+        </div>
+        <details class="compact-table-details staff-secondary-details">
+          <summary>${escapeHtml(modelCopy.more)}</summary>
+          <div class="fold-body">
+            <div class="staff-secondary-grid">
+              <div class="staff-secondary-item">
+                <span>${escapeHtml(modelCopy.schedule)}</span>
+                <strong class="clamp-2">${escapeHtml(card.scheduledLabel)}</strong>
+              </div>
+              <div class="staff-secondary-item">
+                <span>${escapeHtml(modelCopy.workspace)}</span>
+                <strong class="clamp-2">${escapeHtml(card.workspace)}</strong>
+              </div>
+              <div class="staff-secondary-item">
+                <span>${escapeHtml(modelCopy.tools)}</span>
+                <strong class="clamp-2">${escapeHtml(card.toolsProfile)}</strong>
+              </div>
+            </div>
+            <div class="staff-model-shell">
+              <div class="staff-summary-label">${escapeHtml(modelCopy.model)}</div>
+              <div class="staff-model-editor" data-staff-model-root data-agent-id="${escapeHtml(card.agentId)}" data-language="${escapeHtml(language)}" data-current-model="${escapeHtml(card.model)}" data-current-fallback-model="${escapeHtml(card.fallbackModel ?? "")}" data-config-path="${escapeHtml(card.configPath)}" data-model-editable="${card.modelEditable ? "1" : "0"}">
+                <div class="staff-model-field">
+                  <div class="staff-model-field-label">${escapeHtml(modelCopy.model)}</div>
+                  <select class="staff-model-select" data-staff-model-select ${card.modelEditable && !saveBlocked ? "" : "disabled"}>
+                    ${card.modelOptions.map((option) => `<option value="${escapeHtml(option.value)}"${option.value === card.model ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+                  </select>
+                </div>
+                <div class="staff-model-field">
+                  <div class="staff-model-field-label">${escapeHtml(modelCopy.fallbackModel)}</div>
+                  <select class="staff-model-select" data-staff-fallback-model-select ${card.modelEditable && !saveBlocked ? "" : "disabled"}>
+                    <option value="">${escapeHtml(modelCopy.noFallback)}</option>
+                    ${card.modelOptions.map((option) => `<option value="${escapeHtml(option.value)}"${option.value === (card.fallbackModel ?? "") ? " selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+                  </select>
+                </div>
+                <div class="staff-model-actions">
+                  <button class="btn staff-model-save" type="button" data-staff-model-save ${card.modelEditable && !saveBlocked ? "" : "disabled"}>${escapeHtml(modelCopy.save)}</button>
+                </div>
                 <div class="meta staff-model-status" data-staff-model-status>${escapeHtml(card.modelEditable ? saveBlocked ? import_config.LOCAL_API_TOKEN === "" ? modelCopy.blocked : modelCopy.locked : "" : modelCopy.unavailable)}</div>
               </div>
-            </dd>
+            </div>
           </div>
-        </dl>
+        </details>
       </article>`;
     }).join("")}</div>`;
   }
@@ -145,24 +190,24 @@ function createTeamPanelRenderers(deps) {
               <div class="meta collaboration-room-ref-head">${escapeHtml(pickUiText(language, "Group chat references", "\u7FA4\u804A\u5F15\u7528"))}</div>
               <ul class="story-list collaboration-room-ref-list">${card.roomRefs.map((ref) => `<li><strong>#${ref.sequence} \xB7 ${escapeHtml(ref.label)}</strong><div class="meta">${escapeHtml(formatTimeAgoFromNow(ref.createdAt, language))}</div><div class="meta">${escapeHtml(ref.detail)}</div></li>`).join("")}</ul>
             </div>` : "";
+      const aggregateLabel = card.aggregateCount > 1 ? pickUiText(language, `${card.aggregateCount} runs folded`, `\u6298\u53E0 ${card.aggregateCount} \u6761`) : "";
       return `<details class="card collaboration-thread-card" data-collab-card data-collab-state="${escapeHtml(card.status)}" data-collab-multi-agent="${card.multiAgent ? "1" : "0"}" data-collab-primary-dispatched="${card.primaryDispatched ? "1" : "0"}">
         <summary class="collaboration-thread-summary">
           <div class="collaboration-thread-head">
             <div class="collaboration-route-avatars">${participantAvatars}</div>
             <div class="collaboration-thread-copy">
               <strong>${escapeHtml(card.taskTitle)}</strong>
-              <div class="meta">${escapeHtml(card.routeTitle)} \xB7 ${escapeHtml(card.latestAtLabel)}</div>
+              <div class="meta collaboration-thread-route">${escapeHtml(card.routeTitle)}</div>
             </div>
             <div class="collaboration-thread-badges">
               ${badge("idle", card.kindBadge)}
               ${badge(card.status === "completed" ? "ok" : card.status === "blocked" ? "warn" : "info", card.statusBadge)}
-              ${card.aggregateCount > 1 ? badge("idle", pickUiText(language, `${card.aggregateCount} runs`, `${card.aggregateCount} \u6761`)) : ""}
-              <span class="collaboration-current-owner">${escapeHtml(card.currentOwnerLabel)}</span>
             </div>
           </div>
           <div class="collaboration-thread-teaser">
-            <div class="meta">${escapeHtml(card.summary)}</div>
-            <div class="collaboration-latest-snippet">${escapeHtml(card.latestSnippet)}</div>
+            <div class="meta collaboration-thread-meta">${escapeHtml(card.currentOwnerLabel)} \xB7 ${escapeHtml(card.latestAtLabel)}${aggregateLabel ? ` \xB7 ${escapeHtml(aggregateLabel)}` : ""}</div>
+            <div class="collaboration-thread-summary-line clamp-2">${escapeHtml(card.summary)}</div>
+            <div class="collaboration-latest-snippet clamp-2">${escapeHtml(card.latestSnippet)}</div>
           </div>
         </summary>
         <div class="collaboration-thread-body">
@@ -193,18 +238,24 @@ function createTeamPanelRenderers(deps) {
       return `<div class="empty-state">${escapeHtml(pickUiText(language, "No staff roster signal yet. It will appear after config or runtime data is connected.", "\u6682\u65E0\u52A9\u624B\u540D\u5F55\u4FE1\u53F7\u3002\u8FDE\u63A5\u914D\u7F6E\u6216\u8FD0\u884C\u6001\u540E\u4F1A\u663E\u793A\u3002"))}</div>`;
     }
     return `<div class="office-grid">${cards.map((card) => {
-      const focus = card.focusItems.length === 0 ? '<div class="meta">\u5F53\u524D\u91CD\u70B9\uFF1A\u6682\u65E0</div>' : `<div class="meta">\u5F53\u524D\u91CD\u70B9\uFF1A</div><ul class="office-focus">${card.focusItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
+      const focusLabel = pickUiText(language, "Current focus", "\u5F53\u524D\u91CD\u70B9");
+      const focus = card.focusItems.length === 0
+        ? `<div class="meta">${escapeHtml(focusLabel)}\uFF1A${escapeHtml(pickUiText(language, "None", "\u6682\u65E0"))}</div>`
+        : `<div class="office-focus-label">${escapeHtml(focusLabel)}</div><ul class="office-focus">${card.focusItems.slice(0, 3).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
       const avatar = renderAgentAvatarFrame({ agentId: card.agentId, identity: card.identity, className: "agent-avatar", canvasWidth: 224, canvasHeight: 160, language, showAnimalLabel: true });
       return `<article class="office-card">
         <div class="office-head">
           ${avatar}
           <div class="office-info">
-            <div class="topline"><strong>${escapeHtml(humanizeOperatorLabel(card.agentId))}</strong>${badge(card.status)}</div>
-            <div class="meta"><strong>${escapeHtml(card.statusLabel)}</strong> \xB7 ${escapeHtml(card.summary)}</div>
-            <div class="meta">${escapeHtml(pickUiText(language, "Active sessions", "\u6D3B\u8DC3\u4F1A\u8BDD"))}\uFF1A${card.activeSessions} \xB7 ${escapeHtml(pickUiText(language, "Active tasks", "\u6D3B\u8DC3\u4EFB\u52A1"))}\uFF1A${card.activeTasks}</div>
+            <div class="topline"><strong>${escapeHtml(humanizeOperatorLabel(card.agentId))}</strong>${badge(card.status, card.statusLabel)}</div>
+            <div class="office-summary clamp-2">${escapeHtml(card.summary)}</div>
+            <div class="office-metrics">
+              <span>${escapeHtml(pickUiText(language, "Active sessions", "\u6D3B\u8DC3\u4F1A\u8BDD"))}\uFF1A${card.activeSessions}</span>
+              <span>${escapeHtml(pickUiText(language, "Active tasks", "\u6D3B\u8DC3\u4EFB\u52A1"))}\uFF1A${card.activeTasks}</span>
+            </div>
           </div>
         </div>
-        ${focus.replace("\u5F53\u524D\u91CD\u70B9\uFF1A", `${pickUiText(language, "Current focus", "\u5F53\u524D\u91CD\u70B9")}\uFF1A`).replace("\u5F53\u524D\u91CD\u70B9\uFF1A\u6682\u65E0", `${pickUiText(language, "Current focus", "\u5F53\u524D\u91CD\u70B9")}\uFF1A${pickUiText(language, "None", "\u6682\u65E0")}`)}
+        <div class="office-focus-block">${focus}</div>
       </article>`;
     }).join("")}</div>`;
   }

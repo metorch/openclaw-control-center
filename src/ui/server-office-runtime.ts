@@ -468,6 +468,9 @@ function createOfficeRuntimeHelpers(deps) {
     if (key === "frontend") return pickUiText(language, "frontend delivery", "前端交付");
     if (key === "qa") return pickUiText(language, "quality validation", "质量验证");
     if (key === "ops") return pickUiText(language, "release operations", "上线运维");
+    if (key === "heart-rate-monitor" || key === "heartratemonitor" || key === "heartbeatmonitor" || key === "heartbeat" || key === "watchdog" || key === "monitor") {
+      return pickUiText(language, "heartbeat supervision", "心跳监控");
+    }
     return safeTruncate(stage?.trim() ?? "", 24) || void 0;
   }
 
@@ -618,8 +621,12 @@ function createOfficeRuntimeHelpers(deps) {
 
   function dedupeModelOptionsForCard(currentModel, options) {
     const merged = new Map();
-    const normalizedCurrent = currentModel.trim();
-    if (normalizedCurrent) merged.set(normalizedCurrent, { value: normalizedCurrent, label: normalizedCurrent });
+    const currentValues = Array.isArray(currentModel) ? currentModel : [currentModel];
+    for (const value of currentValues) {
+      const normalizedCurrent = String(value || "").trim();
+      if (!normalizedCurrent || merged.has(normalizedCurrent)) continue;
+      merged.set(normalizedCurrent, { value: normalizedCurrent, label: normalizedCurrent });
+    }
     for (const option of options) {
       const value = option.value.trim();
       if (!value || merged.has(value)) continue;

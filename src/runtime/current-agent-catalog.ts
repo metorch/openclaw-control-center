@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { humanizeOperatorDisplayName } from "./operator-display";
+import { isInternalMonitorAgentId } from "./system-agent-ids";
 import { compareAgentHierarchy } from "./team-hierarchy";
 
 export type CurrentAgentCatalogStatus = "connected" | "partial" | "not_connected";
@@ -30,12 +31,17 @@ export async function loadCurrentAgentCatalog(): Promise<CurrentAgentCatalog> {
     const agents = asObject(root.agents) ?? {};
     const list = asArray(agents.list);
     const merged = new Map<string, CurrentAgentCatalogEntry>();
+    let filteredInternalCount = 0;
 
     for (const item of list) {
       const obj = asObject(item);
       if (!obj) continue;
       const agentId = asString(obj.id)?.trim() ?? asString(obj.name)?.trim();
       if (!agentId) continue;
+      if (isInternalMonitorAgentId(agentId)) {
+        filteredInternalCount += 1;
+        continue;
+      }
       const identity = asObject(obj.identity);
       const workspace = asString(obj.workspace)?.trim();
       const key = normalizeKey(agentId);
@@ -58,7 +64,10 @@ export async function loadCurrentAgentCatalog(): Promise<CurrentAgentCatalog> {
       return {
         status: "partial",
         sourcePath,
-        detail: "openclaw.json found but agents.list is empty.",
+        detail:
+          filteredInternalCount > 0
+            ? "openclaw.json found, but only internal system agents were configured."
+            : "openclaw.json found but agents.list is empty.",
         entries: [],
         primaryAgentId: undefined,
         primaryDisplayName: undefined,
@@ -68,7 +77,10 @@ export async function loadCurrentAgentCatalog(): Promise<CurrentAgentCatalog> {
     return {
       status: "connected",
       sourcePath,
-      detail: `loaded ${entries.length} current agent(s) from openclaw.json.`,
+      detail:
+        filteredInternalCount > 0
+          ? `loaded ${entries.length} visible agent(s) from openclaw.json and filtered ${filteredInternalCount} internal system agent(s).`
+          : `loaded ${entries.length} current agent(s) from openclaw.json.`,
       entries,
       primaryAgentId: primary?.agentId,
       primaryDisplayName: primary?.displayName,

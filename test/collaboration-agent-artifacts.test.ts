@@ -40,7 +40,8 @@ test("artifact parser keeps the user-facing summary while stripping standalone f
 
 test("artifact instruction explains hidden footer contract", () => {
   const instruction = buildCollaborationAgentArtifactInstruction("C:/workspace/agents/jarvis");
-  assert.match(instruction, /Preferred workspace root: C:\/workspace\/agents\/jarvis\./);
+  assert.match(instruction, /Current collaboration project root: C:\/workspace\/agents\/jarvis\./);
+  assert.match(instruction, /Preferred save location for new deliverables: C:\/workspace\/agents\/jarvis\./);
   assert.match(instruction, /\[\[openclaw-files\]\]/);
   assert.match(instruction, /\[\[\/openclaw-files\]\]/);
 });

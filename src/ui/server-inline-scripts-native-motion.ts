@@ -44,6 +44,121 @@ function renderNativeMotionScript(language = "zh") {
     });
   }
 
+  const shellNav = document.querySelector('[data-shell-nav]');
+  const shellNavHoverZone = document.querySelector('[data-shell-nav-hover-zone]');
+  const shellNavPin = document.querySelector('[data-shell-nav-pin]');
+  const shellNavPinLabel =
+    shellNavPin instanceof HTMLElement
+      ? shellNavPin.querySelector('[data-shell-nav-pin-label]')
+      : null;
+  const shellNavStorageKey = 'openclaw:shell-nav-pinned:v1';
+  const shellNavLabels = {
+    pin: '${escapeHtml(pickUiText(language, "Pin", "\u56FA\u5B9A"))}',
+    unpin: '${escapeHtml(pickUiText(language, "Auto", "\u81EA\u52A8"))}',
+    pinAria: '${escapeHtml(pickUiText(language, "Pin navigation open", "\u56FA\u5B9A\u5BFC\u822A\u5C55\u5F00"))}',
+    unpinAria: '${escapeHtml(pickUiText(language, "Return navigation to auto collapse", "\u6062\u590D\u5BFC\u822A\u81EA\u52A8\u6536\u56DE"))}',
+  };
+  const shellNavState = {
+    pinned: false,
+    hoverExpanded: false,
+    collapseTimer: 0,
+  };
+  const isDesktopShellNav = () =>
+    window.innerWidth > 1320 &&
+    Boolean(window.matchMedia) &&
+    window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  const clearShellNavTimer = () => {
+    if (!shellNavState.collapseTimer) return;
+    window.clearTimeout(shellNavState.collapseTimer);
+    shellNavState.collapseTimer = 0;
+  };
+  const syncShellNav = () => {
+    const desktop = isDesktopShellNav();
+    const expanded = desktop ? shellNavState.pinned || shellNavState.hoverExpanded : true;
+    body.dataset.shellNavMode = desktop ? 'desktop' : 'touch';
+    body.dataset.shellNavState = expanded ? 'expanded' : 'collapsed';
+    body.dataset.shellNavPinned = shellNavState.pinned ? '1' : '0';
+    if (shellNav instanceof HTMLElement) {
+      shellNav.dataset.shellNavState = expanded ? 'expanded' : 'collapsed';
+    }
+    if (shellNavPin instanceof HTMLButtonElement) {
+      shellNavPin.hidden = !desktop;
+      if (shellNavPinLabel instanceof HTMLElement) {
+        shellNavPinLabel.textContent = shellNavState.pinned ? shellNavLabels.unpin : shellNavLabels.pin;
+      } else {
+        shellNavPin.textContent = shellNavState.pinned ? shellNavLabels.unpin : shellNavLabels.pin;
+      }
+      shellNavPin.dataset.shellNavPinState = shellNavState.pinned ? 'pinned' : 'auto';
+      shellNavPin.setAttribute('aria-pressed', shellNavState.pinned ? 'true' : 'false');
+      shellNavPin.setAttribute('aria-label', shellNavState.pinned ? shellNavLabels.unpinAria : shellNavLabels.pinAria);
+      shellNavPin.title = shellNavState.pinned ? shellNavLabels.unpinAria : shellNavLabels.pinAria;
+    }
+  };
+  const expandShellNav = () => {
+    if (!isDesktopShellNav()) return;
+    clearShellNavTimer();
+    shellNavState.hoverExpanded = true;
+    syncShellNav();
+  };
+  const collapseShellNav = () => {
+    if (!isDesktopShellNav() || shellNavState.pinned) return;
+    clearShellNavTimer();
+    shellNavState.hoverExpanded = false;
+    syncShellNav();
+  };
+  const scheduleShellNavCollapse = () => {
+    if (!isDesktopShellNav() || shellNavState.pinned) return;
+    clearShellNavTimer();
+    shellNavState.collapseTimer = window.setTimeout(() => {
+      shellNavState.collapseTimer = 0;
+      shellNavState.hoverExpanded = false;
+      syncShellNav();
+    }, 120);
+  };
+  try {
+    shellNavState.pinned = window.localStorage.getItem(shellNavStorageKey) === '1';
+  } catch {}
+  if (shellNavPin instanceof HTMLButtonElement) {
+    shellNavPin.addEventListener('click', () => {
+      shellNavState.pinned = !shellNavState.pinned;
+      shellNavState.hoverExpanded = shellNavState.pinned;
+      syncShellNav();
+      try {
+        window.localStorage.setItem(shellNavStorageKey, shellNavState.pinned ? '1' : '0');
+      } catch {}
+    });
+  }
+  if (shellNav instanceof HTMLElement) {
+    shellNav.addEventListener('mouseenter', expandShellNav);
+    shellNav.addEventListener('mouseleave', scheduleShellNavCollapse);
+    shellNav.addEventListener('focusin', expandShellNav);
+    shellNav.addEventListener('focusout', (event) => {
+      if (!(event.relatedTarget instanceof Node) || !shellNav.contains(event.relatedTarget)) {
+        scheduleShellNavCollapse();
+      }
+    });
+  }
+  if (shellNavHoverZone instanceof HTMLElement) {
+    shellNavHoverZone.addEventListener('mouseenter', expandShellNav);
+    shellNavHoverZone.addEventListener('mouseleave', scheduleShellNavCollapse);
+  }
+  window.addEventListener('resize', () => {
+    if (!isDesktopShellNav()) {
+      clearShellNavTimer();
+      shellNavState.hoverExpanded = false;
+    }
+    syncShellNav();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if (shellNavState.pinned) return;
+    if (shellNavState.hoverExpanded) {
+      shellNavState.hoverExpanded = false;
+      syncShellNav();
+    }
+  });
+  syncShellNav();
+
   document.addEventListener('click', (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;

@@ -13,6 +13,8 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     state.expanded = Boolean(nextExpanded);
     root.dataset.expanded = state.expanded ? '1' : '0';
     if (!state.expanded) setRoomMenuOpen(false);
+    if (!state.expanded) closeDeleteConfirm(true);
+    if (!state.expanded) clearFileDropState();
     if (!state.expanded) {
       personCard.hidden = true;
       personCard.innerHTML = '';
@@ -43,7 +45,7 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     const nextSequence = Math.max(0, Number(sequence || 0));
     state.roomReadCursors[state.activeRoomId] = nextSequence;
     state.lastReadSequence = nextSequence;
-    if (persist) schedulePreferenceSave();
+    if (persist && shouldPersistRoomViewState()) schedulePreferenceSave({ includeRoomViewState: true });
     renderUnread();
   };
 
@@ -182,6 +184,7 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
   };
 
   const renderRooms = () => {
+    const uploadsBusy = hasUploadingFiles();
     if (!Array.isArray(state.rooms) || state.rooms.length === 0) {
       roomTrigger.disabled = true;
       roomTriggerTitle.textContent = labels.noRooms;
@@ -191,7 +194,7 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
       setRoomMenuOpen(false);
       return;
     }
-    roomTrigger.disabled = false;
+    roomTrigger.disabled = uploadsBusy;
     const activeRoom = state.rooms.find((room) => String(room.roomId || '') === state.activeRoomId) || state.rooms[0] || null;
     if (activeRoom && String(activeRoom.roomId || '') !== state.activeRoomId) {
       state.activeRoomId = String(activeRoom.roomId || '');
@@ -203,10 +206,18 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     roomList.innerHTML = state.rooms.map((room) => {
       const active = String(room.roomId || '') === state.activeRoomId;
       const metaParts = [formatRoomDate(room.updatedAt), formatRoomClock(room.updatedAt)].filter(Boolean);
-      return '<button class="collab-chat-room-option' + (active ? ' is-active' : '') + '" type="button" data-room-switch="' + escapeHtml(room.roomId) + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
-        '<strong>' + escapeHtml(room.title || room.roomId) + '</strong>' +
-        (metaParts.length > 0 ? '<span>' + escapeHtml(metaParts.join(' | ')) + '</span>' : '') +
-      '</button>';
+      const switchDisabled = uploadsBusy;
+      const deleteDisabled = !canMutateRoom() || state.roomMutationPending || state.sending || uploadsBusy;
+      const roomLabel = room.title || room.roomId || labels.title;
+      return '<div class="collab-chat-room-row">' +
+        '<button class="collab-chat-room-option' + (active ? ' is-active' : '') + '" type="button" data-room-switch="' + escapeHtml(room.roomId) + '" aria-pressed="' + (active ? 'true' : 'false') + '"' + (switchDisabled ? ' disabled' : '') + '>' +
+          '<strong>' + escapeHtml(roomLabel) + '</strong>' +
+          (metaParts.length > 0 ? '<span>' + escapeHtml(metaParts.join(' | ')) + '</span>' : '') +
+        '</button>' +
+        '<button class="collab-chat-room-delete" type="button" data-room-delete="' + escapeHtml(room.roomId) + '" title="' + escapeHtml(labels.deleteChat) + '" aria-label="' + escapeHtml(labels.deleteChat + ': ' + roomLabel) + '"' + (deleteDisabled ? ' disabled' : '') + '>' +
+          '<span aria-hidden="true">\u00d7</span>' +
+        '</button>' +
+      '</div>';
     }).join('');
   };
 
@@ -218,46 +229,213 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     uploadList.innerHTML = state.uploads.map((item) => {
       const status = item.status === 'uploading'
         ? labels.upload
+        : item.status === 'uploaded'
+          ? (embeddedLanguage === 'zh' ? '待发送' : 'Ready to send')
         : item.status === 'error'
           ? labels.failed
           : labels.queued;
-      return '<div class="collab-chat-upload-item">' +
+      const removeDisabled = item.status === 'uploading' || state.sending;
+      const retryDisabled = item.status === 'uploading' || state.sending || hasUploadingFiles();
+      return '<div class="collab-chat-upload-item' + (item.status === 'error' ? ' is-error' : item.status === 'uploaded' ? ' is-ready' : '') + '">' +
         '<div class="collab-chat-upload-copy">' +
           '<strong>' + escapeHtml(item.file.name) + '</strong>' +
           '<span>' + escapeHtml(status + ' | ' + formatBytes(item.file.size)) + '</span>' +
+          (item.status === 'error' && item.errorMessage
+            ? '<p class="collab-chat-upload-error">' + escapeHtml(item.errorMessage) + '</p>'
+            : '') +
         '</div>' +
         '<div class="collab-chat-upload-actions">' +
-          '<button class="collab-chat-ghost" type="button" data-upload-remove="' + escapeHtml(item.id) + '">' + escapeHtml(labels.remove) + '</button>' +
+          (item.status === 'error'
+            ? '<button class="collab-chat-ghost" type="button" data-upload-retry="' + escapeHtml(item.id) + '"' + (retryDisabled ? ' disabled' : '') + '>' + escapeHtml(embeddedLanguage === 'zh' ? '重试' : 'Retry') + '</button>'
+            : '') +
+          '<button class="collab-chat-ghost" type="button" data-upload-remove="' + escapeHtml(item.id) + '"' + (removeDisabled ? ' disabled' : '') + '>' + escapeHtml(labels.remove) + '</button>' +
         '</div>' +
       '</div>';
     }).join('');
+  };
+
+  const attachmentExtension = (fileName) => {
+    const match = /\\.([a-z0-9]{1,12})$/i.exec(String(fileName || '').trim());
+    return match ? String(match[1] || '').toLowerCase() : '';
+  };
+
+  const attachmentPreviewMode = (attachment) => {
+    if (String(attachment?.kind || '') !== 'text') return 'none';
+    const contentType = String(attachment?.contentType || '').toLowerCase();
+    const extension = attachmentExtension(attachment?.fileName);
+    if (contentType.includes('html') || extension === 'html' || extension === 'htm') return 'html';
+    if (contentType.includes('markdown') || extension === 'md' || extension === 'markdown' || extension === 'mdx') {
+      return 'markdown';
+    }
+    if (
+      contentType.includes('json') ||
+      [
+        'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'swift',
+        'php', 'c', 'cc', 'cpp', 'h', 'hpp', 'cs', 'sh', 'bash', 'ps1', 'sql', 'css', 'scss',
+        'less', 'xml', 'yml', 'yaml', 'toml', 'ini', 'env', 'gradle',
+      ].includes(extension)
+    ) {
+      return 'code';
+    }
+    return 'text';
+  };
+
+  const normalizePreviewText = (value) => String(value || '').replace(/\\r/g, '').trim();
+
+  const truncatePreviewText = (value, maxLength) => {
+    const normalized = normalizePreviewText(value);
+    if (!normalized) return '';
+    if (normalized.length <= maxLength) return normalized;
+    return normalized.slice(0, Math.max(0, maxLength - 3)).trimEnd() + '...';
+  };
+
+  const decodePreviewEntities = (value) =>
+    String(value || '')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'");
+
+  const stripHtmlPreviewText = (value) =>
+    decodePreviewEntities(String(value || ''))
+      .replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')
+      .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ')
+      .replace(/<!--[\\s\\S]*?-->/g, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\\s+/g, ' ')
+      .trim();
+
+  const extractHtmlPreviewTitle = (value) => {
+    const raw = String(value || '');
+    const titleMatch = /<title[^>]*>([\\s\\S]*?)<\\/title>/i.exec(raw);
+    if (titleMatch?.[1]) return decodePreviewEntities(titleMatch[1]).replace(/\\s+/g, ' ').trim();
+    const headingMatch = /<h1[^>]*>([\\s\\S]*?)<\\/h1>/i.exec(raw);
+    if (headingMatch?.[1]) return decodePreviewEntities(headingMatch[1]).replace(/\\s+/g, ' ').trim();
+    return '';
+  };
+
+  const summarizeMarkdownPreview = (value) => {
+    const lines = normalizePreviewText(value)
+      .split(/\\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const heading = lines.find((line) => /^#{1,6}\\s+/.test(line))?.replace(/^#{1,6}\\s+/, '').trim() || '';
+    const summary = lines
+      .filter((line) => !/^#{1,6}\\s+/.test(line))
+      .filter((line) => !/^\\x60{3}/.test(line))
+      .filter((line) => !/^[-*_]{3,}$/.test(line))
+      .join(' ')
+      .replace(/\\s+/g, ' ')
+      .trim();
+    return {
+      heading,
+      summary,
+    };
+  };
+
+  const previewBadgeLabel = (attachment, mode) => {
+    if (mode === 'html') return 'HTML';
+    if (mode === 'markdown') return 'MD';
+    if (mode === 'code') return (attachmentExtension(attachment?.fileName) || 'code').toUpperCase();
+    return embeddedLanguage === 'zh' ? '\u6587\u672c' : 'Text';
+  };
+
+  const attachmentCardLabel = (attachment, mode) => {
+    if (mode === 'html') return 'HTML';
+    if (mode === 'markdown') return 'MD';
+    if (mode === 'code') return (attachmentExtension(attachment?.fileName) || 'CODE').toUpperCase().slice(0, 6);
+    if (attachment?.kind === 'image') return 'IMG';
+    return (attachmentExtension(attachment?.fileName) || (embeddedLanguage === 'zh' ? '\u6587\u4ef6' : 'FILE')).toUpperCase().slice(0, 6);
+  };
+
+  const attachmentMetaLine = (attachment, mode) => {
+    return [
+      formatBytes(attachment.sizeBytes),
+      attachmentCardLabel(attachment, mode),
+    ].filter(Boolean).join(' \u00b7 ');
+  };
+
+  const renderAttachmentTextPreview = (attachment) => {
+    const rawPreview = normalizePreviewText(attachment.previewText);
+    if (!rawPreview) return '';
+    const mode = attachmentPreviewMode(attachment);
+    if (mode === 'html') {
+      const title = truncatePreviewText(extractHtmlPreviewTitle(rawPreview) || attachment.fileName, 88);
+      const summary = truncatePreviewText(stripHtmlPreviewText(rawPreview), 260);
+      return '<div class="collab-chat-rich-preview is-html">' +
+        '<div class="collab-chat-rich-preview-head">' +
+          '<span class="collab-chat-preview-badge">' + escapeHtml(previewBadgeLabel(attachment, mode)) + '</span>' +
+          '<strong>' + escapeHtml(title) + '</strong>' +
+        '</div>' +
+        (summary ? '<p class="collab-chat-rich-preview-summary">' + escapeHtml(summary) + '</p>' : '') +
+        '<details><summary class="collab-chat-link">' + escapeHtml(embeddedLanguage === 'zh' ? '\u67e5\u770b\u6e90\u7801\u7247\u6bb5' : 'View source snippet') + '</summary>' +
+          '<pre class="collab-chat-preview is-code" data-preview-mode="html">' + escapeHtml(truncatePreviewText(rawPreview, 1400)) + '</pre>' +
+        '</details>' +
+      '</div>';
+    }
+    if (mode === 'markdown') {
+      const markdownSummary = summarizeMarkdownPreview(rawPreview);
+      const title = truncatePreviewText(markdownSummary.heading || attachment.fileName, 88);
+      const summary = truncatePreviewText(markdownSummary.summary, 260);
+      return '<div class="collab-chat-rich-preview is-markdown">' +
+        '<div class="collab-chat-rich-preview-head">' +
+          '<span class="collab-chat-preview-badge">' + escapeHtml(previewBadgeLabel(attachment, mode)) + '</span>' +
+          '<strong>' + escapeHtml(title) + '</strong>' +
+        '</div>' +
+        (summary ? '<p class="collab-chat-rich-preview-summary">' + escapeHtml(summary) + '</p>' : '') +
+        '<details><summary class="collab-chat-link">' + escapeHtml(embeddedLanguage === 'zh' ? '\u67e5\u770b Markdown \u539f\u6587' : 'View markdown snippet') + '</summary>' +
+          '<pre class="collab-chat-preview is-code" data-preview-mode="markdown">' + escapeHtml(truncatePreviewText(rawPreview, 1400)) + '</pre>' +
+        '</details>' +
+      '</div>';
+    }
+    if (mode === 'code') {
+      return '<div class="collab-chat-rich-preview is-code">' +
+        '<div class="collab-chat-rich-preview-head">' +
+          '<span class="collab-chat-preview-badge">' + escapeHtml(previewBadgeLabel(attachment, mode)) + '</span>' +
+          '<strong>' + escapeHtml(embeddedLanguage === 'zh' ? '\u4ee3\u7801\u9884\u89c8' : 'Code preview') + '</strong>' +
+        '</div>' +
+        '<pre class="collab-chat-preview is-code" data-preview-mode="code">' + escapeHtml(truncatePreviewText(rawPreview, 1600)) + '</pre>' +
+      '</div>';
+    }
+    return '<details><summary class="collab-chat-link">' + escapeHtml(labels.preview) + '</summary><pre class="collab-chat-preview">' + escapeHtml(truncatePreviewText(rawPreview, 1400)) + '</pre></details>';
   };
 
   const renderAttachments = (attachments) => {
     if (!Array.isArray(attachments) || attachments.length === 0) return '';
     return '<div class="collab-chat-attachments">' + attachments.map((attachment) => {
       state.attachmentIndex.set(attachment.attachmentId, attachment);
-      const meta = [attachment.contentType, formatBytes(attachment.sizeBytes), attachment.sourceLocalPath]
-        .filter(Boolean)
-        .join(' | ');
+      const mode = attachmentPreviewMode(attachment);
+      const meta = attachmentMetaLine(attachment, mode);
       let preview = '';
       if (attachment.kind === 'image') {
         preview = '<img class="collab-chat-image" src="' + escapeHtml(attachment.contentHref) + '" alt="' + escapeHtml(attachment.fileName) + '" />';
       } else if (attachment.kind === 'text' && attachment.previewText) {
-        preview = '<details><summary class="collab-chat-link">' + escapeHtml(labels.preview) + '</summary><pre class="collab-chat-preview">' + escapeHtml(attachment.previewText) + '</pre></details>';
+        preview = renderAttachmentTextPreview(attachment);
       }
+      const openLabel = mode === 'html'
+        ? (embeddedLanguage === 'zh' ? '\u6253\u5f00\u9875\u9762' : 'Open page')
+        : labels.openFile;
+      const openHint = embeddedLanguage === 'zh' ? '\u70b9\u51fb\u76f4\u63a5\u6253\u5f00' : 'Click to open';
       return '<div class="collab-chat-attachment">' +
-        '<div class="collab-chat-attachment-head">' +
+        '<div class="collab-chat-attachment-card" data-open-attachment="' + escapeHtml(attachment.attachmentId) + '" tabindex="0" role="button" aria-label="' + escapeHtml(openLabel + ': ' + attachment.fileName) + '">' +
           '<div class="collab-chat-attachment-copy">' +
             '<strong>' + escapeHtml(attachment.fileName) + '</strong>' +
             '<span>' + escapeHtml(meta) + '</span>' +
           '</div>' +
-          '<div class="collab-chat-attachment-actions">' +
-            '<a class="collab-chat-link" href="' + escapeHtml(attachment.contentHref) + '" target="_blank" rel="noreferrer">' + escapeHtml(labels.openFile) + '</a>' +
+          '<span class="collab-chat-attachment-icon" data-file-mode="' + escapeHtml(mode || attachment.kind || 'file') + '">' +
+            '<span>' + escapeHtml(attachmentCardLabel(attachment, mode)) + '</span>' +
+          '</span>' +
+        '</div>' +
+        (preview ? '<div class="collab-chat-attachment-preview">' + preview + '</div>' : '') +
+        '<div class="collab-chat-attachment-actions">' +
+          '<span class="collab-chat-attachment-openhint">' + escapeHtml(openHint) + '</span>' +
+          '<div class="collab-chat-attachment-actions-inner">' +
+            '<a class="collab-chat-link" href="' + escapeHtml(attachment.contentHref) + '" target="_blank" rel="noreferrer" data-open-link="' + escapeHtml(attachment.attachmentId) + '">' + escapeHtml(openLabel) + '</a>' +
             '<button class="collab-chat-ghost" type="button" data-save-attachment="' + escapeHtml(attachment.attachmentId) + '">' + escapeHtml(labels.save) + '</button>' +
           '</div>' +
         '</div>' +
-        preview +
       '</div>';
     }).join('') + '</div>';
   };
@@ -277,6 +455,8 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     eventsList.innerHTML = events.map((event) => {
       const participant = event.agentId ? findParticipant(event.agentId) : null;
       const historyToolEvent = isHistoryToolEvent(event);
+      const livePreview = event.liveSessionBackfill === true;
+      const pendingEvent = event.pending === true;
       const actorName = event.authorRole === 'user'
         ? ${serializeJsonForScript(input.language === "zh" ? "你" : "You")}
         : participant && participant.displayName
@@ -284,7 +464,12 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
           : event.agentDisplayName || event.label || ${serializeJsonForScript(input.language === "zh" ? "系统" : "System")};
       const accent = participant && participant.identity && participant.identity.accent ? participant.identity.accent : '#0f766e';
       const imageHref = participant && participant.identity && participant.identity.imageHref ? participant.identity.imageHref : '';
-      const eventClass = (event.authorRole === 'user' ? ' is-user' : event.authorRole === 'agent' ? ' is-agent' : '') + (historyToolEvent ? ' is-tool-event' : '');
+      const eventClass = (event.authorRole === 'user' ? ' is-user' : event.authorRole === 'agent' ? ' is-agent' : '') + (historyToolEvent ? ' is-tool-event' : '') + (livePreview ? ' is-live' : '') + (pendingEvent ? ' is-pending' : '');
+      const eventBadge = pendingEvent
+        ? ${serializeJsonForScript(input.language === "zh" ? "处理中" : "Working")}
+        : livePreview
+          ? ${serializeJsonForScript(input.language === "zh" ? "实时同步" : "Live sync")}
+          : '';
       const bodyHtml = event.messageHtml || (event.message ? '<p class="chat-md-paragraph">' + escapeHtml(event.message) + '</p>' : '');
       const detailHtml = event.detailHtml || (event.detail ? '<p class="chat-md-paragraph">' + escapeHtml(event.detail) + '</p>' : '');
       const eventContent = (bodyHtml ? '<div class="collab-chat-event-body">' + bodyHtml + '</div>' : '') +
@@ -302,7 +487,7 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
             }) +
             '<span class="collab-chat-event-copy">' +
               '<strong>' + escapeHtml(actorName) + '</strong>' +
-              '<span>' + escapeHtml(event.label || '') + '</span>' +
+              '<span>' + escapeHtml(event.label || '') + (eventBadge ? '<em class="collab-chat-event-badge">' + escapeHtml(eventBadge) + '</em>' : '') + '</span>' +
             '</span>' +
           '</div>' +
           '<time class="collab-chat-event-time">' + escapeHtml(formatTime(event.createdAt)) + '</time>' +
@@ -331,8 +516,9 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
   const syncPresence = () => {
     const events = state.room && Array.isArray(state.room.events) ? state.room.events : [];
     const latest = events.length > 0 ? events[events.length - 1] : null;
+    const hasProjectedActivity = events.some((event) => event && (event.pending || event.liveSessionBackfill));
     presenceNode.classList.remove('is-busy', 'is-failed');
-    if (state.sending || (latest && latest.type === 'dispatch_started')) {
+    if (state.sending || hasProjectedActivity || (latest && latest.type === 'dispatch_started')) {
       presenceNode.classList.add('is-busy');
     } else if (latest && latest.type === 'dispatch_failed') {
       presenceNode.classList.add('is-failed');
@@ -341,13 +527,14 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
 
   const syncComposerState = () => {
     const lock = roomLockMessage();
+    const uploadsBusy = hasUploadingFiles();
     const writable = !lock;
     inputNode.disabled = !writable || state.sending;
-    sendButton.disabled = !writable || state.sending || (!inputNode.value.trim() && state.uploads.length === 0);
-    fileInput.disabled = !writable || state.sending;
-    createButton.disabled = !writable || state.loading || state.sending;
-    deleteButton.disabled = !writable || state.loading || state.sending || state.rooms.length <= 1;
+    sendButton.disabled = !writable || state.sending || uploadsBusy || (!inputNode.value.trim() && state.uploads.length === 0);
+    fileInput.disabled = !writable || state.sending || uploadsBusy;
+    createButton.disabled = !writable || state.sending || state.roomMutationPending || uploadsBusy;
     writeStateNode.textContent = lock || labels.writeReady;
+    syncDeleteDialog();
   };
 
   const syncHeader = () => {
@@ -373,6 +560,7 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     syncPendingEventsScroll();
     syncHeader();
     syncRefreshGuard();
+    syncDeleteDialog();
   };
 `;
 }

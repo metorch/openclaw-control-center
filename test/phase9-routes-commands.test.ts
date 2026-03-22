@@ -53,6 +53,16 @@ test("done-checklist route logic builds readiness payload", async () => {
   assert(docs.routes.some((route) => route.path === "/api/action-queue/acks/prune-preview"));
   assert(docs.routes.some((route) => route.path === "/api/tasks/heartbeat"));
   assert(docs.routes.some((route) => route.path === "/api/usage-cost"));
+  const preferencesRoute = docs.routes.find((route) => route.path === "/api/ui/preferences" && route.method === "PATCH");
+  assert(preferencesRoute, "Expected /api/ui/preferences PATCH docs.");
+  assert.match(
+    preferencesRoute.summary,
+    /viewer-scoped room selection and read cursors/i,
+  );
+  assert.match(
+    preferencesRoute.body?.collaborationChat ?? "",
+    /activeRoomId\?|roomReadCursors\?/,
+  );
 
   // Route-level guard behavior used by /api/import/dry-run
   const blocked = evaluateLocalTokenGate({

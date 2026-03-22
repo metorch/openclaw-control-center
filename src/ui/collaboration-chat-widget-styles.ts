@@ -2,9 +2,10 @@ function renderCollaborationChatStyles(): string {
   return `
 .collab-chat-shell {
   position: fixed;
-  right: 1rem;
-  bottom: 1rem;
+  right: 0.875rem;
+  bottom: calc(0.875rem + env(safe-area-inset-bottom, 0px));
   z-index: 80;
+  max-width: calc(100vw - 1.75rem);
   font-family: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Helvetica Neue", sans-serif;
   --chat-text: var(--text, #1d1d1f);
   --chat-muted: var(--muted, #6e6e73);
@@ -27,9 +28,10 @@ function renderCollaborationChatStyles(): string {
 .collab-chat-launcher {
   display: inline-flex;
   align-items: center;
-  gap: 0.875rem;
-  min-width: 15rem;
-  padding: 0.85rem 1rem;
+  gap: 0.75rem;
+  min-width: 13.5rem;
+  max-width: min(100%, 18rem);
+  padding: 0.78rem 0.92rem;
   border: 1px solid rgba(255, 255, 255, 0.76);
   border-radius: 999px;
   background:
@@ -73,13 +75,13 @@ function renderCollaborationChatStyles(): string {
 }
 
 .collab-chat-launcher-copy strong {
-  font-size: 0.98rem;
+  font-size: 0.93rem;
   line-height: 1.15;
 }
 
 .collab-chat-launcher-copy small {
   color: var(--chat-muted);
-  font-size: 0.72rem;
+  font-size: 0.7rem;
 }
 
 .collab-chat-launcher-unread,
@@ -106,11 +108,11 @@ function renderCollaborationChatStyles(): string {
 .collab-chat-panel {
   position: absolute;
   right: 0;
-  bottom: calc(100% + 0.85rem);
-  width: min(27rem, calc(100vw - 1.5rem));
-  height: min(78vh, 46rem);
+  bottom: calc(100% + 0.72rem);
+  width: min(24rem, calc(100vw - 1.75rem));
+  height: min(72vh, 40rem);
   border: 1px solid rgba(255, 255, 255, 0.76);
-  border-radius: 1.5rem;
+  border-radius: 1.35rem;
   background: var(--chat-panel-fill);
   color: var(--chat-text);
   box-shadow: var(--chat-shadow);
@@ -122,11 +124,12 @@ function renderCollaborationChatStyles(): string {
   transform-origin: bottom right;
   transition: opacity 160ms ease, transform 160ms ease;
   overflow: hidden;
+  overscroll-behavior: contain;
 }
 
 .collab-chat-layout {
   display: grid;
-  grid-template-columns: 6.45rem minmax(0, 1fr);
+  grid-template-columns: 5.9rem minmax(0, 1fr);
   height: 100%;
   min-height: 0;
 }
@@ -134,7 +137,7 @@ function renderCollaborationChatStyles(): string {
 .collab-chat-sidebar {
   display: grid;
   min-height: 0;
-  padding: 1.95rem 0.55rem 0.9rem;
+  padding: 1.72rem 0.48rem 0.82rem;
   border-right: 1px solid rgba(15, 23, 42, 0.06);
   background:
     linear-gradient(180deg, rgba(248, 250, 253, 0.84), rgba(242, 246, 250, 0.74)),
@@ -153,9 +156,9 @@ function renderCollaborationChatStyles(): string {
 .collab-chat-main {
   display: grid;
   grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
-  gap: 0.62rem;
+  gap: 0.56rem;
   min-height: 0;
-  padding: 0.82rem 0.9rem 0.9rem;
+  padding: 0.76rem 0.82rem 0.82rem;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0));
 }
 
@@ -246,7 +249,7 @@ function renderCollaborationChatStyles(): string {
   justify-content: flex-end;
   align-content: flex-start;
   gap: 0.38rem;
-  max-width: min(24rem, 100%);
+  max-width: min(21rem, 100%);
 }
 
 .collab-chat-ghost,
@@ -540,6 +543,8 @@ function renderCollaborationChatStyles(): string {
 .collab-chat-empty[hidden],
 .collab-chat-events[hidden],
 .collab-chat-mentions[hidden],
+.collab-chat-drop-hint[hidden],
+.collab-chat-dialog-backdrop[hidden],
 .collab-chat-person-card[hidden] {
   display: none;
 }
@@ -549,6 +554,7 @@ function renderCollaborationChatStyles(): string {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  width: 100%;
   padding: 0.58rem 0.68rem;
   border-radius: 0.92rem;
   border: 1px solid rgba(15, 23, 42, 0.04);
@@ -557,6 +563,14 @@ function renderCollaborationChatStyles(): string {
   cursor: pointer;
   text-align: left;
   transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.collab-chat-room-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 0.42rem;
 }
 
 .collab-chat-room-option:hover {
@@ -592,6 +606,136 @@ function renderCollaborationChatStyles(): string {
   line-height: 1.2;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+.collab-chat-room-delete {
+  appearance: none;
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(239, 68, 68, 0.18);
+  border-radius: 0.78rem;
+  background: rgba(255, 245, 245, 0.98);
+  color: #dc2626;
+  cursor: pointer;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+
+.collab-chat-room-delete:hover {
+  border-color: rgba(220, 38, 38, 0.28);
+  background: rgba(254, 226, 226, 0.98);
+  color: #b91c1c;
+  box-shadow: 0 8px 18px rgba(220, 38, 38, 0.12);
+}
+
+.collab-chat-room-delete:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.14);
+}
+
+.collab-chat-room-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  box-shadow: none;
+}
+
+.collab-chat-dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.22);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 6;
+}
+
+.collab-chat-dialog {
+  width: min(22rem, calc(100% - 1rem));
+  display: grid;
+  gap: 0.88rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 253, 0.95)),
+    radial-gradient(circle at top right, rgba(239, 68, 68, 0.08), transparent 42%);
+  box-shadow: 0 24px 52px rgba(15, 23, 42, 0.2);
+  color: var(--chat-text);
+}
+
+.collab-chat-dialog-copy {
+  display: grid;
+  gap: 0.44rem;
+}
+
+.collab-chat-dialog-copy strong {
+  font-size: 0.94rem;
+  line-height: 1.28;
+}
+
+.collab-chat-dialog-copy p {
+  margin: 0;
+  color: var(--chat-muted);
+  font-size: 0.78rem;
+  line-height: 1.48;
+}
+
+.collab-chat-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.collab-chat-danger {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.02rem;
+  padding: 0.38rem 0.84rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ef4444, #dc2626);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.18;
+  box-shadow: 0 12px 24px rgba(220, 38, 38, 0.22);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    background 160ms ease,
+    opacity 160ms ease;
+}
+
+.collab-chat-danger:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, #f87171, #dc2626);
+  box-shadow: 0 14px 28px rgba(220, 38, 38, 0.26);
+}
+
+.collab-chat-danger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.14), 0 14px 28px rgba(220, 38, 38, 0.26);
+}
+
+.collab-chat-danger:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+  box-shadow: none;
 }
 
 .collab-chat-person {
@@ -846,6 +990,17 @@ function renderCollaborationChatStyles(): string {
   background: linear-gradient(135deg, rgba(52, 199, 89, 0.08), rgba(125, 211, 252, 0.06));
 }
 
+.collab-chat-event.is-live {
+  border-color: rgba(14, 165, 233, 0.18);
+  box-shadow: 0 10px 24px rgba(14, 165, 233, 0.1);
+}
+
+.collab-chat-event.is-pending {
+  border-style: dashed;
+  border-color: rgba(14, 165, 233, 0.28);
+  background: linear-gradient(135deg, rgba(224, 242, 254, 0.82), rgba(248, 250, 252, 0.96));
+}
+
 .collab-chat-event-head {
   display: flex;
   align-items: center;
@@ -880,6 +1035,21 @@ function renderCollaborationChatStyles(): string {
   color: #64748b;
   font-size: 0.71rem;
   line-height: 1.3;
+}
+
+.collab-chat-event-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.42rem;
+  padding: 0.08rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.12);
+  color: #0369a1;
+  font-size: 0.64rem;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
 }
 
 .collab-chat-event-time {
@@ -969,11 +1139,34 @@ function renderCollaborationChatStyles(): string {
 
 .collab-chat-attachment {
   display: grid;
-  gap: 0.45rem;
-  padding: 0.7rem;
+  gap: 0.55rem;
+  padding: 0.35rem 0;
   border-radius: 0.95rem;
-  border: 1px solid var(--chat-border-soft);
-  background: rgba(255, 255, 255, 0.9);
+}
+
+.collab-chat-attachment-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.82rem 0.9rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 247, 251, 0.96));
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+
+.collab-chat-attachment-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(37, 99, 235, 0.2);
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12);
+}
+
+.collab-chat-attachment-card:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.34);
+  outline-offset: 2px;
 }
 
 .collab-chat-attachment-head,
@@ -1006,11 +1199,83 @@ function renderCollaborationChatStyles(): string {
   font-size: 0.7rem;
 }
 
+.collab-chat-attachment-icon {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 3.1rem;
+  min-width: 3.1rem;
+  height: 3.8rem;
+  padding: 0.45rem 0.35rem;
+  border-radius: 1rem;
+  background: linear-gradient(180deg, #6678a2, #4c5875);
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.collab-chat-attachment-icon::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 1.2rem;
+  height: 1.2rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(209, 213, 219, 0.72));
+  clip-path: polygon(100% 0, 0 0, 100% 100%);
+}
+
+.collab-chat-attachment-icon span {
+  position: relative;
+  z-index: 1;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.collab-chat-attachment-icon[data-file-mode="html"] {
+  background: linear-gradient(180deg, #7481a7, #59698e);
+}
+
+.collab-chat-attachment-icon[data-file-mode="markdown"] {
+  background: linear-gradient(180deg, #4f7cff, #335fdb);
+}
+
+.collab-chat-attachment-icon[data-file-mode="code"] {
+  background: linear-gradient(180deg, #1f9bb3, #0f6f84);
+}
+
+.collab-chat-attachment-icon[data-file-mode="image"] {
+  background: linear-gradient(180deg, #8b5cf6, #6d28d9);
+}
+
+.collab-chat-attachment-preview {
+  display: grid;
+  gap: 0.45rem;
+}
+
 .collab-chat-attachment-actions,
 .collab-chat-upload-actions {
-  display: inline-flex;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
   gap: 0.38rem;
+}
+
+.collab-chat-attachment-actions-inner {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.38rem;
+}
+
+.collab-chat-attachment-openhint {
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 600;
 }
 
 .collab-chat-link {
@@ -1043,9 +1308,96 @@ function renderCollaborationChatStyles(): string {
   overflow: auto;
 }
 
+.collab-chat-rich-preview {
+  display: grid;
+  gap: 0.48rem;
+  padding: 0.72rem 0.76rem;
+  border-radius: 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(241, 245, 249, 0.96));
+}
+
+.collab-chat-rich-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 0.52rem;
+  min-width: 0;
+}
+
+.collab-chat-rich-preview-head strong {
+  min-width: 0;
+  font-size: 0.78rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.collab-chat-preview-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.35rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  color: #0f172a;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.collab-chat-rich-preview-summary {
+  margin: 0;
+  color: #334155;
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.collab-chat-preview.is-code {
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre;
+  word-break: normal;
+  tab-size: 2;
+}
+
+.collab-chat-rich-preview.is-html .collab-chat-preview-badge {
+  background: rgba(249, 115, 22, 0.12);
+  color: #9a3412;
+}
+
+.collab-chat-rich-preview.is-markdown .collab-chat-preview-badge {
+  background: rgba(37, 99, 235, 0.12);
+  color: #1d4ed8;
+}
+
+.collab-chat-rich-preview.is-code .collab-chat-preview-badge {
+  background: rgba(14, 116, 144, 0.12);
+  color: #155e75;
+}
+
 .collab-chat-composer {
+  position: relative;
   display: grid;
   gap: 0.5rem;
+}
+
+.collab-chat-drop-hint {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px dashed rgba(0, 113, 227, 0.34);
+  background: rgba(240, 247, 255, 0.9);
+  color: var(--chat-accent);
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-align: center;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .collab-chat-upload-list {
@@ -1058,6 +1410,15 @@ function renderCollaborationChatStyles(): string {
   border-radius: 0.9rem;
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid var(--chat-border-soft);
+}
+
+.collab-chat-upload-item.is-error {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: rgba(254, 242, 242, 0.92);
+}
+
+.collab-chat-upload-item.is-ready {
+  border-color: rgba(14, 116, 144, 0.2);
 }
 
 .collab-chat-upload-copy {
@@ -1073,6 +1434,13 @@ function renderCollaborationChatStyles(): string {
 
 .collab-chat-upload-copy strong {
   line-height: 1.3;
+}
+
+.collab-chat-upload-error {
+  margin: 0.16rem 0 0;
+  color: #b91c1c;
+  font-size: 0.72rem;
+  line-height: 1.42;
 }
 
 .collab-chat-attach {
@@ -1124,6 +1492,22 @@ function renderCollaborationChatStyles(): string {
 
 .collab-chat-input-shell:focus-within {
   border-color: rgba(0, 113, 227, 0.22);
+  box-shadow: var(--chat-ring), inset 0 1px 0 rgba(255, 255, 255, 0.64);
+}
+
+.collab-chat-panel.is-file-drop-target {
+  border-color: rgba(0, 113, 227, 0.26);
+  box-shadow: var(--chat-ring), var(--chat-shadow);
+}
+
+.collab-chat-composer.is-file-drop-target .collab-chat-attach {
+  border-color: rgba(0, 113, 227, 0.54);
+  background: rgba(240, 247, 255, 0.98);
+}
+
+.collab-chat-input-shell.is-file-drop-target {
+  border-color: rgba(0, 113, 227, 0.3);
+  background: rgba(240, 247, 255, 0.98);
   box-shadow: var(--chat-ring), inset 0 1px 0 rgba(255, 255, 255, 0.64);
 }
 
@@ -1195,528 +1579,12 @@ function renderCollaborationChatStyles(): string {
   font-size: 0.76rem;
 }
 
-/* Reverted custom chat skins
-.collab-chat-shell {
-  font-family: "Outfit", "PingFang SC", "Noto Sans SC", sans-serif;
-}
-
-.collab-chat-launcher {
-  border: 0;
-  border-radius: 0.625rem;
-  background: #3b82f6;
-  color: #ffffff;
-  box-shadow: none;
-  transition: transform 180ms ease, background 180ms ease;
-}
-
-.collab-chat-launcher:hover,
-.collab-chat-launcher.is-open {
-  background: #2563eb;
-  opacity: 1;
-  transform: scale(1.02);
-}
-
-.collab-chat-launcher-copy small {
-  color: rgba(255, 255, 255, 0.82);
-}
-
-.collab-chat-launcher-unread,
-.collab-chat-badge {
-  background: #f59e0b;
-  color: #111827;
-}
-
-.collab-chat-panel {
-  border: 2px solid #111827;
-  border-radius: 0.9rem;
-  background: #ffffff;
-  box-shadow: none;
-}
-
-.collab-chat-sidebar {
-  border-right: 2px solid #e5e7eb;
-  background: #f3f4f6;
-}
-
-.collab-chat-main {
-  padding: 0.95rem;
-  gap: 0.7rem;
-}
-
-.collab-chat-resize-handle {
-  border-top-color: #111827;
-  border-left-color: #111827;
-  opacity: 1;
-  z-index: 7;
-}
-
-.collab-chat-kicker,
-.collab-chat-project-kicker {
-  color: #2563eb;
-}
-
-.collab-chat-ghost,
-.collab-chat-toggle {
-  border: 2px solid #e5e7eb;
-  border-radius: 0.625rem;
-  background: #f3f4f6;
-  box-shadow: none;
-  transition: transform 180ms ease, background 180ms ease, border-color 180ms ease;
-}
-
-.collab-chat-ghost:hover,
-.collab-chat-toggle:hover {
-  border-color: #3b82f6;
-  background: #dbeafe;
-  transform: scale(1.03);
-}
-
-.collab-chat-send {
-  border-radius: 0.625rem;
-  background: #111827;
-  box-shadow: none;
-  min-width: 4rem;
-  transition: transform 180ms ease, background 180ms ease;
-}
-
-.collab-chat-send:hover {
-  background: #1f2937;
-  transform: scale(1.03);
-}
-
-.collab-chat-toolbar,
-.collab-chat-project-strip,
-.collab-chat-room-trigger,
-.collab-chat-room-dropdown,
-.collab-chat-feed,
-.collab-chat-input-shell,
-.collab-chat-upload-item,
-.collab-chat-attachment,
-.collab-chat-person-card,
-.collab-chat-mentions {
-  border: 2px solid #e5e7eb;
-  border-radius: 0.75rem;
-  background: #ffffff;
-  box-shadow: none;
-}
-
-.collab-chat-toolbar {
-  background: #f3f4f6;
-}
-
-.collab-chat-project-strip {
-  background: #eff6ff;
-}
-
-.collab-chat-room-trigger {
-  border-color: #e5e7eb;
-  background: #ffffff;
-}
-
-.collab-chat-room-option {
-  border: 2px solid transparent;
-  border-radius: 0.625rem;
-  background: #ffffff;
-}
-
-.collab-chat-room-option.is-active,
-.collab-chat-room-option:hover {
-  border-color: #3b82f6;
-  background: #dbeafe;
-}
-
-.collab-chat-person {
-  border: 2px solid transparent;
-  border-radius: 0.75rem;
-  background: transparent;
-  box-shadow: none;
-  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
-}
-
-.collab-chat-person.is-primary,
-.collab-chat-person:hover,
-.collab-chat-person:focus-visible {
-  border-color: #3b82f6;
-  background: #ffffff;
-  transform: scale(1.02);
-  outline: none;
-}
-
-.collab-chat-avatar {
-  background: #111827;
-}
-
-.collab-chat-avatar-state,
-.collab-chat-status-dot {
-  box-shadow: none;
-}
-
-.collab-chat-feed {
-  background: #f9fafb;
-}
-
-.collab-chat-event {
-  border: 2px solid #e5e7eb;
-  border-radius: 0.75rem;
-  background: #ffffff;
-}
-
-.collab-chat-event.is-user {
-  background: #dbeafe;
-  border-color: #93c5fd;
-}
-
-.collab-chat-event.is-agent {
-  background: #ecfdf5;
-  border-color: #6ee7b7;
-}
-
-.collab-chat-event.is-tool-event {
-  background: #f3f4f6;
-  border-color: #d1d5db;
-}
-
-.collab-chat-event-fold-summary::before {
-  content: "▸";
-}
-
-.collab-chat-attach {
-  border: 2px dashed #3b82f6;
-  border-radius: 0.625rem;
-  background: #eff6ff;
-}
-
-.collab-chat-input-wrap textarea {
-  border-radius: 0.5rem;
-  background: #f3f4f6;
-  padding: 0.65rem 0.75rem;
-}
-
-.collab-chat-input-shell:focus-within {
-  border-color: #3b82f6;
-  background: #ffffff;
-}
-
-.collab-chat-mention-option {
-  border: 2px solid transparent;
-  border-radius: 0.625rem;
-}
-
-.collab-chat-mention-option.is-active,
-.collab-chat-mention-option:hover {
-  border-color: #3b82f6;
-  background: #dbeafe;
-}
-
-.collab-chat-shell {
-  --neu-bg: #e7edf5;
-  --neu-surface: #edf2f8;
-  --neu-surface-strong: #dde6f1;
-  --neu-text: #566274;
-  --neu-muted: #7d8898;
-  --neu-accent: #7d9cf7;
-  --neu-accent-strong: #6f8ff4;
-  --neu-success: #84d7be;
-  --neu-shadow: 10px 10px 22px rgba(163, 177, 198, 0.42), -10px -10px 22px rgba(255, 255, 255, 0.92);
-  --neu-shadow-strong: 16px 16px 34px rgba(163, 177, 198, 0.46), -16px -16px 34px rgba(255, 255, 255, 0.95);
-  --neu-press: inset 7px 7px 14px rgba(163, 177, 198, 0.42), inset -7px -7px 14px rgba(255, 255, 255, 0.94);
-}
-
-.collab-chat-launcher {
-  min-height: 3.45rem;
-  border: 0;
-  border-radius: 1.2rem;
-  background: linear-gradient(145deg, #eef3fa, #dce5f1);
-  color: var(--neu-text);
-  box-shadow: var(--neu-shadow);
-}
-
-.collab-chat-launcher:hover,
-.collab-chat-launcher.is-open {
-  background: linear-gradient(145deg, #e3eaf4, #f0f5fb);
-  color: var(--neu-text);
-  transform: translateY(1px);
-  box-shadow: var(--neu-press);
-}
-
-.collab-chat-launcher-copy small {
-  color: var(--neu-muted);
-}
-
-.collab-chat-launcher-unread,
-.collab-chat-badge {
-  background: linear-gradient(145deg, #f7d4c4, #efb18d);
-  color: #6b564b;
-  box-shadow: 6px 6px 12px rgba(181, 158, 145, 0.3), -6px -6px 12px rgba(255, 255, 255, 0.64);
-}
-
-.collab-chat-panel {
-  border: 0;
-  border-radius: 1.6rem;
-  background: var(--neu-bg);
-  box-shadow: var(--neu-shadow-strong);
-}
-
-.collab-chat-sidebar {
-  border-right: 0;
-  background: linear-gradient(180deg, #e2eaf3, #e7edf5);
-  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.54);
-}
-
-.collab-chat-header {
-  position: relative;
-  overflow: hidden;
-  padding: 0.95rem 1rem;
-  border: 0;
-  border-radius: 1.25rem;
-  background: linear-gradient(145deg, #eef3fa, #dbe5f2);
-  box-shadow: var(--neu-shadow);
-}
-
-.collab-chat-header::before {
-  content: "";
-  position: absolute;
-  left: -1.9rem;
-  bottom: -2.4rem;
-  width: 6.6rem;
-  height: 6.6rem;
-  border-radius: 999px;
-  background: radial-gradient(circle, rgba(125, 156, 247, 0.2), transparent 68%);
-  pointer-events: none;
-}
-
-.collab-chat-header::after {
-  content: "";
-  position: absolute;
-  top: -1.3rem;
-  right: -0.8rem;
-  width: 5.2rem;
-  height: 5.2rem;
-  border-radius: 1.4rem;
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.5), rgba(125, 156, 247, 0.14));
-  pointer-events: none;
-}
-
-.collab-chat-header-copy h2,
-.collab-chat-header-copy p,
-.collab-chat-kicker {
-  position: relative;
-  z-index: 1;
-}
-
-.collab-chat-kicker {
-  color: var(--neu-accent);
-}
-
-.collab-chat-header-copy h2 {
-  color: var(--neu-text);
-}
-
-.collab-chat-header-copy p {
-  color: var(--neu-muted);
-}
-
-.collab-chat-header-actions {
-  position: relative;
-  z-index: 1;
-}
-
-.collab-chat-ghost,
-.collab-chat-toggle {
-  border: 0;
-  border-radius: 1rem;
-  background: var(--neu-bg);
-  color: var(--neu-text);
-  box-shadow: var(--neu-shadow);
-}
-
-.collab-chat-ghost:hover,
-.collab-chat-toggle:hover {
-  background: var(--neu-bg);
-  color: #4f5d6f;
-  transform: translateY(1px);
-  box-shadow: var(--neu-press);
-}
-
-.collab-chat-send {
-  min-width: 4.6rem;
-  border: 0;
-  border-radius: 1rem;
-  background: linear-gradient(145deg, #8ea9ff, #6f8ff4);
-  color: #ffffff;
-  box-shadow: 9px 9px 18px rgba(124, 145, 205, 0.34), -7px -7px 16px rgba(255, 255, 255, 0.26);
-}
-
-.collab-chat-send:hover {
-  background: linear-gradient(145deg, #8ea9ff, #6f8ff4);
-  transform: translateY(1px);
-  box-shadow: inset 6px 6px 12px rgba(99, 126, 210, 0.34), inset -6px -6px 12px rgba(255, 255, 255, 0.14), 4px 4px 12px rgba(163, 177, 198, 0.28);
-}
-
-.collab-chat-toolbar,
-.collab-chat-project-strip,
-.collab-chat-room-trigger,
-.collab-chat-room-dropdown,
-.collab-chat-feed,
-.collab-chat-input-shell,
-.collab-chat-upload-item,
-.collab-chat-attachment,
-.collab-chat-person-card,
-.collab-chat-mentions {
-  border: 0;
-  border-radius: 1.1rem;
-  background: var(--neu-surface);
-  box-shadow: var(--neu-shadow);
-}
-
-.collab-chat-toolbar {
-  background: linear-gradient(145deg, #eef3fa, #dce5f1);
-}
-
-.collab-chat-project-strip {
-  background: linear-gradient(145deg, #e7f4f0, #d9eee7);
-}
-
-.collab-chat-room-option {
-  border: 0;
-  background: var(--neu-surface);
-  box-shadow: 7px 7px 14px rgba(163, 177, 198, 0.32), -7px -7px 14px rgba(255, 255, 255, 0.9);
-}
-
-.collab-chat-room-option.is-active,
-.collab-chat-room-option:hover {
-  border-color: transparent;
-  background: var(--neu-surface);
-  box-shadow: var(--neu-press);
-}
-
-.collab-chat-person {
-  border: 0;
-  border-radius: 1.1rem;
-  background: var(--neu-bg);
-  box-shadow: 7px 7px 14px rgba(163, 177, 198, 0.34), -7px -7px 14px rgba(255, 255, 255, 0.9);
-}
-
-.collab-chat-person.is-primary,
-.collab-chat-person:hover,
-.collab-chat-person:focus-visible {
-  border-color: transparent;
-  background: linear-gradient(145deg, #e9eef7, #dce5f2);
-  box-shadow: var(--neu-press);
-  transform: translateY(1px);
-}
-
-.collab-chat-avatar {
-  border: 0;
-  background: linear-gradient(145deg, #8aa6ff, #6f8ff4);
-  box-shadow: 6px 6px 12px rgba(124, 145, 205, 0.28), -5px -5px 12px rgba(255, 255, 255, 0.32);
-}
-
-.collab-chat-feed {
-  background: linear-gradient(145deg, #eaf0f6, #dde6f1);
-  box-shadow: var(--neu-press);
-}
-
-.collab-chat-event {
-  border: 0;
-  border-radius: 1rem;
-  background: var(--neu-surface);
-  box-shadow: var(--neu-shadow);
-}
-
-.collab-chat-event.is-user {
-  border-color: transparent;
-  background: linear-gradient(145deg, #e8eef8, #dbe5f2);
-}
-
-.collab-chat-event.is-agent {
-  border-color: transparent;
-  background: linear-gradient(145deg, #e7f4f0, #d9eee7);
-}
-
-.collab-chat-event.is-tool-event {
-  border-color: transparent;
-  background: linear-gradient(145deg, #edf2f8, #dde6f1);
-}
-
-.collab-chat-event-fold-summary {
-  padding: 0.22rem 0.52rem;
-  border: 0;
-  border-radius: 0.75rem;
-  background: var(--neu-bg);
-  color: var(--neu-text);
-  font-weight: 700;
-  box-shadow: var(--neu-shadow);
-}
-
-.collab-chat-event-fold-summary::before {
-  color: var(--neu-accent);
-}
-
-.collab-chat-attach {
-  border: 0;
-  border-radius: 0.95rem;
-  background: var(--neu-bg);
-  color: var(--neu-accent);
-  box-shadow: var(--neu-shadow);
-}
-
-.collab-chat-attach:hover {
-  background: var(--neu-bg);
-  color: var(--neu-accent-strong);
-  transform: translateY(1px);
-  box-shadow: var(--neu-press);
-}
-
-.collab-chat-input-shell {
-  border: 0;
-  background: var(--neu-bg);
-  box-shadow: var(--neu-press);
-}
-
-.collab-chat-input-wrap textarea {
-  border: 0;
-  background: transparent;
-  color: var(--neu-text);
-  padding: 0.78rem 0.86rem;
-}
-
-.collab-chat-input-wrap textarea:focus {
-  border-color: transparent;
-  background: transparent;
-}
-
-.collab-chat-input-shell:focus-within {
-  border-color: transparent;
-  background: var(--neu-bg);
-  box-shadow: var(--neu-press), 0 0 0 3px rgba(125, 156, 247, 0.18);
-}
-
-.collab-chat-mention-option {
-  border-radius: 0.8rem;
-}
-
-.collab-chat-mention-option.is-active,
-.collab-chat-mention-option:hover {
-  border-color: transparent;
-  background: var(--neu-bg);
-  box-shadow: var(--neu-press);
-}
-
-.collab-chat-resize-handle {
-  top: 0.45rem;
-  left: 0.45rem;
-  width: 1.15rem;
-  height: 1.15rem;
-  border-top-color: #c2ccd9;
-  border-left-color: rgba(255, 255, 255, 0.92);
-}
-
 @media (max-width: 760px) {
   .collab-chat-shell {
     right: 0.75rem;
-    bottom: 0.75rem;
+    bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
     left: 0.75rem;
+    max-width: none;
   }
 
   .collab-chat-launcher {
@@ -1725,33 +1593,30 @@ function renderCollaborationChatStyles(): string {
   }
 
   .collab-chat-panel {
-    position: fixed;
-    inset: 0.75rem;
+    left: 0;
+    right: 0;
     width: auto;
-    height: auto;
+    height: min(68vh, 36rem);
+    max-height: calc(100vh - 6.5rem - env(safe-area-inset-bottom, 0px));
     transform-origin: bottom center;
   }
 
   .collab-chat-layout {
-    grid-template-columns: 5.55rem minmax(0, 1fr);
+    grid-template-columns: 5.2rem minmax(0, 1fr);
   }
 
   .collab-chat-sidebar {
-    padding: 1.55rem 0.45rem 0.75rem;
+    padding: 1.4rem 0.38rem 0.68rem;
   }
 
   .collab-chat-main {
-    gap: 0.68rem;
-    padding: 0.74rem;
+    gap: 0.62rem;
+    padding: 0.68rem;
   }
 
-  .collab-chat-resize-handle {
+  .collab-chat-resize-handle,
+  .collab-chat-person-card {
     display: none;
-  }
-
-  .collab-chat-composer-actions {
-    flex-direction: column;
-    align-items: stretch;
   }
 
   .collab-chat-header-actions {
@@ -1771,11 +1636,6 @@ function renderCollaborationChatStyles(): string {
     padding: 0.56rem 0.62rem;
   }
 
-  .collab-chat-project-main,
-  .collab-chat-project-meta {
-    flex-wrap: wrap;
-  }
-
   .collab-chat-toolbar-group:last-child {
     margin-left: 0;
   }
@@ -1786,29 +1646,15 @@ function renderCollaborationChatStyles(): string {
     text-overflow: clip;
   }
 
-  .collab-chat-section {
+  .collab-chat-input-shell {
     grid-template-columns: minmax(0, 1fr);
-    gap: 0.38rem;
-  }
-
-  .collab-chat-avatar {
-    width: 2.7rem;
-    height: 2.7rem;
-  }
-
-  .collab-chat-room-trigger-copy {
-    gap: 0.42rem;
-  }
-
-  .collab-chat-person-card {
-    display: none;
   }
 }
 
 @media (max-width: 480px) {
   .collab-chat-shell {
     right: 0.5rem;
-    bottom: 0.5rem;
+    bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
     left: 0.5rem;
   }
 
@@ -1823,20 +1669,18 @@ function renderCollaborationChatStyles(): string {
   }
 
   .collab-chat-panel {
-    inset: 0.5rem;
+    bottom: calc(100% + 0.56rem);
+    height: min(64vh, 32rem);
+    max-height: calc(100vh - 5.6rem - env(safe-area-inset-bottom, 0px));
     border-radius: 1.1rem;
   }
 
   .collab-chat-layout {
-    grid-template-columns: 4.95rem minmax(0, 1fr);
+    grid-template-columns: 4.6rem minmax(0, 1fr);
   }
 
   .collab-chat-sidebar {
-    padding: 1.4rem 0.36rem 0.65rem;
-  }
-
-  .collab-chat-roster {
-    gap: 0.58rem;
+    padding: 1.22rem 0.28rem 0.58rem;
   }
 
   .collab-chat-main {
@@ -1847,24 +1691,11 @@ function renderCollaborationChatStyles(): string {
   .collab-chat-header {
     grid-template-columns: minmax(0, 1fr);
     gap: 0.5rem;
-    padding-left: 0.2rem;
   }
 
   .collab-chat-header-copy {
     grid-template-columns: minmax(0, 1fr);
     gap: 0.14rem;
-  }
-
-  .collab-chat-kicker,
-  .collab-chat-header-copy h2,
-  .collab-chat-header-copy p {
-    grid-column: 1;
-    grid-row: auto;
-  }
-
-  .collab-chat-header-copy h2 {
-    font-size: 1.04rem;
-    -webkit-line-clamp: 2;
   }
 
   .collab-chat-header-copy p,
@@ -1875,77 +1706,38 @@ function renderCollaborationChatStyles(): string {
     text-overflow: clip;
   }
 
+  .collab-chat-project-strip,
   .collab-chat-toolbar {
-    gap: 0.6rem;
-    padding: 0.65rem 0.7rem;
-  }
-
-  .collab-chat-project-strip {
-    gap: 0.36rem;
-    padding: 0.58rem 0.7rem;
-  }
-
-  .collab-chat-toolbar-group {
-    align-items: flex-start;
+    padding-inline: 0.7rem;
   }
 
   .collab-chat-room-dropdown {
     max-height: 10rem;
   }
 
-  .collab-chat-room-trigger-copy {
-    gap: 0.36rem;
+  .collab-chat-dialog {
+    width: min(100%, 19rem);
+    gap: 0.8rem;
+    padding: 0.84rem;
   }
 
-  .collab-chat-room-trigger-copy span,
-  .collab-chat-room-option span {
-    font-size: 0.66rem;
+  .collab-chat-dialog-actions {
+    justify-content: stretch;
   }
 
-  .collab-chat-person {
-    gap: 0.32rem;
-    padding: 0.28rem 0.12rem 0.35rem;
-    border-radius: 0.85rem;
-  }
-
-  .collab-chat-avatar {
-    width: 2.35rem;
-    height: 2.35rem;
-  }
-
-  .collab-chat-person-label {
-    font-size: 0.66rem;
+  .collab-chat-dialog-actions .collab-chat-ghost,
+  .collab-chat-dialog-actions .collab-chat-danger,
+  .collab-chat-send {
+    width: 100%;
+    min-width: 0;
   }
 
   .collab-chat-events {
     gap: 0.65rem;
     padding: 0.75rem;
   }
-
-  .collab-chat-event {
-    padding: 0.7rem 0.75rem;
-  }
-
-  .collab-chat-composer {
-    gap: 0.7rem;
-  }
-
-  .collab-chat-input-shell {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.42rem;
-  }
-
-  .collab-chat-input-wrap textarea {
-    min-height: 3.8rem;
-    padding: 0.3rem 0.32rem;
-  }
-
-  .collab-chat-send {
-    width: 100%;
-    min-width: 0;
-  }
 }
-*/
+
 `;
 }
 

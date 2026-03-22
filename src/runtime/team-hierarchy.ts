@@ -7,6 +7,7 @@ const TEAM_HIERARCHY_GROUPS = [
   ["automation", "content", "data", "research", "support", "cs"],
   ["qa", "quality", "test"],
   ["ops", "devops", "release", "sre"],
+  ["heartratemonitor", "heartmonitor", "heartbeatmonitor", "heartbeat", "watchdog", "monitor"],
 ] as const;
 
 export function compareAgentHierarchy(left: string, right: string): number {

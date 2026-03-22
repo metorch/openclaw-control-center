@@ -9,7 +9,8 @@ export type OperationAuditAction =
   | "backup_export"
   | "import_apply"
   | "ack_prune"
-  | "task_heartbeat";
+  | "task_heartbeat"
+  | "heart_rate_monitor";
 export type OperationAuditSource = "api" | "command";
 
 export interface OperationAuditInput {

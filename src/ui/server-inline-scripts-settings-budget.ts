@@ -3,7 +3,7 @@
 const { pickUiText } = require("./server-shared");
 
 function renderSettingsBudgetLimitScript(language) {
-    const l = { unchanged: pickUiText(language, "Current value is already loaded.", "\u5F53\u524D\u503C\u5DF2\u52A0\u8F7D\u3002"), unsaved: pickUiText(language, "Ready to save this budget limit.", "\u9884\u7B97\u9650\u989D\u5DF2\u4FEE\u6539\uFF0C\u53EF\u4EE5\u4FDD\u5B58\u3002"), invalid: pickUiText(language, "Please enter a number greater than 0.", "\u8BF7\u8F93\u5165\u5927\u4E8E 0 \u7684\u6570\u5B57\u3002"), saving: pickUiText(language, "Saving budget limit...", "\u6B63\u5728\u4FDD\u5B58\u9884\u7B97\u9650\u989D..."), clearing: pickUiText(language, "Clearing budget limit...", "\u6B63\u5728\u6E05\u7A7A\u9884\u7B97\u9650\u989D..."), saved: pickUiText(language, "Budget limit saved. Refreshing the page...", "\u9884\u7B97\u9650\u989D\u5DF2\u4FDD\u5B58\uFF0C\u6B63\u5728\u5237\u65B0\u9875\u9762..."), cleared: pickUiText(language, "Budget limit cleared. Refreshing the page...", "\u9884\u7B97\u9650\u989D\u5DF2\u6E05\u7A7A\uFF0C\u6B63\u5728\u5237\u65B0\u9875\u9762..."), saveFailed: pickUiText(language, "Failed to save budget limit.", "\u4FDD\u5B58\u9884\u7B97\u9650\u989D\u5931\u8D25\u3002"), emptyHint: pickUiText(language, "Enter a number, for example 20.", "\u8BF7\u8F93\u5165\u6570\u5B57\uFF0C\u4F8B\u5982 20\u3002"), clearHint: pickUiText(language, "The input is empty. Click Clear to remove the current limit.", "\u8F93\u5165\u6846\u5DF2\u6E05\u7A7A\uFF0C\u70B9\u51FB\u201C\u6E05\u7A7A\u201D\u5373\u53EF\u79FB\u9664\u5F53\u524D\u9650\u989D\u3002"), notSet: pickUiText(language, "Not set", "\u672A\u8BBE\u7F6E"), blocked: pickUiText(language, "This machine has not set a safety passcode yet, so saving is blocked for now.", "\u8FD9\u53F0\u673A\u5668\u8FD8\u6CA1\u8BBE\u7F6E\u5B89\u5168\u53E3\u4EE4\uFF0C\u6240\u4EE5\u8FD9\u91CC\u6682\u65F6\u4E0D\u80FD\u4FDD\u5B58\u3002"), writeLocked: pickUiText(language, "Write access is off. Turn on the top toolbar unlock before saving.", "\u5199\u5165\u89E3\u9501\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u5728\u9876\u90E8\u5DE5\u5177\u680F\u5F00\u542F\u540E\u518D\u4FDD\u5B58\u3002") };
+    const l = { unchanged: pickUiText(language, "Current value is already loaded.", "\u5F53\u524D\u503C\u5DF2\u52A0\u8F7D\u3002"), unsaved: pickUiText(language, "Ready to save this budget limit.", "\u9884\u7B97\u9650\u989D\u5DF2\u4FEE\u6539\uFF0C\u53EF\u4EE5\u4FDD\u5B58\u3002"), invalid: pickUiText(language, "Please enter a number greater than 0.", "\u8BF7\u8F93\u5165\u5927\u4E8E 0 \u7684\u6570\u5B57\u3002"), saving: pickUiText(language, "Saving budget limit...", "\u6B63\u5728\u4FDD\u5B58\u9884\u7B97\u9650\u989D..."), clearing: pickUiText(language, "Saving no-limit budget mode...", "\u6B63\u5728\u4FDD\u5B58\u4E3A\u65E0\u4E0A\u9650\u6A21\u5F0F..."), saved: pickUiText(language, "Budget limit saved. Refreshing the page...", "\u9884\u7B97\u9650\u989D\u5DF2\u4FDD\u5B58\uFF0C\u6B63\u5728\u5237\u65B0\u9875\u9762..."), cleared: pickUiText(language, "Budget limit removed. No cap is active. Refreshing the page...", "\u9884\u7B97\u4E0A\u9650\u5DF2\u79FB\u9664\uFF0C\u73B0\u5728\u4E3A\u65E0\u4E0A\u9650\uFF0C\u6B63\u5728\u5237\u65B0\u9875\u9762..."), saveFailed: pickUiText(language, "Failed to save budget limit.", "\u4FDD\u5B58\u9884\u7B97\u9650\u989D\u5931\u8D25\u3002"), emptyHint: pickUiText(language, "Leave it empty for no limit, or enter a number such as 20.", "\u7559\u7A7A\u8868\u793A\u65E0\u4E0A\u9650\uFF0C\u4E5F\u53EF\u4EE5\u8F93\u5165\u4F8B\u5982 20 \u8FD9\u6837\u7684\u6570\u503C\u3002"), clearHint: pickUiText(language, "The field is empty. Save now to keep the budget unlimited.", "\u8F93\u5165\u6846\u5DF2\u6E05\u7A7A\uFF0C\u6B64\u65F6\u4FDD\u5B58\u5C31\u4F1A\u8BBE\u4E3A\u65E0\u4E0A\u9650\u3002"), notSet: pickUiText(language, "Unlimited", "\u65E0\u4E0A\u9650"), unlimitedActive: pickUiText(language, "No budget limit is active right now.", "\u5F53\u524D\u672A\u542F\u7528\u4EFB\u4F55\u9884\u7B97\u9650\u5236\u3002"), blocked: pickUiText(language, "This machine has not set a safety passcode yet, so saving is blocked for now.", "\u8FD9\u53F0\u673A\u5668\u8FD8\u6CA1\u8BBE\u7F6E\u5B89\u5168\u53E3\u4EE4\uFF0C\u6240\u4EE5\u8FD9\u91CC\u6682\u65F6\u4E0D\u80FD\u4FDD\u5B58\u3002"), writeLocked: pickUiText(language, "Write access is off. Turn on the top toolbar unlock before saving.", "\u5199\u5165\u89E3\u9501\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u5728\u9876\u90E8\u5DE5\u5177\u680F\u5F00\u542F\u540E\u518D\u4FDD\u5B58\u3002") };
     return `<script>
 (() => {
   const root = document.querySelector('[data-budget-limit-root]');
@@ -68,7 +68,7 @@ function renderSettingsBudgetLimitScript(language) {
     const locked = Boolean(lockMessage());
     const empty = raw === '';
     const invalid = !empty && (!Number.isFinite(Number(raw)) || Number(raw) <= 0);
-    saveButton.disabled = saving || locked || empty || invalid || sameAsCurrent(raw);
+    saveButton.disabled = saving || locked || invalid || sameAsCurrent(raw);
     clearButton.disabled = saving || locked || (!currentValue && empty);
   };
   const refreshBudgetStatus = () => {
@@ -80,7 +80,7 @@ function renderSettingsBudgetLimitScript(language) {
     }
     const raw = input.value.trim();
     if (!raw) {
-      setStatus(currentValue ? ${JSON.stringify(l.clearHint)} : ${JSON.stringify(l.emptyHint)});
+      setStatus(currentValue ? ${JSON.stringify(l.clearHint)} : '');
       return;
     }
     const numeric = Number(raw);
@@ -88,7 +88,7 @@ function renderSettingsBudgetLimitScript(language) {
       setStatus(${JSON.stringify(l.invalid)});
       return;
     }
-    setStatus(sameAsCurrent(raw) ? ${JSON.stringify(l.unchanged)} : ${JSON.stringify(l.unsaved)});
+    setStatus(sameAsCurrent(raw) ? '' : ${JSON.stringify(l.unsaved)});
   };
   const reloadAfterSave = () => {
     if (typeof window.__openclawTriggerDashboardRefresh === 'function') {
@@ -154,12 +154,16 @@ function renderSettingsBudgetLimitScript(language) {
   });
   saveButton.addEventListener('click', () => {
     const raw = input.value.trim();
-    const numeric = Number(raw);
     if (!raw) {
-      setStatus(${JSON.stringify(l.emptyHint)});
-      syncButtons();
+      if (sameAsCurrent(raw)) {
+        setStatus('');
+        syncButtons();
+        return;
+      }
+      void submitLimit(null);
       return;
     }
+    const numeric = Number(raw);
     if (!Number.isFinite(numeric) || numeric <= 0) {
       setStatus(${JSON.stringify(l.invalid)});
       syncButtons();
@@ -169,7 +173,7 @@ function renderSettingsBudgetLimitScript(language) {
   });
   clearButton.addEventListener('click', () => {
     if (!currentValue && !input.value.trim()) {
-      setStatus(${JSON.stringify(l.emptyHint)});
+      setStatus('');
       syncButtons();
       return;
     }

@@ -106,6 +106,22 @@ export interface AgentTurnRequest {
   sessionId?: string;
   sessionKey?: string;
   timeoutSeconds?: number;
+  preferGatewayStream?: boolean;
+  onStreamEvent?: (event: AgentTurnStreamEvent) => void | Promise<void>;
+}
+
+export interface AgentTurnStreamEvent {
+  state: "started" | "delta" | "final" | "error";
+  agentId: string;
+  runId?: string;
+  seq?: number;
+  sessionId?: string;
+  sessionKey?: string;
+  text?: string;
+  deltaText?: string;
+  stopReason?: string;
+  errorMessage?: string;
+  rawPayload?: Record<string, unknown>;
 }
 
 export interface AgentTurnResponse {
@@ -113,6 +129,7 @@ export interface AgentTurnResponse {
   agentId: string;
   replyText: string;
   durationMs: number;
+  runId?: string;
   sessionId?: string;
   sessionKey?: string;
   rawText: string;

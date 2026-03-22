@@ -125,14 +125,6 @@ function normalizeInlineText(input: string): string {
 
 function toPlainSummary(input: string, maxLength: number): string {
   return toPlainSummaryFromShared(input, maxLength);
-  const compact = input
-    .replace(/`{1,3}[^`]*`{1,3}/g, " ")
-    .replace(/[#>*_\-\[\]\(\)!]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!compact) return "暂无摘要。";
-  if (compact.length <= maxLength) return compact;
-  return `${compact.slice(0, maxLength - 1)}…`;
 }
 
 function extractMarkdownHeading(input: string): string | undefined {
@@ -245,6 +237,7 @@ function buildDocPreviewContent(raw: string): { content: string; previewTruncate
 
 export async function loadDocHubEntries(chatEntries: StructuredChatDocEntry[] = []): Promise<DocEntry[]> {
   const output: DocEntry[] = [];
+
   for (const candidate of DOC_HUB_DIR_CANDIDATES) {
     const files = await listFileEntries(candidate.dir);
     for (const file of files.slice(0, 40)) {
@@ -268,6 +261,7 @@ export async function loadDocHubEntries(chatEntries: StructuredChatDocEntry[] = 
       });
     }
   }
+
   for (const entry of chatEntries) {
     const preview = buildDocPreviewContent(entry.content);
     output.push({
@@ -275,7 +269,7 @@ export async function loadDocHubEntries(chatEntries: StructuredChatDocEntry[] = 
       title: entry.title,
       excerpt: entry.excerpt,
       content: preview.content,
-      category: `聊天输出 · ${entry.category}`,
+      category: `聊天沉淀 · ${entry.category}`,
       sourcePath: `/sessions/${encodeURIComponent(entry.sourceSessionKey)}`,
       updatedAt: entry.updatedAt,
       previewTruncated: preview.previewTruncated,
@@ -284,6 +278,7 @@ export async function loadDocHubEntries(chatEntries: StructuredChatDocEntry[] = 
       sourceAgentId: entry.sourceAgentId,
     });
   }
+
   return sortDocsNewestFirst(output).slice(0, 120);
 }
 
@@ -328,6 +323,7 @@ function deriveDocRelativeLabel(entry: DocEntry, language: UiLanguage): string {
   if (entry.sourceType === "chat") {
     return pickUiText(language, `Session ${entry.sourceSessionKey ?? "-"}`, `会话 ${entry.sourceSessionKey ?? "-"}`);
   }
+
   const normalizedPath = resolve(entry.sourcePath);
   if (normalizedPath.startsWith(CONTROL_CENTER_ROOT)) {
     return relative(CONTROL_CENTER_ROOT, normalizedPath) || basename(normalizedPath);
@@ -361,6 +357,7 @@ function deriveDocOwnerLabel(
     const scope = agentScopes.find((item) => item.facetKey === key);
     return scope?.facetLabel ?? humanizeOperatorLabel(entry.sourceAgentId);
   }
+
   const normalizedPath = resolve(entry.sourcePath);
   const matchingScope = agentScopes.find((scope) => normalizedPath.startsWith(resolve(scope.workspaceRoot)));
   if (matchingScope) return matchingScope.facetLabel;
@@ -370,6 +367,7 @@ function deriveDocOwnerLabel(
 function matchDocToProject(entry: DocEntry, projects: ProjectSummary[]): { projectId: string; projectTitle: string } | undefined {
   const normalized = normalizeEvidenceText([entry.title, entry.excerpt, entry.category, entry.sourcePath].join(" "));
   let best: { projectId: string; projectTitle: string; score: number } | undefined;
+
   for (const project of projects) {
     let score = 0;
     const projectIdKey = normalizeEvidenceText(project.projectId);
@@ -381,6 +379,7 @@ function matchDocToProject(entry: DocEntry, projects: ProjectSummary[]): { proje
       best = { projectId: project.projectId, projectTitle: project.title, score };
     }
   }
+
   return best ? { projectId: best.projectId, projectTitle: best.projectTitle } : undefined;
 }
 
@@ -407,7 +406,7 @@ export function buildDocEntryViewModels(
     return {
       docId: entry.docId,
       title: entry.title,
-      excerpt: entry.excerpt,
+      excerpt: normalizeInlineText(entry.excerpt),
       ownerLabel: deriveDocOwnerLabel(entry, agentScopes, language),
       sourceLabel: deriveDocSourceLabel(entry, language),
       projectLabel: projectMatch?.projectTitle ?? pickUiText(language, "General", "通用"),
@@ -427,6 +426,7 @@ export function buildProjectDocGroups(
   language: UiLanguage,
 ): ProjectDocGroup[] {
   const buckets = new Map<string, ProjectDocGroup>();
+
   for (const entry of entries) {
     const match = matchDocToProject(entry, projects);
     if (!match) continue;
@@ -441,6 +441,7 @@ export function buildProjectDocGroups(
     current.docs.push(...buildDocEntryViewModels([entry], agentScopes, projects, language));
     buckets.set(project.projectId, current);
   }
+
   return [...buckets.values()]
     .map((group) => ({
       ...group,
@@ -454,6 +455,7 @@ function buildAgentDocCoverage(
   workspaceFiles: DocsSectionInput["workspaceFiles"],
 ): AgentDocCoverage[] {
   const filesByFacet = new Map<string, Map<string, { sourcePath: string; relativePath: string }>>();
+
   for (const entry of workspaceFiles) {
     const facetKey = normalizeLookupKey(entry.facetKey || "main");
     const fileName = basename(entry.relativePath || entry.sourcePath || "").trim().toLowerCase();
@@ -514,6 +516,7 @@ export function renderDocPreviewModal(language: UiLanguage): string {
   const title = pickUiText(language, "Document preview", "文档预览");
   const hint = pickUiText(language, "Click any doc card to load the full text here.", "点击任意文档卡片后，会在这里加载正文。");
   const status = pickUiText(language, "Choose a document to preview.", "选择一份文档即可预览。");
+
   return `<dialog class="doc-preview-dialog" data-doc-preview-dialog>
     <div class="doc-preview-shell">
       <div class="doc-preview-head">
@@ -545,8 +548,9 @@ function renderDocPreviewTrigger(entry: DocEntryViewModel, className: string, bo
 
 function renderStructuredChatDocSummary(entries: StructuredChatDocEntry[]): string {
   if (entries.length === 0) {
-    return '<div class="empty-state">尚无聊天输出结构化入库记录。</div>';
+    return '<div class="empty-state">当前还没有聊天沉淀入库记录。</div>';
   }
+
   return `<ul class="story-list">${entries
     .slice(0, 16)
     .map(
@@ -557,8 +561,9 @@ function renderStructuredChatDocSummary(entries: StructuredChatDocEntry[]): stri
 
 function renderDocSummaryCards(entries: DocEntryViewModel[], language: UiLanguage): string {
   if (entries.length === 0) {
-    return `<div class="empty-state">${escapeHtml(pickUiText(language, "No recent docs were found yet.", "当前还没有可展示的最近文档。"))}</div>`;
+    return `<div class="empty-state">${escapeHtml(pickUiText(language, "No recent docs were found yet.", "当前还没有最近文档。"))}</div>`;
   }
+
   return `<div class="doc-summary-grid">${entries
     .map(
       (entry) => renderDocPreviewTrigger(entry, "doc-summary-card", `<div class="doc-summary-head">
@@ -574,8 +579,9 @@ function renderDocSummaryCards(entries: DocEntryViewModel[], language: UiLanguag
 
 function renderProjectDocGroups(groups: ProjectDocGroup[], language: UiLanguage): string {
   if (groups.length === 0) {
-    return `<div class="empty-state">${escapeHtml(pickUiText(language, "No docs can be matched to projects yet.", "当前还没有能自动归到项目名下的文档。"))}</div>`;
+    return `<div class="empty-state">${escapeHtml(pickUiText(language, "No docs can be matched to projects yet.", "当前还没有能自动归到项目下的文档。"))}</div>`;
   }
+
   return `<div class="doc-project-grid">${groups
     .map(
       (group) => `<details class="group-section doc-project-card" open>
@@ -648,6 +654,7 @@ export async function renderDocsSection(input: DocsSectionInput): Promise<string
   const mainDocumentFacetLabel =
     input.workspaceFacetOptions.find((item) => item.key === "main")?.label ?? DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME;
   const mainDocumentCount = input.workspaceFiles.filter((entry) => entry.facetKey === "main").length;
+  const activeAgentCount = input.agentScopes.length > 0 ? input.agentScopes.length : input.workspaceFacetOptions.length;
   const documentViewsLabel = input.workspaceFacetOptions.map((item) => item.label).join(", ");
   const docEntries = await loadDocHubEntries(input.docHubSnapshot.items);
   const docViewModels = buildDocEntryViewModels(docEntries, input.agentScopes, input.projectSummaries, input.language);
@@ -668,12 +675,12 @@ export async function renderDocsSection(input: DocsSectionInput): Promise<string
     {
       label: t("Updated in 24h", "24 小时内更新"),
       value: `${recentDocs24hCount}`,
-      detail: t("Worth checking first", "优先值得先看"),
+      detail: t("Worth checking first", "建议优先查看"),
     },
     {
       label: t("Project-linked docs", "已归到项目"),
       value: `${projectDocCount}`,
-      detail: t("Can already be seen by project", "已经能按项目查看"),
+      detail: t("Can already be seen by project", "已能按项目查看"),
     },
     {
       label: t("Chat notes", "聊天沉淀"),
@@ -685,11 +692,8 @@ export async function renderDocsSection(input: DocsSectionInput): Promise<string
   return `
     <section class="card">
       <h2>${escapeHtml(t("Document overview", "文档概览"))}</h2>
-      <div class="meta">${escapeHtml(mainDocumentFacetLabel)} ${escapeHtml(t("documents", "文档"))} ${mainDocumentCount} ${escapeHtml(t("files", "份"))} · ${escapeHtml(t("Agents found", "已发现智能体"))} ${Math.max(0, input.workspaceFacetOptions.filter((item) => item.key !== "main").length)} ${escapeHtml(t("items", "个"))}</div>
+      <div class="meta">${escapeHtml(mainDocumentFacetLabel)} ${escapeHtml(t("documents", "文档"))} ${mainDocumentCount} ${escapeHtml(t("files", "份"))} · ${escapeHtml(t("Active agents", "当前启用智能体"))} ${activeAgentCount} ${escapeHtml(t("items", "个"))}</div>
       <div class="meta">${escapeHtml(t("Available views", "可切换查看"))}${escapeHtml(input.language === "en" ? ": " : "：")}${escapeHtml(documentViewsLabel)}</div>
-      <div class="meta">${escapeHtml(t(`This keeps only ${mainDocumentFacetLabel} documents plus the small set of Markdown files that matter most for each active agent.`, `这里只保留 ${mainDocumentFacetLabel} 文档，以及当前启用智能体最常用、最值得调整的那几份 Markdown。`))}</div>
-      <div class="meta">${escapeHtml(t(`Documents are no longer shown by chat history. They are archived by ${mainDocumentFacetLabel} or by active agent.`, `不再按会话历史展示文档，统一按 ${mainDocumentFacetLabel} / 当前启用智能体归档。`))}</div>
-      <div class="meta">${escapeHtml(t("Top refresh controls now rebuild the chat-derived docs index, the embedded team snapshot, and related info panels in one pass.", "顶部刷新控件现在会一并重建聊天沉淀文档索引、嵌入团队快照以及相关信息面板。"))}</div>
       <div class="meta">${escapeHtml(t("Latest docs sync", "最近一次文档同步"))}${escapeHtml(input.language === "en" ? ": " : "：")}${escapeHtml(input.docHubSnapshot.generatedAt)}</div>
     </section>
     <section class="card">
@@ -722,7 +726,7 @@ export async function renderDocsSection(input: DocsSectionInput): Promise<string
     </section>
     <section class="card">
       <h2>${escapeHtml(t("Project document view", "按项目查看文档"))}</h2>
-      <div class="meta">${escapeHtml(t("This groups docs by the project they most likely belong to, so you do not have to remember which employee folder to open first.", "这里会先按最可能所属的项目分组，你不用先去猜应该打开哪个员工目录。"))}</div>
+      <div class="meta">${escapeHtml(t("This groups docs by the project they most likely belong to, so you do not have to remember which employee folder to open first.", "这里会先按最可能所属的项目分组，你不用先去猜该打开哪个员工目录。"))}</div>
       ${renderProjectDocGroups(projectDocGroups, input.language)}
     </section>
     ${renderDocPreviewModal(input.language)}

@@ -16,19 +16,23 @@ function createNavigationHelpers(deps) {
 
   function dashboardSectionLinks(language) {
     const baseLinks = [
-      { key: "overview", label: "Overview", blurb: "Today at a glance" },
-      { key: "usage-cost", label: "Usage", blurb: "Budget and quota" },
-      { key: "team", label: "Staff", blurb: "Mission, staff and assignments" },
-      { key: "collaboration", label: "Collaboration", blurb: "Agent handoffs and teamwork" },
-      { key: "memory", label: "Memory", blurb: "Daily and long-term memories" },
-      { key: "docs", label: "Documents", blurb: `${defaultPrimaryOperatorDisplayName} and active agent core docs` },
-      { key: "projects-tasks", label: "Tasks", blurb: "Board, schedule and activity" },
-      { key: "settings", label: "Settings", blurb: "Safety and data links" },
+      { key: "overview", icon: "overview", label: "Overview", blurb: "Today at a glance" },
+      { key: "usage-cost", icon: "usage", label: "Usage", blurb: "Budget and quota" },
+      { key: "team", icon: "team", label: "Staff", blurb: "Mission, staff and assignments" },
+      { key: "collaboration", icon: "collaboration", label: "Collaboration", blurb: "Agent handoffs and teamwork" },
+      { key: "memory", icon: "memory", label: "Memory", blurb: "Daily and long-term memories" },
+      { key: "docs", icon: "docs", label: "Documents", blurb: `${defaultPrimaryOperatorDisplayName} and active agent core docs` },
+      { key: "projects-tasks", icon: "tasks", label: "Tasks", blurb: "Board, schedule and activity" },
+      { key: "settings", icon: "settings", label: "Settings", blurb: "Safety and data links" },
     ];
+
     return baseLinks.map((item) => {
       if (language !== "zh") return item;
       if (item.key === "overview") {
         return { ...item, label: "总览", blurb: "今天重点" };
+      }
+      if (item.key === "usage-cost") {
+        return { ...item, label: "用量", blurb: "预算与额度" };
       }
       if (item.key === "team") {
         return { ...item, label: "员工", blurb: "员工、分工与职责" };
@@ -41,9 +45,6 @@ function createNavigationHelpers(deps) {
       }
       if (item.key === "docs") {
         return { ...item, label: "文档", blurb: `${defaultPrimaryOperatorDisplayName} 与当前启用智能体核心文档` };
-      }
-      if (item.key === "usage-cost") {
-        return { ...item, label: "用量", blurb: "预算与额度" };
       }
       if (item.key === "projects-tasks") {
         return { ...item, label: "任务", blurb: "任务、排程与活动" };
@@ -122,7 +123,7 @@ function createNavigationHelpers(deps) {
     const enClass = options.language === "en" ? ' class="active"' : "";
     const zhClass = options.language === "zh" ? ' class="active"' : "";
     const label = pickUiText(options.language, "Language:", "语言：");
-    const zhLabel = pickUiText(options.language, "中文", "中文");
+    const zhLabel = pickUiText(options.language, "Chinese", "中文");
     return `<div class="meta lang-toggle">${label} <a${enClass} href="${escapeHtml(enHref)}">EN</a> / <a${zhClass} href="${escapeHtml(zhHref)}">${zhLabel}</a></div>`;
   }
 

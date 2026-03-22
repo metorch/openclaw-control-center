@@ -20,9 +20,10 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
   const primaryDisplayName = ${serializeJsonForScript(input.primaryDisplayName)};
   const embeddedLanguage = ${serializeJsonForScript(input.language)};
   const mutationEventName = 'openclaw:mutation-auth-changed';
-  const panelSizeStorageKey = 'openclaw:collab-chat-size:v1';
+  const panelSizeStorageKey = 'openclaw:collab-chat-size:v2';
   const endpoints = {
     room: '/api/collaboration/room',
+    roomStream: '/api/collaboration/room/stream',
     rooms: '/api/collaboration/rooms',
     uploads: '/api/collaboration/room/uploads',
     messages: '/api/collaboration/room/messages',
@@ -37,7 +38,6 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
   const refreshButton = root.querySelector('[data-collab-chat-refresh]');
   const autoButton = root.querySelector('[data-collab-chat-auto]');
   const createButton = root.querySelector('[data-collab-room-create]');
-  const deleteButton = root.querySelector('[data-collab-room-delete]');
   const roomTitle = root.querySelector('[data-collab-chat-room-title]');
   const roomMeta = root.querySelector('[data-collab-chat-room-meta]');
   const roomTrigger = root.querySelector('[data-collab-room-trigger]');
@@ -49,7 +49,10 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
   const feed = root.querySelector('[data-collab-chat-feed]');
   const emptyState = root.querySelector('[data-collab-chat-empty]');
   const eventsList = root.querySelector('[data-collab-chat-events]');
+  const composer = root.querySelector('[data-collab-chat-composer]');
+  const dropHint = root.querySelector('[data-collab-chat-drop-hint]');
   const uploadList = root.querySelector('[data-collab-chat-upload-list]');
+  const inputShell = root.querySelector('[data-collab-chat-input-shell]');
   const inputNode = root.querySelector('[data-collab-chat-input]');
   const sendButton = root.querySelector('[data-collab-chat-send]');
   const fileInput = root.querySelector('[data-collab-chat-files]');
@@ -62,6 +65,12 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
   const projectTitleNode = root.querySelector('[data-collab-chat-project-title]');
   const projectSummaryNode = root.querySelector('[data-collab-chat-project-summary]');
   const projectOpenTasksNode = root.querySelector('[data-collab-chat-project-open-tasks]');
+  const deleteDialog = root.querySelector('[data-collab-chat-delete-dialog]');
+  const deleteDialogSurface = root.querySelector('[data-collab-chat-delete-surface]');
+  const deleteDialogTitle = root.querySelector('[data-collab-chat-delete-title]');
+  const deleteDialogMessage = root.querySelector('[data-collab-chat-delete-message]');
+  const deleteDialogCancel = root.querySelector('[data-collab-chat-delete-cancel]');
+  const deleteDialogConfirm = root.querySelector('[data-collab-chat-delete-confirm]');
 
   if (
     !(toggleButton instanceof HTMLButtonElement) ||
@@ -72,7 +81,6 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     !(refreshButton instanceof HTMLButtonElement) ||
     !(autoButton instanceof HTMLButtonElement) ||
     !(createButton instanceof HTMLButtonElement) ||
-    !(deleteButton instanceof HTMLButtonElement) ||
     !(roomTitle instanceof HTMLElement) ||
     !(roomMeta instanceof HTMLElement) ||
     !(roomTrigger instanceof HTMLButtonElement) ||
@@ -84,7 +92,10 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     !(feed instanceof HTMLElement) ||
     !(emptyState instanceof HTMLElement) ||
     !(eventsList instanceof HTMLOListElement) ||
+    !(composer instanceof HTMLElement) ||
+    !(dropHint instanceof HTMLElement) ||
     !(uploadList instanceof HTMLElement) ||
+    !(inputShell instanceof HTMLElement) ||
     !(inputNode instanceof HTMLTextAreaElement) ||
     !(sendButton instanceof HTMLButtonElement) ||
     !(fileInput instanceof HTMLInputElement) ||
@@ -96,7 +107,13 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     !(presenceNode instanceof HTMLElement) ||
     !(projectTitleNode instanceof HTMLElement) ||
     !(projectSummaryNode instanceof HTMLElement) ||
-    !(projectOpenTasksNode instanceof HTMLElement)
+    !(projectOpenTasksNode instanceof HTMLElement) ||
+    !(deleteDialog instanceof HTMLElement) ||
+    !(deleteDialogSurface instanceof HTMLElement) ||
+    !(deleteDialogTitle instanceof HTMLElement) ||
+    !(deleteDialogMessage instanceof HTMLElement) ||
+    !(deleteDialogCancel instanceof HTMLButtonElement) ||
+    !(deleteDialogConfirm instanceof HTMLButtonElement)
   ) {
     return;
   }
@@ -114,17 +131,27 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     attachmentIndex: new Map(),
     loading: false,
     sending: false,
+    roomStream: null,
+    roomStreamKey: '',
+    roomStreamReconnectTimer: 0,
+    roomStreamDisabledUntil: 0,
     pollingTimer: 0,
     prefsTimer: 0,
+    prefsIncludeRoomViewState: false,
     statusTimer: 0,
     mentionMatches: [],
     activeMentionIndex: 0,
     unreadCount: 0,
     roomMenuOpen: false,
+    roomMutationPending: false,
+    draggingFiles: false,
+    fileDragDepth: 0,
     panelSize: null,
     resizeSession: null,
     personCardHideTimer: 0,
     activePersonCardAgentId: '',
+    pendingDeleteRoomId: '',
+    pendingDeleteRoomLabel: '',
     pendingScrollToLatestRoomId: String(embeddedPreferences.activeRoomId || root.dataset.roomId || 'global').trim() || 'global',
   };
 
@@ -143,12 +170,20 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     }
   };
 
-  state.panelSize = loadStoredPanelSize() || { width: 432, height: 736 };
+  const defaultPanelSize = () => ({
+    width: window.innerWidth <= 1480 ? 396 : 416,
+    height: window.innerHeight <= 920 ? 648 : 688,
+  });
+
+  state.panelSize = loadStoredPanelSize() || defaultPanelSize();
 
   const roomCursor = (roomId) => {
     const value = Number(state.roomReadCursors[roomId] || 0);
     return Number.isFinite(value) && value >= 0 ? value : 0;
   };
+
+  const hasUploadingFiles = () =>
+    Array.isArray(state.uploads) && state.uploads.some((item) => item && item.status === 'uploading');
 
   if (!(state.activeRoomId in state.roomReadCursors)) {
     state.roomReadCursors[state.activeRoomId] = state.lastReadSequence;
@@ -204,14 +239,96 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     return roomClockFormatter.format(new Date(timestamp));
   };
 
-  const isCompactViewport = () => window.innerWidth <= 760;
+  const hasFileTransfer = (dataTransfer) => {
+    if (!dataTransfer) return false;
+    const files = Array.from(dataTransfer.files || []).filter(Boolean);
+    if (files.length > 0) return true;
+    const types = Array.from(dataTransfer.types || []).map((value) => String(value || ''));
+    if (types.includes('Files')) return true;
+    return Array.from(dataTransfer.items || []).some((item) => item && item.kind === 'file');
+  };
+
+  const collectTransferFiles = (dataTransfer) => {
+    if (!dataTransfer) return [];
+    const fromItems = Array.from(dataTransfer.items || [])
+      .map((item) => (item && item.kind === 'file' && typeof item.getAsFile === 'function' ? item.getAsFile() : null))
+      .filter(Boolean);
+    const fromFiles = Array.from(dataTransfer.files || []).filter(Boolean);
+    return (fromItems.length > 0 ? fromItems : fromFiles)
+      .filter((file) => file && typeof file.name === 'string' && file.name.trim() !== '');
+  };
+
+  const syncFileDropState = (nextActive, resetDepth = false) => {
+    state.draggingFiles = Boolean(nextActive) && state.expanded;
+    if (resetDepth) state.fileDragDepth = 0;
+    panel.classList.toggle('is-file-drop-target', state.draggingFiles);
+    inputShell.classList.toggle('is-file-drop-target', state.draggingFiles);
+    composer.classList.toggle('is-file-drop-target', state.draggingFiles);
+    dropHint.hidden = !state.draggingFiles;
+  };
+
+  const clearFileDropState = () => {
+    syncFileDropState(false, true);
+  };
+
+  const deleteDialogTitleText = embeddedLanguage === 'zh' ? '确认删除对话' : 'Delete chat';
+  const deleteDialogMessageForRoom = (roomLabel) => {
+    const normalizedLabel = String(roomLabel || '').trim();
+    if (!normalizedLabel) return labels.deleteConfirm;
+    if (embeddedLanguage === 'zh') {
+      return '确认删除“' + normalizedLabel + '”吗？这会同时删除对应的本地协作记录、相关本地文件，以及 OpenClaw 原始聊天记录。';
+    }
+    return 'Delete "' + normalizedLabel + '"? This also removes the linked local collaboration record, related local files, and the original OpenClaw chat transcript.';
+  };
+
+  const resolveRoomLabel = (roomId) => {
+    const normalizedRoomId = String(roomId || '').trim();
+    if (!normalizedRoomId) return labels.title;
+    const matchingRoom = Array.isArray(state.rooms)
+      ? state.rooms.find((room) => String(room.roomId || '') === normalizedRoomId)
+      : null;
+    return String(matchingRoom?.title || matchingRoom?.roomId || normalizedRoomId || labels.title);
+  };
+
+  const syncDeleteDialog = () => {
+    const open = Boolean(String(state.pendingDeleteRoomId || '').trim());
+    deleteDialog.hidden = !open;
+    deleteDialogTitle.textContent = deleteDialogTitleText;
+    deleteDialogMessage.textContent = deleteDialogMessageForRoom(state.pendingDeleteRoomLabel);
+    deleteDialogCancel.disabled = state.roomMutationPending;
+    deleteDialogConfirm.disabled = !open || state.roomMutationPending;
+  };
+
+  const closeDeleteConfirm = (force = false) => {
+    if (state.roomMutationPending && !force) return;
+    state.pendingDeleteRoomId = '';
+    state.pendingDeleteRoomLabel = '';
+    syncDeleteDialog();
+  };
+
+  const openDeleteConfirm = (roomId) => {
+    const normalizedRoomId = String(roomId || '').trim();
+    if (!normalizedRoomId) return;
+    setRoomMenuOpen(false);
+    state.pendingDeleteRoomId = normalizedRoomId;
+    state.pendingDeleteRoomLabel = resolveRoomLabel(normalizedRoomId);
+    syncDeleteDialog();
+    window.requestAnimationFrame(() => {
+      if (!deleteDialog.hidden) deleteDialogConfirm.focus();
+    });
+  };
+
+  const isCompactViewport = () => window.innerWidth <= 760 || window.innerHeight <= 720;
 
   const clampPanelSize = (size) => {
-    const maxWidth = Math.max(360, window.innerWidth - 24);
-    const maxHeight = Math.max(420, window.innerHeight - (isCompactViewport() ? 24 : 112));
+    const defaults = defaultPanelSize();
+    const minWidth = window.innerWidth <= 1320 ? 340 : 360;
+    const minHeight = window.innerHeight <= 840 ? 380 : 420;
+    const maxWidth = Math.max(minWidth, window.innerWidth - 28);
+    const maxHeight = Math.max(minHeight, window.innerHeight - (isCompactViewport() ? 24 : 104));
     return {
-      width: Math.max(360, Math.min(maxWidth, Number(size?.width || 432))),
-      height: Math.max(420, Math.min(maxHeight, Number(size?.height || 736))),
+      width: Math.max(minWidth, Math.min(maxWidth, Number(size?.width || defaults.width))),
+      height: Math.max(minHeight, Math.min(maxHeight, Number(size?.height || defaults.height))),
     };
   };
 
@@ -230,10 +347,10 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
       panel.classList.remove('is-resizable');
       return;
     }
-    state.panelSize = clampPanelSize(state.panelSize || { width: 432, height: 736 });
+    state.panelSize = clampPanelSize(state.panelSize || defaultPanelSize());
     panel.style.width = String(state.panelSize.width) + 'px';
     panel.style.height = String(state.panelSize.height) + 'px';
-    panel.style.maxWidth = String(Math.max(360, window.innerWidth - 24)) + 'px';
+    panel.style.maxWidth = String(Math.max(window.innerWidth <= 1320 ? 340 : 360, window.innerWidth - 28)) + 'px';
     panel.classList.add('is-resizable');
     if (persist) persistPanelSize();
   };
@@ -277,23 +394,33 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     return '';
   };
 
-  const schedulePreferenceSave = () => {
-    if (!isPersistableRoomId(state.activeRoomId)) return;
+  const shouldPersistRoomViewState = () => isPersistableRoomId(state.activeRoomId);
+
+  const buildPreferencePatch = (includeRoomViewState = false) => {
+    const collaborationChat = {
+      expanded: state.expanded,
+      autoRefresh: state.autoRefresh,
+    };
+    if (includeRoomViewState && isPersistableRoomId(state.activeRoomId)) {
+      collaborationChat.activeRoomId = state.activeRoomId;
+      collaborationChat.lastReadSequence = state.lastReadSequence;
+      collaborationChat.roomReadCursors = state.roomReadCursors;
+    }
+    return { collaborationChat };
+  };
+
+  const schedulePreferenceSave = (options = {}) => {
+    const includeRoomViewState = Boolean(options && options.includeRoomViewState === true);
+    state.prefsIncludeRoomViewState = state.prefsIncludeRoomViewState || includeRoomViewState;
     if (state.prefsTimer) window.clearTimeout(state.prefsTimer);
     state.prefsTimer = window.setTimeout(async () => {
+      const includeRoomViewStateOnFlush = state.prefsIncludeRoomViewState && shouldPersistRoomViewState();
+      state.prefsIncludeRoomViewState = false;
       try {
         await fetch(endpoints.preferences, {
           method: 'PATCH',
           headers: mutationHeaders({ 'content-type': 'application/json' }),
-          body: JSON.stringify({
-            collaborationChat: {
-              expanded: state.expanded,
-              autoRefresh: state.autoRefresh,
-              activeRoomId: state.activeRoomId,
-              lastReadSequence: state.lastReadSequence,
-              roomReadCursors: state.roomReadCursors,
-            },
-          }),
+          body: JSON.stringify(buildPreferencePatch(includeRoomViewStateOnFlush)),
           cache: 'no-store',
         });
       } catch {}
@@ -385,19 +512,33 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
       const mapped = aliases.get(normalized);
       if (mapped) register(mapped);
     }
-    if (targets.length === 0) return [primaryAgentId];
+    if (targets.length === 0) {
+      mentionableParticipants().forEach((participant) => register(participant.agentId));
+    }
+    if (targets.length === 0 && primaryAgentId) return [primaryAgentId];
     return targets;
   };
 
   const routeLabelForText = (text) => {
-    const names = routeTargetsFromText(text).map((agentId) => {
+    const targets = routeTargetsFromText(text);
+    const people = mentionableParticipants();
+    const everyoneSelected =
+      people.length > 0 &&
+      targets.length === people.length &&
+      people.every((participant) => targets.includes(participant.agentId));
+
+    if (everyoneSelected) {
+      return labels.routePrefix + ' ' + labels.routeAllMembers;
+    }
+
+    const names = targets.map((agentId) => {
       const participant = findParticipant(agentId);
       return participant ? participant.displayName : agentId;
     });
     return labels.routePrefix + ' ' + names.join(', ');
   };
 
-  const isPersistableRoomId = (value) => /^[0-9a-f-]{8,64}$/i.test(String(value || '').trim());
+  const isPersistableRoomId = (value) => /^[a-z0-9._-]{1,120}$/i.test(String(value || '').trim());
   const isHistoryToolEvent = (event) => /^transcript:\\d+:tool_event$/i.test(String(event?.eventId || '').trim());
 `;
 }

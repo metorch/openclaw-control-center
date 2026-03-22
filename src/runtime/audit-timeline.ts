@@ -227,6 +227,10 @@ function deriveOperationSeverity(action: string, ok: boolean, detail: string): A
     if (!ok) return "warn";
     return detail.startsWith("live ") ? "action-required" : "info";
   }
+  if (action === "heart_rate_monitor") {
+    if (!ok) return "warn";
+    return detail.startsWith("live ") ? "action-required" : "info";
+  }
   return ok ? "info" : "warn";
 }
 

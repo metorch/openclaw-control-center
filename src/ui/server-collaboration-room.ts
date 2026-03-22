@@ -1,9 +1,12 @@
 // @ts-nocheck
 
 const import_current_agent_catalog = require("../runtime/current-agent-catalog");
+const import_collaboration_agent_artifacts = require("../runtime/collaboration-agent-artifacts");
 const import_collaboration_project_memory = require("../runtime/collaboration-project-memory");
 const import_collaboration_room = require("../runtime/collaboration-room");
+const import_collaboration_stage_results = require("../runtime/collaboration-stage-results");
 const import_openclaw_chat_rooms = require("../runtime/openclaw-chat-rooms");
+const import_collaboration_live_drafts = require("../runtime/collaboration-live-drafts");
 const import_operator_display = require("../runtime/operator-display");
 const import_project_store = require("../runtime/project-store");
 const import_task_store = require("../runtime/task-store");
@@ -33,6 +36,11 @@ function createCollaborationRoomHelpers(deps) {
     staffStatusDotLabel,
     toSortableMs,
   } = deps;
+  const LIVE_SESSION_HISTORY_LIMIT_MIN = 80;
+  const LIVE_SESSION_HISTORY_LIMIT_MAX = 160;
+  const LIVE_SESSION_EVENT_LOOKBACK = 60;
+  const PENDING_DISPATCH_LOOKBACK = 40;
+  const LIVE_SESSION_HISTORY_TIMEOUT_MS = 1200;
 
   async function loadCollaborationParticipantDirectory() {
     const catalog = await import_current_agent_catalog.loadCurrentAgentCatalog();
@@ -100,6 +108,34 @@ function createCollaborationRoomHelpers(deps) {
     };
   }
 
+  async function resolveCollaborationRoomSelection(roomId, directory) {
+    const resolvedDirectory = directory ?? (await loadCollaborationParticipantDirectory());
+    const rooms = await listCollaborationTranscriptRooms(resolvedDirectory);
+    const normalizedRequestedRoomId = normalizeCollaborationRoomIdCandidate(roomId);
+    const activeTranscriptRoomId = await import_openclaw_chat_rooms.loadActiveOpenClawChatRoomId({
+      agentId: resolvedDirectory.primaryAgentId,
+      workspaceRoot: getOpenClawWorkspaceRoot(),
+      openclawHomeDir: getOpenClawHomeDir(),
+    }).catch(() => void 0);
+    const selectedRoom =
+      (normalizedRequestedRoomId
+        ? rooms.find((room) => room.roomId === normalizedRequestedRoomId)
+        : void 0) ??
+      (activeTranscriptRoomId ? rooms.find((room) => room.roomId === activeTranscriptRoomId) : void 0) ??
+      rooms[0];
+    const selectedRoomId = selectedRoom?.roomId ?? import_collaboration_room.DEFAULT_COLLABORATION_ROOM_ID;
+
+    return {
+      directory: resolvedDirectory,
+      rooms: rooms.map((room) => ({
+        ...room,
+        active: room.roomId === selectedRoomId,
+      })),
+      roomId: selectedRoomId,
+      selectedRoom,
+    };
+  }
+
   async function buildCollaborationChatParticipantViews(input) {
     const officeCardByKey = new Map(input.officeCards.map((item) => [normalizeLookupKey(item.agentId), item]));
     const executionByKey = new Map(
@@ -145,23 +181,13 @@ function createCollaborationRoomHelpers(deps) {
   }
 
   async function normalizeCollaborationRoomIdQuery(roomId, directory) {
-    const normalized = import_openclaw_chat_rooms.normalizeTranscriptRoomId(roomId ?? void 0);
-    if (normalized) {
-      return normalized;
-    }
-    const resolvedDirectory = directory ?? (await loadCollaborationParticipantDirectory());
-    return (
-      (await import_openclaw_chat_rooms.loadActiveOpenClawChatRoomId({
-        agentId: resolvedDirectory.primaryAgentId,
-        workspaceRoot: getOpenClawWorkspaceRoot(),
-        openclawHomeDir: getOpenClawHomeDir(),
-      })) ?? import_collaboration_room.DEFAULT_COLLABORATION_ROOM_ID
-    );
+    const selection = await resolveCollaborationRoomSelection(roomId, directory);
+    return selection.roomId;
   }
 
   async function normalizeCollaborationRoomIdPayload(roomId, directory) {
     if (typeof roomId === "string") {
-      const normalized = import_openclaw_chat_rooms.normalizeTranscriptRoomId(roomId);
+      const normalized = normalizeCollaborationRoomIdCandidate(roomId);
       if (normalized) {
         return normalized;
       }
@@ -171,6 +197,68 @@ function createCollaborationRoomHelpers(deps) {
     return normalizeCollaborationRoomIdQuery(null, directory);
   }
 
+  function normalizeSerializableRoomReadCursors(input) {
+    if (!input || typeof input !== "object") {
+      return {};
+    }
+    const out = {};
+    for (const [roomId, sequence] of Object.entries(input)) {
+      const normalizedRoomId = normalizeCollaborationRoomIdCandidate(roomId);
+      if (
+        !normalizedRoomId ||
+        typeof sequence !== "number" ||
+        !Number.isInteger(sequence) ||
+        sequence < 0
+      ) {
+        continue;
+      }
+      out[normalizedRoomId] = sequence;
+    }
+    return out;
+  }
+
+  async function buildCollaborationChatBootPreferences(input) {
+    const preferences = input?.preferences && typeof input.preferences === "object"
+      ? input.preferences
+      : {};
+    const directory = input?.directory ?? (await loadCollaborationParticipantDirectory());
+    const rooms = await listCollaborationTranscriptRooms(directory);
+    const cachedActiveRoomId = normalizeCollaborationRoomIdCandidate(preferences.activeRoomId);
+    const activeTranscriptRoomId = await import_openclaw_chat_rooms.loadActiveOpenClawChatRoomId({
+      agentId: directory.primaryAgentId,
+      workspaceRoot: getOpenClawWorkspaceRoot(),
+      openclawHomeDir: getOpenClawHomeDir(),
+    }).catch(() => void 0);
+    const selectedRoom =
+      (cachedActiveRoomId ? rooms.find((room) => room.roomId === cachedActiveRoomId) : void 0) ??
+      (activeTranscriptRoomId ? rooms.find((room) => room.roomId === activeTranscriptRoomId) : void 0) ??
+      rooms[0];
+    const activeRoomId = selectedRoom?.roomId ?? import_collaboration_room.DEFAULT_COLLABORATION_ROOM_ID;
+    const cachedRoomReadCursors = normalizeSerializableRoomReadCursors(preferences.roomReadCursors);
+    const cachedLastReadSequence =
+      typeof preferences.lastReadSequence === "number" &&
+      Number.isInteger(preferences.lastReadSequence) &&
+      preferences.lastReadSequence >= 0
+        ? preferences.lastReadSequence
+        : 0;
+    const cachedActiveReadSequence =
+      cachedRoomReadCursors[activeRoomId] ??
+      ((cachedActiveRoomId === activeRoomId && cachedLastReadSequence > 0)
+        ? cachedLastReadSequence
+        : 0);
+    const effectiveReadSequence = Math.max(0, typeof cachedActiveReadSequence === "number" ? cachedActiveReadSequence : 0);
+    return {
+      expanded: preferences.expanded === true,
+      autoRefresh: preferences.autoRefresh !== false,
+      activeRoomId,
+      lastReadSequence: effectiveReadSequence,
+      roomReadCursors: {
+        ...cachedRoomReadCursors,
+        [activeRoomId]: effectiveReadSequence,
+      },
+    };
+  }
+
   function sanitizeCollaborationDisplayText(value, language, fallback = "", maxLength = 240) {
     const normalized = String(value || "").replace(/\r/g, "").trim();
     const fallbackText = String(fallback || "").trim();
@@ -178,6 +266,11 @@ function createCollaborationRoomHelpers(deps) {
       return fallbackText ? safeTruncate(fallbackText, maxLength) : "";
     }
     let text = normalized.replace(/<openclaw_coordination>[\s\S]*?<\/openclaw_coordination>/gi, " ").trim();
+    text = text.replace(/^\[\[reply_to_current\]\]\s*/i, "").trim();
+    text = import_collaboration_agent_artifacts.parseCollaborationAgentArtifacts(text).cleanReplyText.trim();
+    text = import_collaboration_stage_results.parseStageResultEnvelopeFromReply(text, {
+      agentId: "display",
+    }).cleanReplyText.trim();
     if (isCollaborationRelayPromptMessage(text)) {
       const currentUserMessageMatch = /Current user message:\s*([\s\S]*?)(?:Attachments:|Reply to the user as this agent\.?|$)/i.exec(text);
       if (currentUserMessageMatch?.[1]?.trim()) {
@@ -217,34 +310,85 @@ function createCollaborationRoomHelpers(deps) {
     return resolved ? safeTruncate(resolved, maxLength) : "";
   }
 
-  async function listCollaborationTranscriptRooms(directory) {
-    const [openclawRooms, localRooms] = await Promise.all([
+  function normalizeCollaborationRoomIdCandidate(value) {
+    const normalized = String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return normalized ? normalized.slice(0, 120) : void 0;
+  }
+
+  function compareCollaborationRoomListRecency(left, right) {
+    const updatedDiff = toSortableMs(right?.updatedAt) - toSortableMs(left?.updatedAt);
+    if (updatedDiff !== 0) {
+      return updatedDiff;
+    }
+    const createdDiff = toSortableMs(right?.createdAt) - toSortableMs(left?.createdAt);
+    if (createdDiff !== 0) {
+      return createdDiff;
+    }
+    return String(left?.title || "").localeCompare(String(right?.title || ""));
+  }
+
+  function buildCollaborationRoomListEntry(input) {
+    const createdAt =
+      input.localRoom?.createdAt ??
+      input.transcriptRoom?.createdAt ??
+      new Date(0).toISOString();
+    const updatedAt =
+      pickLatestSessionActivityTimestamp(input.localRoom?.updatedAt, input.transcriptRoom?.updatedAt, createdAt) ??
+      input.localRoom?.updatedAt ??
+      input.transcriptRoom?.updatedAt ??
+      createdAt;
+    const titleMode = input.localRoom?.titleMode === "manual" ? "manual" : "auto";
+    return {
+      roomId: input.roomId,
+      title: resolveDisplayedRoomTitle(input.localRoom, input.transcriptRoom),
+      titleMode,
+      projectId: input.localRoom?.projectId,
+      createdAt,
+      updatedAt,
+      lastSequence: input.localRoom?.lastSequence ?? 0,
+      eventCount: input.localRoom?.eventCount ?? 0,
+      active: input.roomId === input.activeRoomId,
+    };
+  }
+
+  async function listCollaborationTranscriptRooms(directory, options) {
+    const activeRoomId = normalizeCollaborationRoomIdCandidate(options?.activeRoomId);
+    const [localRooms, openclawRooms] = await Promise.all([
+      import_collaboration_room.listCollaborationRooms().catch(() => []),
       import_openclaw_chat_rooms.listOpenClawChatRooms({
         agentId: directory.primaryAgentId,
         workspaceRoot: getOpenClawWorkspaceRoot(),
         openclawHomeDir: getOpenClawHomeDir(),
-      }),
-      import_collaboration_room.loadAllCollaborationRooms().catch(() => []),
+        createIfEmpty: false,
+      }).catch(() => []),
     ]);
-    const localById = new Map(localRooms.map((room) => [room.roomId, room]));
-    return openclawRooms.map((room) => {
-      const local = localById.get(room.roomId);
-      const titleMode = local?.titleMode === "manual" ? "manual" : "auto";
-      return {
-        roomId: room.roomId,
-        title:
-          titleMode === "manual"
-            ? local?.title || room.title || import_collaboration_room.DEFAULT_COLLABORATION_ROOM_TITLE
-            : room.title || local?.title || import_collaboration_room.DEFAULT_COLLABORATION_ROOM_TITLE,
-        titleMode,
-        projectId: local?.projectId,
-        createdAt: room.createdAt,
-        updatedAt: pickLatestSessionActivityTimestamp(room.updatedAt, local?.updatedAt) ?? room.updatedAt,
-        lastSequence: local?.lastSequence ?? 0,
-        eventCount: local?.events.length ?? 0,
-        active: room.active,
-      };
-    });
+    const transcriptById = new Map(openclawRooms.map((room) => [room.roomId, room]));
+    const localEntries = localRooms
+      .map((room) =>
+        buildCollaborationRoomListEntry({
+          roomId: room.roomId,
+          localRoom: room,
+          transcriptRoom: transcriptById.get(room.roomId),
+          activeRoomId,
+        }),
+      )
+      .sort(compareCollaborationRoomListRecency);
+    const seenRoomIds = new Set(localEntries.map((room) => room.roomId));
+    const transcriptOnlyEntries = openclawRooms
+      .filter((room) => !seenRoomIds.has(room.roomId))
+      .map((room) =>
+        buildCollaborationRoomListEntry({
+          roomId: room.roomId,
+          transcriptRoom: room,
+          activeRoomId,
+        }),
+      )
+      .sort(compareCollaborationRoomListRecency);
+    return [...localEntries, ...transcriptOnlyEntries];
   }
 
   function normalizeProjectIdCandidate(value) {
@@ -256,7 +400,7 @@ function createCollaborationRoomHelpers(deps) {
     return String(value || "")
       .trim()
       .toLowerCase()
-      .replace(/[^a-z0-9._:-]+/g, "-")
+      .replace(/[^a-z0-9._-]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 100);
   }
@@ -294,6 +438,59 @@ function createCollaborationRoomHelpers(deps) {
       .filter(Boolean)
       .filter((line) => !line.startsWith("#") && !/^project id:/i.test(line) && !/^last updated:/i.test(line));
     return safeTruncate(lines[0] || normalized, 200);
+  }
+
+  function findParticipantReplyEventForActivity(input) {
+    const activityAt = String(input.activityAt || "").trim();
+    const activityMs = toSortableMs(activityAt);
+    if (activityMs <= 0) {
+      return void 0;
+    }
+    const matches = input.events
+      .filter(
+        (event) =>
+          event.type === "agent_reply" &&
+          normalizeLookupKey(event.agentId ?? "") === input.participantKey,
+      )
+      .map((event) => ({ event, deltaMs: Math.abs(toSortableMs(event.createdAt) - activityMs) }))
+      .filter((candidate) => Number.isFinite(candidate.deltaMs) && candidate.deltaMs <= 60 * 1000)
+      .sort((a, b) => a.deltaMs - b.deltaMs);
+    return matches[0]?.event;
+  }
+
+  function deriveCompletionStateFromReplyEvent(input) {
+    if (input.receipt?.lastResultState !== "in_progress") {
+      return void 0;
+    }
+    const replyEvent = input.replyEvent;
+    if (!replyEvent?.message?.trim()) {
+      return void 0;
+    }
+    const parsedReply = import_collaboration_stage_results.parseStageResultEnvelopeFromReply(replyEvent.message, {
+      taskId: input.receipt?.taskId || input.task?.taskId,
+      projectId: input.receipt?.projectId || input.task?.projectId,
+      agentId: replyEvent.agentId?.trim() || input.receipt?.lastReportedBy || "",
+      reportedAt: input.receipt?.lastReportedAt || replyEvent.createdAt,
+    });
+    const artifactCount = parsedReply.envelope?.artifacts?.length ?? 0;
+    const attachmentCount = replyEvent.attachmentIds?.length ?? 0;
+    if (parsedReply.envelope?.resultState === "awaiting_review") {
+      return "done";
+    }
+    if (attachmentCount > 0 && artifactCount > 0) {
+      return "done";
+    }
+    return void 0;
+  }
+
+  function shouldOverlayParticipantWithCollaborationState(executionState) {
+    return (
+      executionState === "in_progress" ||
+      executionState === "awaiting_review" ||
+      executionState === "blocked" ||
+      executionState === "failed" ||
+      executionState === "stale"
+    );
   }
 
   async function ensureCollaborationRoomProjectBinding(input) {
@@ -355,6 +552,8 @@ function createCollaborationRoomHelpers(deps) {
     };
   }
 
+  const COLLABORATION_EXECUTION_ATTENTION_WINDOW_MS = 12 * 60 * 60 * 1000;
+
   function deriveCollaborationExecutionState(input) {
     const latestActivityAt =
       input.receipt?.lastReportedAt || input.dispatch?.createdAt || input.task?.updatedAt || "";
@@ -362,8 +561,18 @@ function createCollaborationRoomHelpers(deps) {
     const stale = latestActivityMs > 0 && Date.now() - latestActivityMs > 20 * 60 * 1000;
     if (input.receipt?.reviewState === "awaiting_review") return "awaiting_review";
     if (input.receipt?.reviewState === "approved" || input.task?.status === "done") return "done";
-    if (input.receipt?.lastResultState === "failed") return "failed";
+    if (input.receipt?.lastResultState === "failed") {
+      if (latestActivityMs > 0 && Date.now() - latestActivityMs > COLLABORATION_EXECUTION_ATTENTION_WINDOW_MS) {
+        return "idle";
+      }
+      return "failed";
+    }
     if (input.receipt?.lastResultState === "blocked" || input.task?.status === "blocked") return "blocked";
+    const completedFromReply = stale ? deriveCompletionStateFromReplyEvent(input) : void 0;
+    if (completedFromReply) return completedFromReply;
+    if (latestActivityMs > 0 && Date.now() - latestActivityMs > COLLABORATION_EXECUTION_ATTENTION_WINDOW_MS) {
+      return "idle";
+    }
     if (stale && (input.dispatch || input.task?.status === "in_progress" || input.receipt?.lastResultState === "in_progress")) {
       return "stale";
     }
@@ -379,12 +588,15 @@ function createCollaborationRoomHelpers(deps) {
     return "idle";
   }
 
-  function collaborationExecutionLabel(state, language) {
+  function collaborationExecutionLabel(state, language, receipt) {
+    const waitingFor = receipt?.waitingFor;
     switch (state) {
       case "in_progress":
         return pickUiText(language, "Executing", "执行中");
       case "awaiting_review":
-        return pickUiText(language, "Waiting for Jarvis review", "等待 Jarvis 审核");
+        return waitingFor === "user_confirmation"
+          ? pickUiText(language, "Waiting for your confirmation", "等待你的确认")
+          : pickUiText(language, "Waiting for Jarvis review", "等待 Jarvis 审核");
       case "blocked":
         return pickUiText(language, "Blocked", "阻塞");
       case "failed":
@@ -424,15 +636,28 @@ function createCollaborationRoomHelpers(deps) {
             item.projectId === input.project.projectId &&
             normalizeLookupKey(item.owner) === participantKey,
         );
-      const executionState = deriveCollaborationExecutionState({ dispatch, receipt, task });
+      const latestReplyEvent = findParticipantReplyEventForActivity({
+        events: input.state.events,
+        participantKey,
+        activityAt: receipt?.lastReportedAt || dispatch?.createdAt || task?.updatedAt,
+      });
+      const executionState = deriveCollaborationExecutionState({
+        dispatch,
+        receipt,
+        task,
+        replyEvent: latestReplyEvent,
+      });
       const statusTone = collaborationExecutionTone(executionState);
+      const roomOwnsVisibleStatus = shouldOverlayParticipantWithCollaborationState(executionState);
       return {
         ...participant,
-        statusTone,
-        statusDotLabel: collaborationExecutionLabel(executionState, input.language),
+        statusTone: roomOwnsVisibleStatus ? statusTone : participant.statusTone,
+        statusDotLabel: roomOwnsVisibleStatus
+          ? collaborationExecutionLabel(executionState, input.language, receipt)
+          : participant.statusDotLabel,
         executionState,
-        executionStateLabel: collaborationExecutionLabel(executionState, input.language),
-        currentProjectTitle: input.project.title,
+        executionStateLabel: collaborationExecutionLabel(executionState, input.language, receipt),
+        currentProjectTitle: roomOwnsVisibleStatus ? input.project.title : void 0,
         currentStage: receipt?.stage || dispatch?.stage || pickUiText(input.language, "None", "无"),
         currentTaskId: dispatch?.taskId || receipt?.taskId || task?.taskId,
         currentTaskTitle: sanitizeCollaborationDisplayText(
@@ -442,18 +667,22 @@ function createCollaborationRoomHelpers(deps) {
           180,
         ),
         lastHeartbeatAt: receipt?.lastReportedAt || dispatch?.createdAt || task?.updatedAt,
-        currentWorkLabel: pickUiText(input.language, "Current task", "当前任务"),
-        currentWork:
-          dispatch?.title ||
-          receipt?.taskTitle ||
-          task?.title ||
-          participant.currentWork ||
-          pickUiText(input.language, "No live task right now.", "当前无实时任务。"),
-        recentOutput:
-          receipt?.recentOutput ||
-          receipt?.summary ||
-          participant.recentOutput ||
-          pickUiText(input.language, "No recent output yet.", "最近暂无产出。"),
+        currentWorkLabel: roomOwnsVisibleStatus
+          ? pickUiText(input.language, "Current task", "当前任务")
+          : participant.currentWorkLabel,
+        currentWork: roomOwnsVisibleStatus
+          ? dispatch?.title ||
+            receipt?.taskTitle ||
+            task?.title ||
+            participant.currentWork ||
+            pickUiText(input.language, "No live task right now.", "当前无实时任务。")
+          : participant.currentWork,
+        recentOutput: roomOwnsVisibleStatus
+          ? receipt?.recentOutput ||
+            receipt?.summary ||
+            participant.recentOutput ||
+            pickUiText(input.language, "No recent output yet.", "最近暂无产出。")
+          : participant.recentOutput,
       };
     });
   }
@@ -507,17 +736,68 @@ function createCollaborationRoomHelpers(deps) {
     );
   }
 
+  function isCollaborationInternalPromptMessage(value) {
+    const normalized = normalizeCollaborationEventSyncText(value);
+    if (!normalized) {
+      return false;
+    }
+    return (
+      isCollaborationRelayPromptMessage(value) ||
+      normalized.includes("[[internal_wake_resume]]") ||
+      normalized.includes("internal recovery wake.") ||
+      normalized.includes("continue where you left off. the previous model attempt failed or timed out.") ||
+      (
+        normalized.includes("heart rate monitor recovery check.") &&
+        normalized.includes("current stage:") &&
+        normalized.includes("current task:")
+      )
+    );
+  }
+
+  function isCollaborationMachineOnlyMessage(value) {
+    return import_collaboration_agent_artifacts.isMachineOnlyCollaborationText(String(value || "").trim());
+  }
+
+  function looksLikeAnyRoomScopedCollaborationSessionKey(sessionKey) {
+    const normalized = normalizeLookupKey(sessionKey);
+    return Boolean(normalized && normalized.includes("thread:collab-"));
+  }
+
   function buildCollaborationEventSyncSignature(event) {
-    const message = normalizeCollaborationEventSyncText(event.message);
+    const message = normalizeCollaborationEventSyncText(
+      sanitizeCollaborationDisplayText(event.message, "en", "", 12000),
+    );
     const detail = normalizeCollaborationEventSyncText(event.detail);
     const actorKey = normalizeLookupKey(event.authorRole === "agent" ? event.agentId ?? "" : event.authorRole);
+    const eventTypeKey = normalizeLookupKey(event.type);
     if (message) {
-      return `${actorKey}|m|${message}`;
+      return `${eventTypeKey}|${actorKey}|m|${message}`;
     }
     if (event.authorRole === "system" && detail) {
-      return `${normalizeLookupKey(event.type)}|d|${detail}`;
+      return `${eventTypeKey}|d|${detail}`;
     }
     return void 0;
+  }
+
+  function buildCollaborationEventAttachmentSemanticKey(event) {
+    const attachmentNames = [
+      ...(Array.isArray(event.attachments) ? event.attachments.map((attachment) => attachment?.fileName || "") : []),
+      ...(Array.isArray(event.attachmentIds) ? event.attachmentIds.map((attachmentId) => String(attachmentId || "")) : []),
+    ]
+      .map((value) => normalizeCollaborationEventSyncText(value))
+      .filter(Boolean)
+      .sort();
+    if (attachmentNames.length === 0) {
+      return "";
+    }
+    return `attachments:${attachmentNames.length}:${attachmentNames.join("|")}`;
+  }
+
+  function areCollaborationEventAttachmentSemanticsCompatible(left, right) {
+    if (!left || !right) {
+      return true;
+    }
+    return left === right;
   }
 
   function isDuplicateCollaborationSyncEvent(event, signatures, thresholdMs = 2e4) {
@@ -526,14 +806,22 @@ function createCollaborationRoomHelpers(deps) {
       return false;
     }
     const timestamp = toSortableMs(event.createdAt);
+    const attachmentSemanticKey = buildCollaborationEventAttachmentSemanticKey(event);
     const known = signatures.get(signature);
+    const effectiveThresholdMs = event?.syncControlMessage ? Math.max(thresholdMs, 6e4) : thresholdMs;
     if (!known || known.length === 0) {
       return false;
     }
     if (timestamp <= 0) {
-      return true;
+      return known.some((value) =>
+        areCollaborationEventAttachmentSemanticsCompatible(attachmentSemanticKey, value.attachmentSemanticKey),
+      );
     }
-    return known.some((value) => Math.abs(value - timestamp) <= thresholdMs);
+    return known.some(
+      (value) =>
+        Math.abs(value.timestamp - timestamp) <= effectiveThresholdMs &&
+        areCollaborationEventAttachmentSemanticsCompatible(attachmentSemanticKey, value.attachmentSemanticKey),
+    );
   }
 
   function registerCollaborationSyncEventSignature(event, signatures) {
@@ -542,8 +830,9 @@ function createCollaborationRoomHelpers(deps) {
       return;
     }
     const timestamp = toSortableMs(event.createdAt);
+    const attachmentSemanticKey = buildCollaborationEventAttachmentSemanticKey(event);
     const next = signatures.get(signature) ?? [];
-    next.push(timestamp);
+    next.push({ timestamp, attachmentSemanticKey });
     signatures.set(signature, next);
   }
 
@@ -557,7 +846,20 @@ function createCollaborationRoomHelpers(deps) {
 
   function mergeCollaborationRoomApiEvents(input) {
     const transcriptEvents = input.transcriptEvents.filter(
-      (event) => !(event.authorRole === "user" && isCollaborationRelayPromptMessage(event.message)),
+      (event) =>
+        !(
+          (event.authorRole === "user" && isCollaborationInternalPromptMessage(event.message)) ||
+          (
+            event.authorRole === "agent" &&
+            !event.message &&
+            (event.syncControlMessage || isCollaborationInternalPromptMessage(event.detail))
+          ) ||
+          (
+            event.authorRole === "agent" &&
+            isCollaborationInternalPromptMessage(event.message) &&
+            !event.syncControlMessage
+          )
+        ),
     );
     if (input.localEvents.length === 0) {
       const events = [...transcriptEvents].sort(compareCollaborationApiEventsByTime);
@@ -571,11 +873,20 @@ function createCollaborationRoomHelpers(deps) {
     const historicalTranscript = [];
     const appendedTranscript = [];
     for (const event of transcriptEvents) {
+      const eventTimestamp = toSortableMs(event.createdAt);
+      if (
+        input.localEvents.length > 0 &&
+        event.authorRole === "user" &&
+        looksLikeAnyRoomScopedCollaborationSessionKey(event.relatedSessionKey) &&
+        (firstLocalAt <= 0 || eventTimestamp <= 0 || eventTimestamp >= firstLocalAt)
+      ) {
+        continue;
+      }
       if (isDuplicateCollaborationSyncEvent(event, signatures)) {
         continue;
       }
       registerCollaborationSyncEventSignature(event, signatures);
-      if (firstLocalAt > 0 && toSortableMs(event.createdAt) > 0 && toSortableMs(event.createdAt) < firstLocalAt) {
+      if (firstLocalAt > 0 && eventTimestamp > 0 && eventTimestamp < firstLocalAt) {
         historicalTranscript.push(event);
         continue;
       }
@@ -600,15 +911,465 @@ function createCollaborationRoomHelpers(deps) {
     };
   }
 
+  function isHeartbeatRecoveryNoiseText(value) {
+    const normalized = normalizeCollaborationEventSyncText(value);
+    if (!normalized) {
+      return false;
+    }
+    return (
+      normalized === "heartbeat_ok" ||
+      normalized.includes("heart rate monitor recovery check.") ||
+      normalized.includes("heart rate monitor resumed") ||
+      normalized.includes("without a normal heartbeat") ||
+      normalized.includes("stale_in_progress") ||
+      normalized.includes("heartbeat ok")
+    );
+  }
+
+  function shouldHideCollaborationApiEvent(event) {
+    if (!event || typeof event !== "object") {
+      return true;
+    }
+    if (
+      event.authorRole === "agent" &&
+      (isHeartbeatRecoveryNoiseText(event.message) || isCollaborationMachineOnlyMessage(event.message))
+    ) {
+      return true;
+    }
+    if (
+      (event.type === "system_note" ||
+        event.type === "dispatch_failed" ||
+        event.type === "dispatch_started") &&
+      (isHeartbeatRecoveryNoiseText(event.message) ||
+        isHeartbeatRecoveryNoiseText(event.detail) ||
+        isHeartbeatRecoveryNoiseText(event.failureReason))
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function filterVisibleCollaborationApiEvents(events) {
+    return (Array.isArray(events) ? events : []).filter((event) => !shouldHideCollaborationApiEvent(event));
+  }
+
+  function looksLikeRoomScopedCollaborationSessionKey(sessionKey, roomId) {
+    const normalizedSessionKey = normalizeLookupKey(sessionKey);
+    const normalizedRoomId = normalizeLookupKey(roomId);
+    if (!normalizedSessionKey || !normalizedRoomId) {
+      return false;
+    }
+    return normalizedSessionKey.includes(`thread:collab-${normalizedRoomId}`);
+  }
+
+  function isRoomScopedCoordinationPrompt(value, roomId) {
+    const normalized = normalizeCollaborationEventSyncText(value);
+    const normalizedRoomId = normalizeCollaborationEventSyncText(roomId);
+    if (!normalized || !normalizedRoomId) {
+      return false;
+    }
+    return (
+      normalized.includes("<openclaw_coordination>") &&
+      (normalized.includes(`roomid:${normalizedRoomId}`) ||
+        normalized.includes(`roomid: ${normalizedRoomId}`))
+    );
+  }
+
+  function collectRoomRelevantSessionCandidates(input) {
+    const candidates = new Map();
+    const activeAgentKeys = new Set();
+    const recentStateEvents = Array.isArray(input.state?.events)
+      ? input.state.events.slice(-LIVE_SESSION_EVENT_LOOKBACK)
+      : [];
+    const recentTranscriptEvents = Array.isArray(input.transcriptEvents)
+      ? input.transcriptEvents.slice(-LIVE_SESSION_EVENT_LOOKBACK)
+      : [];
+
+    const upsertCandidate = (sessionKey, agentId) => {
+      const normalizedSessionKey = normalizeLookupKey(sessionKey);
+      if (!normalizedSessionKey) {
+        return;
+      }
+      const trimmedSessionKey = String(sessionKey || "").trim();
+      const normalizedAgentId = normalizeLookupKey(agentId);
+      const next = {
+        sessionKey: trimmedSessionKey,
+        agentId:
+          agentId ||
+          extractAgentIdFromTranscriptSessionKey(trimmedSessionKey) ||
+          input.primaryAgentId,
+        roomScoped: looksLikeRoomScopedCollaborationSessionKey(trimmedSessionKey, input.roomId),
+      };
+      const current = candidates.get(normalizedSessionKey);
+      if (!current || (next.roomScoped && !current.roomScoped)) {
+        candidates.set(normalizedSessionKey, next);
+      }
+      if (normalizedAgentId) {
+        activeAgentKeys.add(normalizedAgentId);
+      }
+    };
+
+    for (const event of recentStateEvents) {
+      if (event.agentId) {
+        activeAgentKeys.add(normalizeLookupKey(event.agentId));
+      }
+      if (event.relatedSessionKey) {
+        upsertCandidate(event.relatedSessionKey, event.agentId);
+      }
+    }
+
+    for (const event of recentTranscriptEvents) {
+      if (event.agentId) {
+        activeAgentKeys.add(normalizeLookupKey(event.agentId));
+      }
+      if (event.relatedSessionKey) {
+        upsertCandidate(event.relatedSessionKey, event.agentId);
+      }
+    }
+
+    for (const binding of input.state?.sessionBindings ?? []) {
+      const normalizedAgentId = normalizeLookupKey(binding?.agentId);
+      if (!normalizedAgentId || !activeAgentKeys.has(normalizedAgentId) || !binding?.sessionKey) {
+        continue;
+      }
+      upsertCandidate(binding.sessionKey, binding.agentId);
+    }
+
+    return [...candidates.values()].sort((left, right) => {
+      if (left.roomScoped !== right.roomScoped) {
+        return left.roomScoped ? -1 : 1;
+      }
+      return String(left.sessionKey || "").localeCompare(String(right.sessionKey || ""));
+    });
+  }
+
+  function extractLatestRoomScopedSessionReply(input) {
+    const messages = Array.isArray(input.messages) ? input.messages : [];
+    let latest = null;
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index];
+      if (normalizeLookupKey(message?.role) !== "user") {
+        continue;
+      }
+      if (!isRoomScopedCoordinationPrompt(message.content, input.roomId)) {
+        continue;
+      }
+      let latestAssistant = null;
+      let nextUserTimestamp = "";
+      for (let cursor = index + 1; cursor < messages.length; cursor += 1) {
+        const candidate = messages[cursor];
+        const candidateRole = normalizeLookupKey(candidate?.role);
+        if (candidateRole === "user") {
+          nextUserTimestamp = String(candidate.timestamp || "");
+          break;
+        }
+        if (candidateRole !== "assistant") {
+          continue;
+        }
+        const sanitized = sanitizeCollaborationDisplayText(candidate.content, input.language, "", 12000);
+        if (
+          !sanitized ||
+          isCollaborationInternalPromptMessage(candidate.content) ||
+          isCollaborationMachineOnlyMessage(candidate.content)
+        ) {
+          continue;
+        }
+        latestAssistant = {
+          ...candidate,
+          author: candidate.author || input.agentId,
+          content: candidate.content,
+          sourceSessionKey: candidate.sourceSessionKey || input.sessionKey,
+          visibleContent: sanitized,
+        };
+      }
+      latest = {
+        prompt: message,
+        assistant: latestAssistant,
+        nextUserTimestamp,
+      };
+    }
+    return latest;
+  }
+
+  async function buildCollaborationLiveSessionBackfillEvents(input) {
+    if (!input.client || typeof input.client.sessionsHistory !== "function") {
+      return [];
+    }
+    const sessionCandidates = collectRoomRelevantSessionCandidates(input);
+    if (sessionCandidates.length === 0) {
+      return [];
+    }
+    const historyLimit = Math.max(
+      LIVE_SESSION_HISTORY_LIMIT_MIN,
+      Math.min(LIVE_SESSION_HISTORY_LIMIT_MAX, Math.max(input.limit * 4, LIVE_SESSION_HISTORY_LIMIT_MIN)),
+    );
+    const signatures = new Map();
+    for (const event of input.visibleTimeline ?? []) {
+      registerCollaborationSyncEventSignature(event, signatures);
+    }
+
+    const drafts = [];
+    const histories = await Promise.all(
+      sessionCandidates.map(async (candidate) => {
+        try {
+          const history = await promiseWithTimeout(
+            input.client.sessionsHistory({
+              sessionKey: candidate.sessionKey,
+              limit: historyLimit,
+            }),
+            LIVE_SESSION_HISTORY_TIMEOUT_MS,
+          );
+          return {
+            candidate,
+            messages: normalizeSessionHistoryMessages(history, historyLimit),
+          };
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    for (const item of histories) {
+      if (!item) {
+        continue;
+      }
+      const latestWindow = extractLatestRoomScopedSessionReply({
+        messages: item.messages,
+        roomId: input.roomId,
+        agentId: item.candidate.agentId,
+        sessionKey: item.candidate.sessionKey,
+        language: input.language,
+      });
+      if (!latestWindow?.assistant) {
+        continue;
+      }
+      const assistantMessage = {
+        ...latestWindow.assistant,
+        author: latestWindow.assistant.author || item.candidate.agentId,
+        sourceSessionKey: latestWindow.assistant.sourceSessionKey || item.candidate.sessionKey,
+      };
+      const liveEvent = buildCollaborationTranscriptBackfillEvent({
+        sequence: 1,
+        message: assistantMessage,
+        language: input.language,
+        primaryAgentId: input.primaryAgentId,
+        primaryDisplayName: input.primaryDisplayName,
+        directory: input.directory,
+      });
+      if (!liveEvent || isDuplicateCollaborationSyncEvent(liveEvent, signatures)) {
+        continue;
+      }
+      drafts.push({
+        ...liveEvent,
+        eventId: `live-session:${normalizeLookupKey(item.candidate.sessionKey)}:${toSortableMs(liveEvent.createdAt) || drafts.length + 1}`,
+        agentId: liveEvent.agentId || item.candidate.agentId,
+        agentDisplayName:
+          liveEvent.agentDisplayName ||
+          resolveCollaborationParticipantName(input.directory, item.candidate.agentId),
+        relatedSessionKey: item.candidate.sessionKey,
+        relatedSessionHref: buildSessionDetailHref(item.candidate.sessionKey, input.language),
+        liveSessionBackfill: true,
+      });
+      registerCollaborationSyncEventSignature(liveEvent, signatures);
+    }
+
+    return drafts
+      .sort(compareCollaborationApiEventsByTime)
+      .map((event, index) => ({
+        ...event,
+        sequence: input.baseSequence + index + 1,
+      }));
+  }
+
+  function buildCollaborationLiveDraftEvents(input) {
+    const signatures = new Map();
+    for (const event of input.visibleTimeline ?? []) {
+      registerCollaborationSyncEventSignature(event, signatures);
+    }
+
+    const projected = [];
+    for (const draft of import_collaboration_live_drafts.listCollaborationLiveDrafts(input.roomId)) {
+      const visibleMessage = sanitizeCollaborationDisplayText(draft.text, input.language, "", 12_000);
+      if (!visibleMessage) {
+        continue;
+      }
+      const agentName =
+        draft.agentDisplayName || resolveCollaborationParticipantName(input.directory, draft.agentId);
+      const createdAt = String(draft.updatedAt || draft.createdAt || new Date().toISOString());
+      const detail =
+        draft.state === "error"
+          ? pickUiText(
+              input.language,
+              `${agentName}'s live stream dropped. Waiting for transcript recovery.`,
+              `${agentName} 的实时流已中断，正在等待 transcript 恢复。`,
+            )
+          : pickUiText(
+              input.language,
+              `${agentName} is replying in the shared room...`,
+              `${agentName} 正在共享房间里回复...`,
+            );
+      const projectedEvent = {
+        sequence: 0,
+        eventId: `live-draft:${normalizeLookupKey(draft.runId || draft.sourceEventId || draft.agentId)}:${toSortableMs(createdAt) || projected.length + 1}`,
+        type: "agent_reply",
+        createdAt,
+        authorRole: "agent",
+        agentId: draft.agentId,
+        agentDisplayName: agentName,
+        label: pickUiText(
+          input.language,
+          `${agentName} is replying`,
+          `${agentName} 正在回复`,
+        ),
+        message: visibleMessage,
+        messageHtml: import_chat_markdown.renderChatMarkdownToHtml(visibleMessage),
+        detail,
+        detailHtml: import_chat_markdown.renderChatMarkdownToHtml(detail),
+        failureReason: draft.errorMessage,
+        sourceEventId: draft.sourceEventId,
+        targetAgentIds: [draft.agentId],
+        targetDisplayNames: [agentName],
+        fallbackAgentId: void 0,
+        fallbackDisplayName: void 0,
+        attachmentIds: [],
+        attachments: [],
+        relatedSessionId: void 0,
+        relatedSessionKey: draft.sessionKey,
+        relatedSessionHref: draft.sessionKey
+          ? buildSessionDetailHref(draft.sessionKey, input.language)
+          : void 0,
+        pending: true,
+        liveDraft: true,
+      };
+      if (isDuplicateCollaborationSyncEvent(projectedEvent, signatures)) {
+        continue;
+      }
+      registerCollaborationSyncEventSignature(projectedEvent, signatures);
+      projected.push(projectedEvent);
+    }
+
+    return projected
+      .sort(compareCollaborationApiEventsByTime)
+      .map((event, index) => ({
+        ...event,
+        sequence: input.baseSequence + index + 1,
+      }));
+  }
+
+  function promiseWithTimeout(promise, timeoutMs) {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return promise;
+    }
+    return Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), Math.trunc(timeoutMs)),
+      ),
+    ]);
+  }
+
+  function buildCollaborationPendingDraftEvents(input) {
+    const drafts = [];
+    const currentVisibleEvents = Array.isArray(input.currentEvents) ? input.currentEvents : [];
+    const recentDispatches = Array.isArray(input.state?.events)
+      ? input.state.events.slice(-PENDING_DISPATCH_LOOKBACK)
+      : [];
+    const seen = new Set();
+
+    for (let index = recentDispatches.length - 1; index >= 0; index -= 1) {
+      const dispatch = recentDispatches[index];
+      if (dispatch?.type !== "dispatch_started" || !dispatch?.agentId) {
+        continue;
+      }
+      const dispatchKey = `${normalizeLookupKey(dispatch.agentId)}|${normalizeLookupKey(dispatch.sourceEventId || dispatch.eventId)}`;
+      if (seen.has(dispatchKey)) {
+        continue;
+      }
+      seen.add(dispatchKey);
+      const hasVisibleFollowUp = currentVisibleEvents.some((event) => {
+        if (normalizeLookupKey(event?.agentId ?? "") !== normalizeLookupKey(dispatch.agentId ?? "")) {
+          return false;
+        }
+        if (event.pending) {
+          return false;
+        }
+        if (
+          event.sourceEventId &&
+          dispatch.sourceEventId &&
+          normalizeLookupKey(event.sourceEventId ?? "") !== normalizeLookupKey(dispatch.sourceEventId ?? "")
+        ) {
+          return false;
+        }
+        return (
+          event.type !== "dispatch_started" &&
+          toSortableMs(event.createdAt) >= toSortableMs(dispatch.createdAt)
+        );
+      });
+      if (hasVisibleFollowUp) {
+        continue;
+      }
+      const agentName = resolveCollaborationParticipantName(input.directory, dispatch.agentId);
+      const pendingMessage = pickUiText(
+        input.language,
+        "Working in the current room session...",
+        "正在当前协作会话中处理...",
+      );
+      const pendingDetail = pickUiText(
+        input.language,
+        `${agentName} has started working and has not published a visible reply yet.`,
+        `${agentName} 已开始处理，但还没有同步出可见回复。`,
+      );
+      drafts.push({
+        sequence: 0,
+        eventId: `pending:${dispatch.eventId}`,
+        type: "dispatch_started",
+        createdAt: dispatch.createdAt,
+        authorRole: "agent",
+        agentId: dispatch.agentId,
+        agentDisplayName: agentName,
+        label: pickUiText(input.language, `${agentName} is working`, `${agentName} 正在处理`),
+        message: pendingMessage,
+        messageHtml: import_chat_markdown.renderChatMarkdownToHtml(pendingMessage),
+        detail: pendingDetail,
+        detailHtml: import_chat_markdown.renderChatMarkdownToHtml(pendingDetail),
+        failureReason: void 0,
+        sourceEventId: dispatch.sourceEventId,
+        targetAgentIds: dispatch.targetAgentIds ?? [dispatch.agentId],
+        targetDisplayNames: [agentName],
+        fallbackAgentId: void 0,
+        fallbackDisplayName: void 0,
+        attachmentIds: [],
+        attachments: [],
+        relatedSessionId: dispatch.relatedSessionId,
+        relatedSessionKey: dispatch.relatedSessionKey,
+        relatedSessionHref: dispatch.relatedSessionKey
+          ? buildSessionDetailHref(dispatch.relatedSessionKey, input.language)
+          : void 0,
+        pending: true,
+      });
+    }
+
+    return drafts
+      .sort(compareCollaborationApiEventsByTime)
+      .map((event, index) => ({
+        ...event,
+        sequence: input.baseSequence + index + 1,
+      }));
+  }
+
   async function buildCollaborationRoomApiView(input) {
-    const directory = input.directory ?? (await loadCollaborationParticipantDirectory());
-    const rooms = await listCollaborationTranscriptRooms(directory);
-    const selectedRoom = rooms.find((room) => room.roomId === input.roomId);
-    const persistedState = await import_collaboration_room.loadExistingCollaborationRoom(input.roomId);
+    const selection = await resolveCollaborationRoomSelection(input.roomId, input.directory);
+    const directory = selection.directory;
+    const rooms = selection.rooms;
+    const selectedRoom = selection.selectedRoom;
+    const effectiveRoomId = selection.roomId;
+    const persistedState = selectedRoom
+      ? await import_collaboration_room.loadExistingCollaborationRoom(effectiveRoomId)
+      : void 0;
     const state =
       persistedState ??
       import_collaboration_room.defaultCollaborationRoomState({
-        roomId: input.roomId,
+        roomId: effectiveRoomId,
         title: selectedRoom?.title ?? import_collaboration_room.DEFAULT_COLLABORATION_ROOM_TITLE,
         titleMode: selectedRoom?.titleMode ?? "auto",
         projectId: selectedRoom?.projectId,
@@ -625,7 +1386,7 @@ function createCollaborationRoomHelpers(deps) {
     const transcriptHistory = await import_openclaw_chat_rooms
       .readOpenClawChatRoomHistory({
         agentId: directory.primaryAgentId,
-        roomId: input.roomId,
+        roomId: effectiveRoomId,
         openclawHomeDir: getOpenClawHomeDir(),
         limit: effectiveLimit,
       })
@@ -636,6 +1397,7 @@ function createCollaborationRoomHelpers(deps) {
           language: input.language,
           primaryAgentId: input.primaryAgentId,
           primaryDisplayName: input.primaryDisplayName,
+          directory,
         })
       : [];
     const localEvents = state.events.map((event) =>
@@ -646,20 +1408,53 @@ function createCollaborationRoomHelpers(deps) {
       transcriptEvents,
       lastLocalSequence: state.lastSequence,
     });
-    const effectiveLastSequence = mergedTimeline.lastSequence;
+    const visibleTimeline = filterVisibleCollaborationApiEvents(mergedTimeline.events);
+    const effectiveLastSequence = visibleTimeline.at(-1)?.sequence ?? 0;
+    const effectiveReadSequenceInput = Math.max(0, input.readSequence);
     const translatedAfterSequence =
       state.events.length > 0 && input.afterSequence > 0 && input.afterSequence <= state.lastSequence
         ? input.afterSequence + mergedTimeline.localSequenceOffset
         : input.afterSequence;
     const translatedReadSequence =
-      state.events.length > 0 && input.readSequence > 0 && input.readSequence <= state.lastSequence
-        ? input.readSequence + mergedTimeline.localSequenceOffset
-        : input.readSequence;
+      state.events.length > 0 &&
+      effectiveReadSequenceInput > 0 &&
+      effectiveReadSequenceInput <= state.lastSequence
+        ? effectiveReadSequenceInput + mergedTimeline.localSequenceOffset
+        : effectiveReadSequenceInput;
     const normalizedReadSequence = Math.max(0, Math.min(effectiveLastSequence, translatedReadSequence));
-    const events = mergedTimeline.events
+    const realEvents = visibleTimeline
       .filter((event) => event.sequence > translatedAfterSequence)
       .slice(-effectiveLimit);
-    const unreadCount = mergedTimeline.events.filter(
+    const liveDraftEvents = buildCollaborationLiveDraftEvents({
+      roomId: effectiveRoomId,
+      directory,
+      language: input.language,
+      visibleTimeline,
+      baseSequence: effectiveLastSequence,
+    });
+    const liveSessionEvents = await buildCollaborationLiveSessionBackfillEvents({
+      client: input.client,
+      state,
+      roomId: effectiveRoomId,
+      directory,
+      transcriptEvents,
+      visibleTimeline: [...visibleTimeline, ...liveDraftEvents],
+      primaryAgentId: input.primaryAgentId,
+      primaryDisplayName: input.primaryDisplayName,
+      language: input.language,
+      limit: effectiveLimit,
+      baseSequence: effectiveLastSequence + liveDraftEvents.length,
+    });
+    const pendingDraftEvents = buildCollaborationPendingDraftEvents({
+      state,
+      roomId: effectiveRoomId,
+      directory,
+      language: input.language,
+      currentEvents: [...visibleTimeline, ...liveDraftEvents, ...liveSessionEvents],
+      baseSequence: effectiveLastSequence + liveDraftEvents.length + liveSessionEvents.length,
+    });
+    const events = [...realEvents, ...liveDraftEvents, ...liveSessionEvents, ...pendingDraftEvents];
+    const unreadCount = visibleTimeline.filter(
       (event) => event.sequence > normalizedReadSequence && shouldCountUnreadCollaborationApiEvent(event),
     ).length;
     const baseParticipants =
@@ -702,7 +1497,10 @@ function createCollaborationRoomHelpers(deps) {
         pickLatestSessionActivityTimestamp(
           selectedRoom?.updatedAt,
           persistedState?.updatedAt,
-          mergedTimeline.events.at(-1)?.createdAt,
+          visibleTimeline.at(-1)?.createdAt,
+          liveDraftEvents.at(-1)?.createdAt,
+          liveSessionEvents.at(-1)?.createdAt,
+          pendingDraftEvents.at(-1)?.createdAt,
         ) ??
         selectedRoom?.updatedAt ??
         state.updatedAt,
@@ -747,6 +1545,71 @@ function createCollaborationRoomHelpers(deps) {
       */
       events,
     };
+  }
+
+  function buildCollaborationRoomStreamSignature(roomView) {
+    const rooms = Array.isArray(roomView?.rooms)
+      ? roomView.rooms.map((room) =>
+          [
+            String(room?.roomId || ""),
+            String(room?.updatedAt || ""),
+            String(room?.lastSequence || 0),
+            room?.active ? "1" : "0",
+          ].join("|"),
+        )
+      : [];
+    const participants = Array.isArray(roomView?.participants)
+      ? roomView.participants
+          .map((participant) =>
+            [
+              String(participant?.agentId || ""),
+              String(participant?.executionState || ""),
+              String(participant?.lastHeartbeatAt || ""),
+              safeTruncate(String(participant?.currentTaskId || ""), 120),
+              safeTruncate(
+                normalizeCollaborationEventSyncText(
+                  String(participant?.recentOutput || participant?.currentWork || ""),
+                ),
+                220,
+              ),
+            ].join("|"),
+          )
+          .sort()
+      : [];
+    const events = Array.isArray(roomView?.events)
+      ? roomView.events.map((event) =>
+          [
+            String(event?.sequence || 0),
+            String(event?.eventId || ""),
+            String(event?.type || ""),
+            String(event?.agentId || ""),
+            String(event?.createdAt || ""),
+            event?.pending ? "1" : "0",
+            event?.liveDraft ? "1" : "0",
+            event?.liveSessionBackfill ? "1" : "0",
+            event?.syncControlMessage ? "1" : "0",
+            safeTruncate(
+              normalizeCollaborationEventSyncText(String(event?.message || "")),
+              320,
+            ),
+            safeTruncate(normalizeCollaborationEventSyncText(String(event?.detail || "")), 220),
+            safeTruncate(normalizeCollaborationEventSyncText(String(event?.failureReason || "")), 220),
+          ].join("|"),
+        )
+      : [];
+
+    return JSON.stringify({
+      roomId: String(roomView?.roomId || ""),
+      updatedAt: String(roomView?.updatedAt || ""),
+      lastSequence: Number(roomView?.lastSequence || 0),
+      returnedCount: Number(roomView?.returnedCount || events.length),
+      projectId: String(roomView?.project?.projectId || ""),
+      projectSummary: safeTruncate(String(roomView?.project?.summary || ""), 240),
+      projectOpenTaskCount: Number(roomView?.project?.openTaskCount || 0),
+      rooms,
+      participants,
+      events,
+    });
   }
 
   function attachCollaborationRoomRefsToCards(cards, roomStates, language) {
@@ -814,9 +1677,70 @@ function createCollaborationRoomHelpers(deps) {
           language: input.language,
           primaryAgentId: input.primaryAgentId,
           primaryDisplayName: input.primaryDisplayName,
+          directory: input.directory,
         }),
       )
       .filter((event) => Boolean(event));
+  }
+
+  function extractAgentIdFromTranscriptSessionKey(sessionKey) {
+    const normalized = String(sessionKey || "").trim();
+    if (!normalized) {
+      return "";
+    }
+    const match = /^agent:([^:]+)/i.exec(normalized);
+    return match?.[1]?.trim() || "";
+  }
+
+  function buildTranscriptIdentityLookupCandidates(message) {
+    const values = [
+      message.author,
+      extractAgentIdFromTranscriptSessionKey(message.sourceSessionKey),
+      message.sourceSessionKey,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    const expanded = new Set();
+    for (const value of values) {
+      expanded.add(value);
+      const withoutParens = value.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+      if (withoutParens) {
+        expanded.add(withoutParens);
+      }
+    }
+    return [...expanded];
+  }
+
+  function resolveTranscriptBackfillAgentIdentity(input) {
+    const entries = Array.isArray(input.directory?.entries) ? input.directory.entries : [];
+    const candidates = buildTranscriptIdentityLookupCandidates(input.message);
+    for (const candidate of candidates) {
+      const normalizedCandidate = normalizeLookupKey(candidate);
+      if (!normalizedCandidate) {
+        continue;
+      }
+      const matched = entries.find((entry) => {
+        if (normalizeLookupKey(entry.agentId) === normalizedCandidate) {
+          return true;
+        }
+        if (normalizeLookupKey(entry.displayName) === normalizedCandidate) {
+          return true;
+        }
+        return Array.isArray(entry.aliases)
+          ? entry.aliases.some((alias) => normalizeLookupKey(alias) === normalizedCandidate)
+          : false;
+      });
+      if (matched) {
+        return {
+          agentId: matched.agentId,
+          displayName: matched.displayName,
+        };
+      }
+    }
+    return {
+      agentId: input.primaryAgentId,
+      displayName: input.primaryDisplayName,
+    };
   }
 
   function buildCollaborationTranscriptBackfillEvent(input) {
@@ -827,20 +1751,37 @@ function createCollaborationRoomHelpers(deps) {
     const normalizedRole = normalizeLookupKey(input.message.role);
     const isUserMessage = normalizedRole === "user";
     const isAgentMessage = normalizedRole === "assistant" || input.message.kind === "inter_session";
+    if (!isUserMessage && !isAgentMessage) {
+      return null;
+    }
+    const resolvedAgentIdentity = isAgentMessage
+      ? resolveTranscriptBackfillAgentIdentity(input)
+      : { agentId: input.primaryAgentId, displayName: input.primaryDisplayName };
+    const rawMessageContent = isUserMessage || isAgentMessage ? String(input.message.content || "") : "";
+    if (isAgentMessage && isCollaborationMachineOnlyMessage(rawMessageContent)) {
+      return null;
+    }
     const detail = buildTranscriptBackfillDetail(input.message, input.language);
-    const message = isUserMessage || isAgentMessage ? input.message.content : void 0;
+    const message =
+      isUserMessage || isAgentMessage
+        ? sanitizeCollaborationDisplayText(rawMessageContent, input.language, "", 12000) || void 0
+        : void 0;
     return {
       sequence: input.sequence,
       eventId: `transcript:${input.sequence}:${input.message.kind}`,
       type: isUserMessage ? "user_message" : isAgentMessage ? "agent_reply" : "system_note",
       createdAt: timestamp,
       authorRole: isUserMessage ? "user" : isAgentMessage ? "agent" : "system",
-      agentId: isAgentMessage ? input.primaryAgentId : void 0,
-      agentDisplayName: isAgentMessage ? input.primaryDisplayName : void 0,
+      agentId: isAgentMessage ? resolvedAgentIdentity.agentId : void 0,
+      agentDisplayName: isAgentMessage ? resolvedAgentIdentity.displayName : void 0,
       label: isUserMessage
         ? pickUiText(input.language, "User message", "用户消息")
         : isAgentMessage
-          ? pickUiText(input.language, `${input.primaryDisplayName} replied`, `${input.primaryDisplayName} 已回复`)
+          ? pickUiText(
+              input.language,
+              `${resolvedAgentIdentity.displayName} replied`,
+              `${resolvedAgentIdentity.displayName} 已回复`,
+            )
           : input.message.kind === "tool_event"
             ? pickUiText(input.language, "Tool event", "工具事件")
             : pickUiText(input.language, "System note", "系统说明"),
@@ -854,6 +1795,7 @@ function createCollaborationRoomHelpers(deps) {
       targetDisplayNames: [],
       fallbackAgentId: void 0,
       fallbackDisplayName: void 0,
+      syncControlMessage: isAgentMessage && /\[\[reply_to_current\]\]/i.test(rawMessageContent),
       attachmentIds: [],
       attachments: [],
       relatedSessionId: void 0,
@@ -883,13 +1825,14 @@ function createCollaborationRoomHelpers(deps) {
     const agentName = event.agentId ? resolveCollaborationParticipantName(directory, event.agentId) : pickUiText(language, "System", "系统");
     const targetNames = (event.targetAgentIds ?? []).map((agentId) => resolveCollaborationParticipantName(directory, agentId));
     const attachmentSummary = summarizeCollaborationAttachmentNames(event.attachmentIds ?? [], attachmentsById, language);
-    const baseMessage = safeTruncate(event.message?.trim() ?? "", 280);
+    const baseMessage = sanitizeCollaborationDisplayText(event.message, language, "", 280);
     const sessionRef = event.relatedSessionKey ? ` [${event.relatedSessionKey}]` : "";
     switch (event.type) {
       case "user_message":
         return {
           label: pickUiText(language, "User message", "用户消息"),
           detail:
+            event.detail ||
             baseMessage ||
             (attachmentSummary
               ? pickUiText(language, `Attachment-only message: ${attachmentSummary}`, `仅附件消息：${attachmentSummary}`)
@@ -940,7 +1883,6 @@ function createCollaborationRoomHelpers(deps) {
         return {
           label: pickUiText(language, `${agentName} replied`, `${agentName} 已回复`),
           detail:
-            baseMessage ||
             event.detail ||
             pickUiText(language, "Agent reply captured.", "已记录智能体回复。"),
         };
@@ -1080,13 +2022,19 @@ function createCollaborationRoomHelpers(deps) {
   return {
     attachCollaborationRoomRefsToCards,
     buildCollaborationAttachmentSummary,
+    buildCollaborationChatBootPreferences,
     buildCollaborationChatParticipantViews,
     buildCollaborationRoomApiView,
+    buildCollaborationRoomStreamSignature,
     buildCollaborationEventSyncSignature,
+    buildCollaborationLiveSessionBackfillEvents,
+    buildCollaborationLiveDraftEvents,
+    buildCollaborationPendingDraftEvents,
     buildCollaborationTranscriptBackfillEvent,
     buildCollaborationTranscriptBackfillEvents,
     buildTranscriptBackfillDetail,
     compareCollaborationApiEventsByTime,
+    deriveCollaborationExecutionStateForSmoke: deriveCollaborationExecutionState,
     describeCollaborationRoomEvent,
     extractCollaborationMentionTokens,
     findUnknownCollaborationMentions,
@@ -1094,6 +2042,7 @@ function createCollaborationRoomHelpers(deps) {
     formatCollaborationDuration,
     isCollaborationRelayPromptMessage,
     isDuplicateCollaborationSyncEvent,
+    filterVisibleCollaborationApiEvents,
     listCollaborationTranscriptRooms,
     loadCollaborationParticipantDirectory,
     mergeCollaborationRoomApiEvents,

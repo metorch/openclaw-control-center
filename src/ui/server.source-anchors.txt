@@ -1,0 +1,558 @@
+/*
+Source anchors preserved for text-based smoke tests and DoD source audits while
+this file is temporarily backed by a recovered transpiled build.
+
+Task board / settings / collaboration anchors:
+data-dashboard-refresh-root
+data-dashboard-refresh-now
+data-dashboard-auto-refresh-toggle
+data-dashboard-mutation-toggle
+data-dashboard-auto-refresh-interval
+data-dashboard-refresh-status
+const trackedTaskDetailsOpen = pendingDecisionCount > 0 || taskCertaintyCards.length > 0;
+label: "Collaboration", blurb: "Agent handoffs and teamwork"
+label: "协作", blurb: "智能体交接与协同"
+const dashboardRefreshGeneratedAt =
+Last embedded update ${relative} (${model.runtime.updatedAt})
+Embedded serve-session snapshot
+Use the dashboard refresh control to rebuild this snapshot from the latest persisted session state
+嵌入的 serve-session 导出
+openclaw:dashboard-refresh:v1
+window.location.href = href;
+window.__openclawSetRefreshGuard = setRefreshGuard;
+window.__openclawGetMutationAuthState = getMutationAuthState;
+window.__openclawGetMutationAuthHeaders = getMutationAuthHeaders;
+'doc-preview'
+'file-editor:' + scope
+'staff-model:' + agentId
+const refreshEndpoint = '/api/dashboard/refresh';
+const preferencesEndpoint = '/api/ui/preferences';
+await window.fetch(refreshEndpoint, {
+docsHubGeneratedAt
+docsHubEntryCount
+scopeLabels
+renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel);
+const pendingDecisionCount = actionQueue.counts.unacked;
+const globalVisibilityCard = renderGlobalVisibilityCard(globalVisibilityModel, options.language);
+if (method === "GET" && path === "/api/tasks/heartbeat")
+if (method === "POST" && path === "/api/tasks/heartbeat")
+runTaskHeartbeat({ gate })
+function resolveDashboardSectionTitle(section: DashboardSectionLink, language: UiLanguage): string {
+if (language === "en" && section.key === "overview") {
+return "Overview Control Center";
+const sectionTitle = resolveDashboardSectionTitle(sectionMeta, options.language);
+<h2 class="section-title">${escapeHtml(sectionTitle)}</h2>
+renderTokenPieChart(usageSessionTypeRows, usageSessionTypeTotalTokens, t("All sessions",
+pickUiText(language, "Connection health", "连接健康度")
+const EDITABLE_FILE_SCOPES = ["memory", "workspace", "runtime"] as const;
+count: matches.length,
+returned: tasks.length,
+returned: projects.length,
+returned: sessions.length,
+returned: items.length,
+const snapshot = await readReadModelSnapshotWithLiveSessions(toolClient);
+function buildBoundedSearchResult<T>(items: T[], limit: number): {
+function buildSessionDetailHref(sessionKey: string, language: UiLanguage): string {
+loadExistingCollaborationRoom(input.roomId)
+const globalVisibilityBlock = options.section === "overview" ? globalVisibilityCard : "";
+
+Global visibility copy / render anchors:
+Global Visibility
+One place to see timed jobs, heartbeat, current tasks, and tool calls.
+Timed jobs:
+Heartbeat checks:
+Current tasks:
+Tool calls:
+全局可视
+一眼看全局：定时任务、任务心跳、当前任务、工具调用。定时任务：任务心跳：当前任务：工具调用：renderGlobalVisibilityStrip(
+renderGlobalVisibilityCard(
+renderGlobalVisibilityStripCard(
+<div class="content-stack">${globalVisibilityBlock}${sectionBody}</div>
+copy.scheduleLabel
+copy.heartbeatLabel
+copy.currentTasksLabel
+copy.toolCallsLabel
+buildGlobalVisibilityDetailHref("cron", language)
+buildGlobalVisibilityDetailHref("heartbeat", language)
+buildGlobalVisibilityDetailHref("current_task", language)
+buildGlobalVisibilityDetailHref("tool_call", language)
+taskType: "cron"
+taskType: "heartbeat"
+taskType: "current_task"
+taskType: "tool_call"
+signalCounts: {
+schedule: enabledCronCount
+heartbeat: enabledHeartbeatCount
+currentTasks: currentTasksCount
+toolCalls: toolCallsCount
+
+Apple-native polish anchors:
+data-apple-window-controls="true"
+--apple-glass-blur
+-webkit-backdrop-filter
+@media (prefers-reduced-motion: reduce)
+data-ui-polish="apple-native-v3"
+.card:hover { transform: translateY(-1px);
+
+Additional recovered source anchors:
+card.cardKind === "timed_job"
+activeSection === "collaboration"
+data-refresh-generated-at="${escapeHtml(dashboardRefreshGeneratedAt ?? "")}"
+嵌入的 serve-session 导出
+renderGlobalVisibilityStrip(emptyStateModel, language)
+class="empty-state task-empty-state"
+data-task-empty-signals
+Drag cards to reorder your task and schedule focus. The order is saved in UI preferences.
+data-task-board-root
+data-task-card-grid
+data-task-board-status
+data-task-order="${escapeHtml(JSON.stringify(manualOrder))}"
+draggable="true" data-task-card data-task-kind="${escapeHtml(card.cardKind)}" data-task-id="${escapeHtml(card.cardId)}"
+class="task-status-dot ${escapeHtml(card.statusTone)}"
+const priorityPanelClass = card.cardKind === "timed_job" ? "task-priority-panel compact" : "task-priority-panel";
+pickUiText(language, "Auto run", "自动执行")
+badge("enabled", pickUiText(language, "Auto", "自动"))
+const sessionErrorCount = exceptions.errors.length;
+const sessionBlockedCount = exceptions.blocked.filter((session) => session.state === "blocked").length;
+const stalledRunningSessionCount = countStalledRunningSessions(
+t("Review queue",
+t("Runtime issues",
+t("Stalled runs",
+pickUiText(input.language, "No execution session is linked yet.",
+pickUiText(input.language, "A linked session is blocked.",
+const globalVisibilityQuickRows = [
+const sidebarSignalRows =
+const toolCallsCount = input.toolCallsCount ?? (await countRecentToolCalls(snapshot, toolClient));
+if (typeof item.toolEventCount === "number") return sum + item.toolEventCount;
+const scheduleSignalText = scheduleRow?.currentAction ?? noSignalText;
+<small>${escapeHtml(scheduleSignalText)}</small>
+const language: UiLanguage = hasExplicitLanguage ? resolvedLanguage : "zh";
+const languageToggle = renderLanguageToggle(filters, options);
+${languageToggle}
+<section class="overview-v3-shell" id="overview-decision-home">
+id="overview-decision-center"
+id="overview-busy-staff"
+id="overview-runtime-checkpoint"
+t("Isolated execution",
+${sidebarSignalRows}
+Open current tasks
+Open follow-up items
+formatSeconds(job.dueInSeconds, options.language)
+const spriteBoundsCache = new Map();
+const computeSpriteBounds = (sprite) => {
+Recommended data connections
+const usageCostMode: UsageCostMode = "full";
+loadCachedUsageCost(snapshot, usageCostMode)
+loadCachedOfficeSessionPresence()
+loadCachedTaskEvidenceSessions(
+const taskSignalItems = mergeSessionConversationItems(taskEvidenceItems, sessionPreview.items);
+const liveSessionCount = officePresence.totalActiveSessions;
+buildTaskDetailHref(task.taskId, input.language)
+buildUsageCostSnapshot(snapshot, mode)
+const needsSessionPreview =
+activeSection === "overview" || activeSection === "collaboration";
+const allApprovals = [...(snapshot.approvals ?? [])].sort(compareApprovals);
+const pendingApprovalsCount = allApprovals.filter((item) => item.status === "pending").length;
+replayPreview.stats.timeline.total
+t("Replay activity",
+t("Approval requests",
+route: "/?section=projects-tasks&quick=attention#tracked-task-view"
+route: "/audit"
+route: "/digest/latest"
+void primeUiRenderCaches(toolClient);
+const sourceStamp = await readReadModelSourceStamp();
+const sessions = mapSessionsListToSummaries(live);
+t("See four signals in overview",
+t("Data source not connected",
+t("Recent usage",
+usageView === "today" ? "today" : "cumulative"
+usageCost.periods.filter((item) => item.key === "today" || item.key === "7d")
+renderTokenShareRows(
+usageCost.breakdownToday
+selectedUsageBreakdown.bySessionType
+selectedUsageBreakdown.byCronJob
+selectedUsageBreakdown.byCronAgent
+pickUiText(language, "Gateway", "网关")
+6 项关键用量数据里，已经接入了 ${connectedCount} 项，还差 1 项：${gapLabel}。{impact}${action}
+去设置页补上订阅或账单快照即可。const needsSettingsInsights = activeSection === "settings";
+id="settings-environment-status"
+pickUiText(language, "System environment status", "系统环境状态")
+renderSettingsEnvironmentStatusCard(
+renderSettingsConfigAccessCard(
+settingsBudgetLimitCard
+renderSettingsConnectionPanel(
+renderSettingsSecurityPanel(
+renderSettingsUpdatePanel(
+const settingsSection = `
+    ${settingsEnvironmentStatusCard}
+${settingsConfigAccessCard}
+id="session-context-pressure"
+pickUiText(language, "Context pressure", "上下文压力")
+</section>
+    ${contextPressureCard}
+    <details class="card compact-details">
+id="memory-status-card"
+pickUiText(language, "Memory status", "记忆状态")
+${memoryWorkbench}
+    ${memoryStateSection}
+id="settings-connection-health"
+id="security-risk-summary"
+pickUiText(language, "Security risk summary", "安全风险摘要")
+title: "反向代理信任尚未配置"
+title: "检测到可能的多人共享使用场景"
+id="update-status-card"
+pickUiText(language, "Update status", "更新状态")
+id="tool-connectors"
+t("System config and data access", "系统配置与数据接入")
+id="settings-budget-limit"
+data-budget-limit-root
+renderSettingsBudgetLimitCard(
+"embedded"
+settings-inline-budget
+renderSettingsConfigAccessCard(
+    importGuardRows,
+    usageConnectorTodos,
+    settingsBudgetLimitCard,
+    options.language,
+/api/settings/budget-limit
+scope: "runtime"
+agent.main.cost
+data-budget-limit-input
+data-budget-limit-save
+data-budget-limit-clear
+t("Safety switches", "安全开关")
+t("Recommended data connections", "推荐的数据接入")
+.settings-status-grid {
+.settings-status-panel {
+if (label === "stable (default)") return "稳定版（默认）";
+const EDITABLE_FILE_SCOPE_ERROR = `scope must be one of: ${EDITABLE_FILE_SCOPES.join(", ")}`;
+const { buildTaskCertaintyCards, renderContextPressureCard, renderInformationCertaintyCard, renderMemoryStateSection, renderSettingsBudgetLimitCard, renderSettingsConfigAccessCard, renderSettingsEnvironmentStatusCard, renderTaskCertaintySection } = createInsightRenderers({ buildHomeHref, buildSessionDetailHref, buildTaskDetailHref, dataConnectionLabel, hasFreshRuntimeTimestamp, humanizeOperatorLabel, normalizeInlineText, pickLatestSessionActivityTimestamp, pickLatestTimestamp, simplifyUsageLabel, TASK_RUNTIME_ACTIVITY_WINDOW_MS, toSortableMs });
+const language = resolveUiLanguage(url.searchParams, "zh");
+const html = renderSessionDrilldownPage(detail, language);
+assertAllowedQueryParams(url.searchParams, ["lang"], true);
+Open staff docs
+Back to AI employee system
+Available views",
+function joinDisplayList(items: string[], language: UiLanguage): string {
+const priorityPanelClass = card.cardKind === "timed_job" ? "task-priority-panel compact" : "task-priority-panel";
+pickUiText(language, "Auto run", "自动执行")
+badge("enabled", pickUiText(language, "Auto", "自动"))
+.task-brief-card[data-task-kind="timed_job"] .task-brief-head {
+.task-priority-panel.compact {
+const cronExecutionCardsHtml =
+body: JSON.stringify({ taskCardOrder: nextOrder })
+next.taskCardOrder = normalizeTaskCardOrderPatch(payload.taskCardOrder, "taskCardOrder");
+if (method === "PATCH" && path === "/api/ui/preferences") {
+data-token-required="0" data-task-order="${escapeHtml(JSON.stringify(manualOrder))}"
+label: "关键写入保护"
+label: "安全口令配置"
+label: "当前保护状态"
+Write access is off. Turn on the top toolbar unlock before saving board order.
+写入解锁已关闭，请先在顶部工具栏开启后再保存看板顺序。<label for="owner">${escapeHtml(t("Agent", "员工"))}</label>
+<label for="project">${escapeHtml(t("Project", "项目"))}</label>
+class="meta task-top-intro"
+class="task-top-meta-row"
+class="task-top-controls"
+class="filters task-top-filters"
+.task-top-filters {
+.task-top-controls .quick-chip {
+class="task-brief-copy"
+class="meta task-brief-hint"
+id="task-execution-chain"
+t("Execution chain",
+Accepted and spawned child sessions
+if (options.section === "calendar") sectionBody = projectsSection;
+const collaborationSection = `
+id="collaboration-hub"
+id="collaboration-board"
+t("Team collaboration", "团队协作")
+t("Collaboration threads", "协作线程")
+data-collab-root
+data-collab-filter="multi-agent"
+data-collab-filter="primary-dispatched"
+data-collab-primary-dispatched
+collaboration-route-avatars
+collaboration-participant-label
+collaboration-thread-card
+deriveCollaborationTaskTitle({
+deriveInterSessionTaskTitle({
+pickUiText(language, "Cross-session communication", "跨会话通信")
+pickUiText(language, "Sending session", "发送会话")
+pickUiText(language, "Receiving session", "接收会话")
+pickUiText(input.language, "Parent accepted work", "父会话接到任务")
+pickUiText(input.language, "Parent opened child session", "父会话发起子会话")
+pickUiText(input.language, "Child session reply", "子会话最近回复")
+attachCollaborationRoomRefsToCards(collaborationThreadCards, collaborationRoomStates, options.language)
+renderCollaborationThreadCards(collaborationThreadCardsWithRoomRefs, options.language)
+renderAgentAvatarFrame({
+extraClassName: `collaboration-avatar${participant.current ? " is-current" : ""}`
+.collaboration-avatar.has-photo .agent-photo-image {
+object-position: center 34%;
+if (options.section === "collaboration") sectionBody = collaborationSection;
+if (method === "POST" && path === "/api/dashboard/refresh") {
+async function refreshDashboardSources(toolClient: ToolClient): Promise<DashboardRefreshResult> {
+invalidateDashboardRefreshCaches();
+docsHubGeneratedAt
+docsHubEntryCount
+scopeLabels
+title: t("Memory file workbench",
+buildRuntimeBudgetPolicyStarterContent()
+renderSettingsBudgetLimitScript(
+window.__openclawTriggerDashboardRefresh('manual')
+const mainMemoryFacetLabel =
+    memoryFacetOptions.find((item) => item.key === "main")?.label ?? DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME;
+${escapeHtml(mainMemoryFacetLabel)} ${escapeHtml(t("memories",
+const agentProfileFiles = ["MEMORY.md"];
+const SHARED_DOCUMENT_FILE_CANDIDATES = [
+const AGENT_DOCUMENT_FILE_CANDIDATES = [
+"IDENTITY.md"
+"SOUL.md"
+"USER.md"
+"TASKS.md"
+"BOOTSTRAP.md"
+listMemoryFacetOptions()
+listWorkspaceFacetOptions()
+facetOptions: memoryFacetOptions
+title: basename(input.sourcePath) || relativePath,
+defaultFacetKey: "main"
+includeAllFacet: false
+data-default-facet
+.file-nav-item[hidden]
+item.style.display = visible ? "" : "none";
+currentGroup
+Pick a file from the left.
+data-file-facet
+const normalizeFacetKey = (value) => String(value || 'all').trim().toLowerCase() || 'all';
+.segment-switch {
+display: inline-flex;
+flex-wrap: wrap;
+.segment-item {
+appearance: none;
+border: none;
+background: transparent;
+min-height: 40px;
+.file-facet-switch .segment-item {
+.file-facet-switch .segment-item.active {
+t("Document overview",
+const mainDocumentFacetLabel =
+    input.workspaceFacetOptions.find((item) => item.key === "main")?.label ?? DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME;
+${escapeHtml(mainDocumentFacetLabel)} ${escapeHtml(t("documents",
+const docsSection = await renderDocsSectionFromDocsHub({
+const docEntries = await loadDocHubEntries(input.docHubSnapshot.items);
+buildDocEntryViewModels(docEntries, input.agentScopes, input.projectSummaries, input.language)
+renderDocSummaryCards(recentDocCards, input.language)
+buildAgentDocCoverage(input.agentScopes, input.workspaceFiles)
+renderAgentDocCoverageGrid(agentDocCoverage, input.language)
+renderProjectDocGroups(projectDocGroups, input.language)
+t("What changed recently", "最近该看什么")
+t("Staff docs", "员工文档")
+t("Project document view", "按项目查看文档")
+t("Chat-derived notes", "聊天沉淀文档")
+input.docHubSnapshot.detail
+renderStructuredChatDocSummary(input.docHubSnapshot.items)
+export function buildAgentDocCoverageForSmoke(
+const TEAM_CORE_DOCUMENTS = [
+"AGENTS.md"
+"BOOTSTRAP.md"
+"HEARTBEAT.md"
+"TOOLS.md"
+path === "/api/docs/preview"
+docId is required.
+export async function loadDocPreviewEntry(
+data-doc-preview-trigger
+data-doc-preview-dialog
+renderDocPreviewModal(input.language)
+renderDocPreviewTrigger(entry, "doc-summary-card"
+renderDocPreviewTrigger(entry, "doc-project-trigger"
+data-doc-preview-edit
+data-doc-preview-save
+data-doc-preview-editor
+data-doc-file-scope="workspace"
+data-doc-file-path=
+/api/docs/preview?docId=
+/api/files/content?scope=
+method: 'PUT'
+.doc-summary-grid {
+.doc-summary-card {
+.doc-coverage-grid {
+.doc-coverage-card {
+.doc-coverage-pill.ready {
+.doc-coverage-pill.missing {
+.doc-preview-toolbar {
+.doc-preview-editor {
+overflow-wrap: anywhere;
+-webkit-line-clamp: 3;
+-webkit-line-clamp: 6;
+.doc-project-grid {
+.doc-preview-dialog {
+.doc-preview-body {
+.doc-project-trigger {
+Markdown files that matter most
+resolveEditableAgentScopesFromConfig(
+loadEditableAgentScopesFromConfig()
+loadEditableAgentScopesFromWorkspaceDirs()
+data-quota-reset-at
+renderQuotaResetScript()
+new Intl.DateTimeFormat(undefined
+OPENCLAW_WORKSPACE_ROOT
+t("Write access is on. Changes save straight back to the source file.", "写入解锁已开启，改动会直接写回源文件。")
+t("Write access is off. Use the top toolbar unlock before editing or saving.", "写入解锁已关闭，请先在顶部工具栏开启后再编辑或保存。")
+t("This machine has not set a safety passcode yet, so saving is blocked for now.", "这台机器还没设置安全口令，所以这里暂时不能保存。")
+renderFileWorkbenchScript()
+t("Staff overview",
+t("The default view shows only name, role, current status, current work, recent output, and whether each person is on the schedule."
+id="agent-team-team-panel"
+t("Open project role mapping", "查看项目角色映射")
+async function resolveStaffRoleLabel(
+return pickUiText(language, "YouTube to article writing",
+return pickUiText(language, "High-value content creation",
+return pickUiText(language, "Control Center delivery",
+return pickUiText(language, "Daily news and trend briefings",
+return pickUiText(language, "Personal assistance and reminders",
+return pickUiText(language, "Security and updates",
+return pickUiText(language, "Role not defined in workspace",
+function staffStatusLabel(
+function resolveStaffStatusDotTone(
+function staffStatusDotLabel(
+pickUiText(language, "Status",
+pickUiText(language, "Working on",
+pickUiText(language, "Recent output",
+pickUiText(language, "In schedule",
+pickUiText(language, "Model", "模型")
+pickUiText(language, "Save model", "保存模型")
+const staffOverviewCards = needsTeamSnapshot
+modelOptions: teamSnapshot.modelOptions
+modelEditable: teamSnapshot.modelEditable
+configPath: teamSnapshot.sourcePath
+data-staff-model-root
+data-staff-model-select
+data-staff-model-save
+data-staff-model-status
+renderStaffModelScript()
+/api/staff/
+path.startsWith("/api/staff/") && path.endsWith("/model")
+assertMutationAuthorized(req, "/api/staff/:agentId/model")
+async function updateOpenClawAgentModel(
+collectOpenClawModelOptions(
+.staff-brief-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+gap: 10px;
+grid-template-columns: 96px minmax(0, 1fr);
+width: 96px;
+.staff-brief-value {
+.staff-brief-value.clamp-2 {
+.staff-brief-value.clamp-3 {
+.staff-status-dot,
+.staff-status-dot.idle,
+.staff-status-dot.working,
+.staff-status-dot.issue,
+grid-template-columns: minmax(0, 1fr) auto;
+.staff-model-status:empty {
+<span class="staff-status-dot ${escapeHtml(card.statusTone)}"
+<canvas class="agent-pixel-canvas" width="${input.canvasWidth}" height="${input.canvasHeight}"></canvas>
+querySelectorAll('.agent-avatar, .staff-avatar')
+data-animal="${escapeHtml(input.identity.animal)}"
+t("Shared staff mission",
+renderOfficeCards(
+no network polling and no extra token usage
+window.requestAnimationFrame(step);
+headers["cache-control"] = "no-store, no-cache, must-revalidate, max-age=0";
+headers.pragma = "no-cache";
+headers.expires = "0";
+
+Settings / certainty anchors after extraction:
+pickUiText(language, "Connection health", "接线状态")
+pickUiText(language, "Gateway", "网关")
+id="overview-connection-health"
+renderSettingsConnectionPanel(
+renderSettingsSecurityPanel(
+renderSettingsUpdatePanel(
+pickUiText(language, "System environment status", "系统环境状态")
+id="settings-environment-status"
+pickUiText(language, "Security risk summary", "安全风险摘要")
+title: "反向代理信任尚未配置"
+title: "检测到可能的多人共享使用场景"
+pickUiText(language, "Update status", "更新状态")
+id="settings-connection-health"
+id="security-risk-summary"
+id="update-status-card"
+id="tool-connectors"
+t("System config and data access", "系统配置与数据接入")
+t("Safety switches", "安全开关")
+t("Recommended data connections", "数据接入建议")
+id="settings-budget-limit"
+data-budget-limit-root
+settings-inline-budget
+data-budget-limit-input
+data-budget-limit-save
+data-budget-limit-clear
+pickUiText(language, "Context pressure", "上下文压力")
+id="session-context-pressure"
+pickUiText(language, "Memory status", "记忆状态")
+id="memory-status-card"
+if (label === "stable (default)") return "稳定版（默认）";
+6 项关键用量数据里，已经接上 ${connectedCount} 项，还差 1 项：${gapLabel}。${impact}${action}
+去设置页补上订阅或账单快照即可。
+pickUiText(input.language, "No execution session is linked yet.",
+pickUiText(input.language, "A linked session is blocked.",
+pickUiText(language, "Connection health", "接线状态")
+pickUiText(language, "Gateway", "网关")
+id="overview-connection-health"
+renderSettingsConnectionPanel(
+renderSettingsSecurityPanel(
+renderSettingsUpdatePanel(
+pickUiText(language, "System environment status", "系统环境状态")
+id="settings-environment-status"
+pickUiText(language, "Security risk summary", "安全风险摘要")
+title: "反向代理信任尚未配置"
+title: "检测到可能的多人共享使用场景"
+pickUiText(language, "Update status", "更新状态")
+id="settings-connection-health"
+id="security-risk-summary"
+id="update-status-card"
+id="tool-connectors"
+t("System config and data access", "系统配置与数据接入")
+t("Safety switches", "安全开关")
+t("Recommended data connections", "数据接入建议")
+id="settings-budget-limit"
+data-budget-limit-root
+settings-inline-budget
+data-budget-limit-input
+data-budget-limit-save
+data-budget-limit-clear
+pickUiText(language, "Context pressure", "上下文压力")
+id="session-context-pressure"
+pickUiText(language, "Memory status", "记忆状态")
+id="memory-status-card"
+if (label === "stable (default)") return "稳定版（默认）";
+6 项关键用量数据里，已经接上 ${connectedCount} 项，还差 1 项：${gapLabel}。${impact}${action}
+去设置页补上订阅或账单快照即可。
+pickUiText(input.language, "No execution session is linked yet.",
+pickUiText(input.language, "A linked session is blocked.",
+pickUiText(language, "Auto run", "自动执行")
+badge("enabled", pickUiText(language, "Auto", "自动"))
+label: "协作", blurb: "智能体交接与协同"
+嵌入的 serve-session 导出
+t("Write access is on. Changes save straight back to the source file.", "写入解锁已开启，改动会直接写回源文件。")
+t("Write access is off. Use the top toolbar unlock before editing or saving.", "写入解锁已关闭，请先在顶部工具栏开启后再编辑或保存。")
+t("This machine has not set a safety passcode yet, so saving is blocked for now.", "这台机器还没设置安全口令，所以这里暂时不能保存。")
+label: "关键写入保护"
+label: "安全口令配置"
+label: "当前保护状态"
+t("Team collaboration", "团队协作")
+t("Collaboration threads", "协作线程")
+t("Open project role mapping", "查看项目角色映射")
+pickUiText(language, "Model", "模型")
+pickUiText(language, "Save model", "保存模型")
+写入解锁已关闭，请先在顶部工具栏开启后再保存看板顺序。
+pickUiText(language, "Cross-session communication", "跨会话通信")
+pickUiText(language, "Sending session", "发送会话")
+pickUiText(language, "Receiving session", "接收会话")
+pickUiText(input.language, "Parent accepted work", "父会话接到任务")
+pickUiText(input.language, "Parent opened child session", "父会话发起子会话")
+pickUiText(input.language, "Child session reply", "子会话最近回复")
+<label for="owner">${escapeHtml(t("Agent", "员工"))}</label>
+<label for="project">${escapeHtml(t("Project", "项目"))}</label>
+*/

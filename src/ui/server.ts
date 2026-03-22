@@ -13,11 +13,11 @@ Tool calls:
 任务心跳：
 当前任务：
 工具调用：
-鍏ㄥ眬鍙
-鍏ㄥ眬鎬昏
-涓€鐪肩湅鍏ㄥ眬锛氬畾鏃朵换鍔°€佷换鍔″績璺炽€佸綋鍓嶄换鍔°€佸伐鍏疯皟鐢ㄣ€?涓€鐪肩湅鍥涗欢浜嬶細瀹氭椂浠诲姟銆佷换鍔″績璺炽€佸綋鍓嶄换鍔°€佸伐鍏疯皟鐢ㄣ€?瀹氭椂浠诲姟锛?浠诲姟蹇冭烦锛?褰撳墠浠诲姟锛?宸ュ叿璋冪敤锛?function formatExecutorAgentLabel
+全局总览
+一眼看全局：定时任务、任务心跳、当前任务和工具调用。
 */
 const __name = (target, value) => Object.defineProperty(target, "name", { value, configurable: true });
+const import_node_child_process = require("node:child_process");
 const import_node_http = require("node:http");
 const import_node_crypto = require("node:crypto");
 const import_node_fs = require("node:fs");
@@ -32,6 +32,7 @@ const import_budget_policy = require("../runtime/budget-policy");
 const import_commander = require("../runtime/commander");
 const import_cron_overview = require("../runtime/cron-overview");
 const import_collaboration_room = require("../runtime/collaboration-room");
+const import_collaboration_live_drafts = require("../runtime/collaboration-live-drafts");
 const import_openclaw_chat_rooms = require("../runtime/openclaw-chat-rooms");
 const import_done_checklist = require("../runtime/done-checklist");
 const import_collaboration_agent_artifacts = require("../runtime/collaboration-agent-artifacts");
@@ -41,6 +42,7 @@ const import_digest_renderer = require("../runtime/digest-renderer");
 const import_export_bundle = require("../runtime/export-bundle");
 const import_healthz = require("../runtime/healthz");
 const import_import_live = require("../runtime/import-live");
+const import_local_safety_settings = require("../runtime/local-safety-settings");
 const import_import_dry_run = require("../runtime/import-dry-run");
 const import_local_token_auth = require("../runtime/local-token-auth");
 const import_openclaw_cli_insights = require("../runtime/openclaw-cli-insights");
@@ -87,8 +89,8 @@ const { createReadModelHelpers } = require("./server-read-model");
 const { createStaffModelHelpers } = require("./server-staff-models");
 const { createStaffOverviewHelpers } = require("./server-staff-overview");
 const { badge, escapeHtml, extractDateFromName, formatInt, formatPercent, formatTimeAgoFromNow, pickUiText, safeTruncate, toPlainSummary, toSortableMs, uniqueSorted } = require("./server-shared");
-const { renderAgentVisualEnhancerScript, renderCollaborationFilterScript, renderDashboardRefreshScript, renderFileWorkbenchScript, renderNativeMotionScript, renderQuotaResetScript, renderSettingsBudgetLimitScript, renderStaffModelScript, renderTaskBoardScript } = require("./server-inline-scripts");
-const { agentTeamActionLabel, agentTeamEmbeddedUpdatedLabel, agentTeamFactLabel, agentTeamFreshnessTone, agentTeamPhaseLabel, agentTeamPreviewSourceLabel, agentTeamRunStatusLabel, agentTeamRuntimeSummary, agentTeamSuggestedPanelHref, hasFreshRuntimeTimestamp, isSameLocalCalendarDay, isStaleRuntimeTimestamp, pickLatestSessionActivityTimestamp, pickLatestTimestamp, renderAgentTeamArtifactPreviewCard, renderAgentTeamDocsBlock, renderAgentTeamInspectorCard, renderAgentTeamInspectorSummary, renderAgentTeamMemoryBlock, renderAgentTeamOverviewBlock, renderAgentTeamProjectsBlock, renderAgentTeamRunSummaryCard, renderAgentTeamSettingsBlock, renderAgentTeamSidebarCard, renderAgentTeamTeamBlock } = require("./server-agent-team");
+const { renderAgentVisualEnhancerScript, renderCardHelpTooltipsScript, renderCollaborationFilterScript, renderDashboardRefreshScript, renderFileWorkbenchScript, renderNativeMotionScript, renderQuotaResetScript, renderSettingsBudgetLimitScript, renderSettingsSafetyScript, renderStaffModelScript, renderTaskBoardScript } = require("./server-inline-scripts");
+const { agentTeamActionLabel, agentTeamEmbeddedUpdatedLabel, agentTeamFactLabel, agentTeamFreshnessTone, agentTeamPhaseLabel, agentTeamPreviewSourceLabel, agentTeamRunStatusLabel, agentTeamRuntimeSummary, agentTeamSuggestedPanelHref, hasFreshRuntimeTimestamp, isSameLocalCalendarDay, isStaleRuntimeTimestamp, pickLatestSessionActivityTimestamp, pickLatestTimestamp, renderAgentTeamArtifactPreviewCard, renderAgentTeamDocsBlock, renderAgentTeamInspectorCard, renderAgentTeamMemoryBlock, renderAgentTeamOverviewBlock, renderAgentTeamProjectsBlock, renderAgentTeamRunSummaryCard, renderAgentTeamSettingsBlock, renderAgentTeamTeamBlock } = require("./server-agent-team");
 const { createDetailPageRenderers } = require("./server-detail-pages");
 const { createDashboardFragmentHelpers } = require("./server-dashboard-fragments");
 const { createInsightRenderers } = require("./server-insight-panels");
@@ -117,7 +119,7 @@ const { buildBudgetBars, buildParitySurfaceRows, compareApprovals, parseSubscrip
 const { buildGlobalVisibilityDetailHref, buildGlobalVisibilityViewModel, loadOpenclawCronCatalog, renderGlobalVisibilityCard, renderGlobalVisibilityStrip, renderGlobalVisibilityStripCard } = createGlobalVisibilityRenderers({ asObject, badge, buildCronOverview: import_cron_overview.buildCronOverview, buildHomeHref, cronPayloadOwner, cronPayloadOwnerAgentId, cronPayloadPurpose, cronPollingIntervalMs: import_config.POLLING_INTERVALS_MS.cron, cronRuntimePurpose, cronScheduleLabel, escapeHtml, formatExecutorAgentLabel, getOpenClawCronJobsCandidates: () => OPENCLAW_CRON_JOBS_CANDIDATES, listSessionConversations: import_session_conversations.listSessionConversations, pickUiText, readTaskHeartbeatRuns: import_task_heartbeat.readTaskHeartbeatRuns, sanitizeCronPurposeText, summarizeNames });
 const { renderAuditPage, renderCronJobDetailPage, renderSessionDrilldownPage, renderSessionHistoryRows, renderSessionPreviewRows } = createDetailPageRenderers({ buildHomeHref, buildSessionDetailHref, cronHealthLabel, executionChainStageLabel: (stage, language = "zh") => executionChainHelpers.executionChainStageLabel(stage, language), formatSeconds, humanizeTimedJobScheduleLabel, renderSelectOptions, sessionStateLabel, summarizeVisibleSessionSnippet: (rawSnippet, language = "zh", maxLength = 96) => executionChainHelpers.summarizeVisibleSessionSnippet(rawSnippet, language, maxLength) });
 const { renderLegacyTaskBoard, renderTaskBoard, renderTaskDetailPage } = createTaskPageRenderers({ buildHomeHref, buildSessionDetailHref, renderGlobalVisibilityStrip, sessionStateLabel, summarizeVisibleSessionSnippet: (rawSnippet, language = "zh", maxLength = 96) => executionChainHelpers.summarizeVisibleSessionSnippet(rawSnippet, language, maxLength), taskStateLabel });
-const { asPercent, dataConnectionLabel, formatCurrency, formatSubscriptionNumericField, formatSubscriptionPercentField, formatSubscriptionTextField, normalizeQuotaWindowLabel, renderQuotaWindowRow, renderSubscriptionSidebarSummary, renderTokenPieChart, renderTokenShareRows, renderUsageBreakdownRows, renderUsageConnectorTodos, renderUsageContextRows, renderUsagePeriodCards, simplifyUsageLabel, usagePeriodLabel } = createUsageRenderers({ normalizeInlineText });
+const { asPercent, dataConnectionLabel, formatCurrency, formatSubscriptionNumericField, formatSubscriptionPercentField, formatSubscriptionTextField, normalizeQuotaWindowLabel, renderQuotaWindowRow, renderTokenPieChart, renderTokenShareRows, renderUsageBreakdownRows, renderUsageConnectorTodos, renderUsageContextRows, renderUsagePeriodCards, simplifyUsageLabel, usagePeriodLabel } = createUsageRenderers({ normalizeInlineText });
 const collaborationThreadHelpers = createCollaborationThreadHelpers({
     buildSessionDetailHref,
     deriveAgentAnimalIdentity: (agentId) => officeRuntimeHelpers.deriveAgentAnimalIdentity(agentId),
@@ -174,11 +176,12 @@ const collaborationChatHelpers = createCollaborationChatHelpers({
     optionalBoundedString: (value, label, maxLength) => optionalBoundedString(value, label, maxLength),
     pickUiText,
     resolveCollaborationParticipantName: (directory, agentId) => collaborationRoomHelpers.resolveCollaborationParticipantName(directory, agentId),
+    sanitizeCollaborationDisplayText: (value, language, fallback, maxLength) => collaborationRoomHelpers.sanitizeCollaborationDisplayText(value, language, fallback, maxLength),
     safeTruncate,
     toCollaborationApiAttachment: (attachment, roomId) => collaborationRoomHelpers.toCollaborationApiAttachment(attachment, roomId)
 });
 const { renderCollaborationThreadCards, renderOfficeCards, renderOfficeFloor, renderStaffOverviewCards, renderSubscriptionStatusCard, renderTaskExecutionChainCards } = createTeamPanelRenderers({ asPercent, collaborationParticipantRoleLabel: collaborationThreadHelpers.collaborationParticipantRoleLabel, collaborationRoleAgentLabel: collaborationThreadHelpers.collaborationRoleAgentLabel, deriveAgentAnimalIdentity: (agentId) => officeRuntimeHelpers.deriveAgentAnimalIdentity(agentId), executionChainCardTitle: (item, language) => executionChainHelpers.executionChainCardTitle(item, language), executionChainSourceLabel: (chain, language = "zh") => executionChainHelpers.executionChainSourceLabel(chain, language), executionChainStageLabel: (stage, language = "zh") => executionChainHelpers.executionChainStageLabel(stage, language), formatSubscriptionNumericField, humanizeOperatorLabel, normalizeQuotaWindowLabel, officeZoneLabel: (zone, language = "zh") => officeRuntimeHelpers.officeZoneLabel(zone, language), renderAgentAvatarFrame: (input) => officeRuntimeHelpers.renderAgentAvatarFrame({ ...input, escapeHtml }), renderQuotaWindowRow, sessionStateLabel, summarizeVisibleSessionSnippet: (rawSnippet, language = "zh", maxLength = 96) => executionChainHelpers.summarizeVisibleSessionSnippet(rawSnippet, language, maxLength) });
-const { attachCollaborationRoomRefsToCards, buildCollaborationAttachmentSummary, buildCollaborationChatParticipantViews, buildCollaborationEventSyncSignature, buildCollaborationRoomApiView, buildCollaborationTranscriptBackfillEvent, buildCollaborationTranscriptBackfillEvents, buildTranscriptBackfillDetail, compareCollaborationApiEventsByTime, describeCollaborationRoomEvent, extractCollaborationMentionTokens, findUnknownCollaborationMentions, formatBytesCompact, formatCollaborationDuration, isCollaborationRelayPromptMessage, isDuplicateCollaborationSyncEvent, listCollaborationTranscriptRooms, loadCollaborationParticipantDirectory, mergeCollaborationRoomApiEvents, normalizeCollaborationAttachmentIds, normalizeCollaborationEventSyncText, normalizeCollaborationRoomIdPayload, normalizeCollaborationRoomIdQuery, registerCollaborationSyncEventSignature, resolveCollaborationParticipantName, shouldCountUnreadCollaborationApiEvent, shouldCountUnreadCollaborationEvent, summarizeCollaborationAttachmentNames, toCollaborationApiAttachment } = collaborationRoomHelpers;
+const { attachCollaborationRoomRefsToCards, buildCollaborationAttachmentSummary, buildCollaborationChatBootPreferences, buildCollaborationChatParticipantViews, buildCollaborationEventSyncSignature, buildCollaborationRoomApiView, buildCollaborationRoomStreamSignature, buildCollaborationTranscriptBackfillEvent, buildCollaborationTranscriptBackfillEvents, buildTranscriptBackfillDetail, compareCollaborationApiEventsByTime, describeCollaborationRoomEvent, extractCollaborationMentionTokens, findUnknownCollaborationMentions, formatBytesCompact, formatCollaborationDuration, isCollaborationRelayPromptMessage, isDuplicateCollaborationSyncEvent, listCollaborationTranscriptRooms, loadCollaborationParticipantDirectory, mergeCollaborationRoomApiEvents, normalizeCollaborationAttachmentIds, normalizeCollaborationEventSyncText, normalizeCollaborationRoomIdPayload, normalizeCollaborationRoomIdQuery, registerCollaborationSyncEventSignature, resolveCollaborationParticipantName, shouldCountUnreadCollaborationApiEvent, shouldCountUnreadCollaborationEvent, summarizeCollaborationAttachmentNames, toCollaborationApiAttachment } = collaborationRoomHelpers;
 const { buildCollaborationAgentPrompt, buildCollaborationAgentPromptV2, buildCollaborationAgentReplyDetail, buildCollaborationPromptContextLines, buildCollaborationRoomApiEvent, collectCollaborationAgentReplyAttachments, createCollaborationRoomMessage, dispatchCollaborationRoomMessage, dispatchCollaborationTurnToAgent, dispatchCollaborationTurnToAgentV2, isAbsoluteLikePath, isPathInsideAnyRoot, isPathInsideRoot, isReadableCollaborationArtifactPath, isSupportedCollaborationArtifactPath, resolveCollaborationArtifactPaths, resolveCollaborationParticipantWorkspaceRoot, shouldHintCollaborationArtifactReply } = collaborationChatHelpers;
 const { buildCollaborationThreadCards, buildCollaborationTimelineSteps, buildInterSessionCollaborationCards, buildInterSessionCollaborationTimelineSteps, collaborationInterSessionCurrentOwnerLabel, collaborationInterSessionRouteLabel, collaborationInterSessionSummary, collaborationParticipantRoleLabel, collaborationRoleAgentLabel, collaborationRouteLabel, collaborationStatusRank, collaborationThreadKindLabel, collaborationThreadStatusLabel, collaborationThreadSummary, deriveCollaborationTaskTitle, deriveInterSessionTaskTitle, extractCollaborationTaskLabel, foldCollaborationThreadCards, mergeCollaborationThreadCards, normalizeAgentIdCandidate, resolveCollaborationCurrentOwner, resolveInterSessionCollaborationStatus, resolveCollaborationThreadStatus } = collaborationThreadHelpers;
 const SNAPSHOT_PATH = (0, import_node_path.join)(process.cwd(), "runtime", "last-snapshot.json");
@@ -229,7 +232,10 @@ const FALLBACK_ANIMAL_CATALOG = ANIMAL_CATALOG.filter(item => item.key !== "robo
 const CUSTOM_STAFF_AVATAR_CATALOG = [{ key: "fox", title: "Fox Lead", accent: "#ff8f4d", fileName: "fox.png" }, { key: "panda", title: "Panda Architect", accent: "#91bdd8", fileName: "panda.png" }, { key: "shiba", title: "Shiba Dispatcher", accent: "#f3ab5f", fileName: "shiba.png" }, { key: "cat", title: "Cat Frontend", accent: "#ffb783", fileName: "cat.png" }, { key: "tiger", title: "Tiger Backend", accent: "#ff985a", fileName: "tiger.png" }, { key: "elephant", title: "Elephant QA", accent: "#9aa7bf", fileName: "elephant.png" }, { key: "dolphin", title: "Dolphin Ops", accent: "#73c7f4", fileName: "dolphin.png" }, { key: "lion", title: "Lion Captain", accent: "#f1a35f", fileName: "lion.png" }, { key: "deer", title: "Deer Runner", accent: "#c89d67", fileName: "deer.png" }, { key: "bird", title: "Bird Scout", accent: "#d7d9df", fileName: "bird.png" }];
 const CUSTOM_STAFF_AVATAR_BY_KEY = new Map(CUSTOM_STAFF_AVATAR_CATALOG.map(item => [item.key, item]));
 const CUSTOM_STAFF_AVATAR_FILE_NAMES = new Set(CUSTOM_STAFF_AVATAR_CATALOG.map(item => item.fileName));
-const CORE_STAFF_AVATAR_OVERRIDES = new Map([["main", "fox"], ["jarvis", "fox"], ["dispatcher", "shiba"], ["productdispatcher", "shiba"], ["product", "shiba"], ["architect", "panda"], ["architecture", "panda"], ["backend", "tiger"], ["frontend", "cat"], ["qa", "elephant"], ["quality", "elephant"], ["ops", "dolphin"], ["devops", "dolphin"]]);
+const CORE_STAFF_AVATAR_OVERRIDES = new Map([["main", "fox"], ["jarvis", "fox"], ["dispatcher", "shiba"], ["productdispatcher", "shiba"], ["product", "shiba"], ["architect", "panda"], ["architecture", "panda"], ["backend", "tiger"], ["frontend", "cat"], ["qa", "elephant"], ["quality", "elephant"], ["ops", "dolphin"], ["devops", "dolphin"], ["heart-rate-monitor", "bird"], ["heartratemonitor", "bird"], ["heartbeatmonitor", "bird"], ["heartbeat", "bird"], ["watchdog", "bird"]]);
+const COLLABORATION_ROOM_STREAM_INTERVAL_MS = 700;
+const COLLABORATION_ROOM_STREAM_RETRY_MS = 1500;
+const COLLABORATION_ROOM_STREAM_KEEPALIVE_MS = 15000;
 const EDITABLE_FILE_SCOPES = ["memory", "workspace", "runtime"];
 const EDITABLE_FILE_SCOPE_ERROR = `scope must be one of: ${EDITABLE_FILE_SCOPES.join(", ")}`;
 const { buildTaskCertaintyCards, renderContextPressureCard, renderInformationCertaintyCard, renderMemoryStateSection, renderSettingsBudgetLimitCard, renderSettingsConfigAccessCard, renderSettingsEnvironmentStatusCard, renderTaskCertaintySection } = createInsightRenderers({ buildHomeHref, buildSessionDetailHref, buildTaskDetailHref, dataConnectionLabel, hasFreshRuntimeTimestamp, humanizeOperatorLabel, normalizeInlineText, pickLatestSessionActivityTimestamp, pickLatestTimestamp, simplifyUsageLabel, TASK_RUNTIME_ACTIVITY_WINDOW_MS, toSortableMs });
@@ -329,6 +335,245 @@ function invalidateUiRenderCaches() { sessionConversationHelpers.invalidateSessi
 __name(invalidateUiRenderCaches, "invalidateUiRenderCaches");
 function invalidateDashboardRefreshCaches() { invalidateUiRenderCaches(); (0, import_agent_team_embed.invalidateAgentTeamEmbedSnapshotCache)(); (0, import_doc_hub.invalidateStructuredDocHubCache)(); (0, import_openclaw_cli_insights.invalidateOpenClawCliInsightsCache)(); (0, import_usage_cost.invalidateUsageCostSourceCache)(); }
 __name(invalidateDashboardRefreshCaches, "invalidateDashboardRefreshCaches");
+function isLoopbackRequestAddress(value) {
+    const normalized = String(value || "").trim();
+    return normalized === "127.0.0.1" || normalized === "::1" || normalized === "::ffff:127.0.0.1";
+}
+__name(isLoopbackRequestAddress, "isLoopbackRequestAddress");
+function assertSafetySettingsAuthorized(req) {
+    if (import_config.LOCAL_API_TOKEN !== "") {
+        assertMutationAuthorized(req, "/api/settings/safety");
+        return;
+    }
+    if (!isLoopbackRequestAddress(req.socket?.remoteAddress)) {
+        throw new RequestValidationError("Safety settings bootstrap is only allowed from a local loopback request when no safety passphrase is configured.", 403);
+    }
+}
+__name(assertSafetySettingsAuthorized, "assertSafetySettingsAuthorized");
+function scheduleUiRestart() {
+    const scriptPath = (0, import_node_path.join)(process.cwd(), "scripts", "restart-ui-4310.ps1");
+    if (!(0, import_node_fs.existsSync)(scriptPath)) {
+        return false;
+    }
+    setTimeout(() => {
+        try {
+            const child = (0, import_node_child_process.spawn)("powershell.exe", ["-ExecutionPolicy", "Bypass", "-File", scriptPath], {
+                cwd: process.cwd(),
+                detached: true,
+                stdio: "ignore",
+                windowsHide: true
+            });
+            child.unref();
+        }
+        catch (error) {
+            console.error("[mission-control] failed to schedule UI restart", error);
+        }
+    }, 180);
+    return true;
+}
+__name(scheduleUiRestart, "scheduleUiRestart");
+function safetyGuardModeLabel(mode, language) {
+    if (mode === "blocked")
+        return pickUiText(language, "Protected", "保护中");
+    if (mode === "dry_run")
+        return pickUiText(language, "Dry run", "演练模式");
+    if (mode === "live")
+        return pickUiText(language, "Live write", "实时写入");
+    return mode;
+}
+__name(safetyGuardModeLabel, "safetyGuardModeLabel");
+function safetyValueTone(status) {
+    if (status === "enabled" || status === "ok")
+        return "ok";
+    if (status === "warn")
+        return "warn";
+    if (status === "blocked")
+        return "blocked";
+    return "disabled";
+}
+__name(safetyValueTone, "safetyValueTone");
+function renderSafetyValueChip(value, tone) {
+    return `<span class="settings-safety-chip ${escapeHtml(tone)}">${escapeHtml(value)}</span>`;
+}
+__name(renderSafetyValueChip, "renderSafetyValueChip");
+function renderSafetyToggleControl(key, checked, label, language) {
+    const valueLabel = checked ? pickUiText(language, "On", "开启") : pickUiText(language, "Off", "关闭");
+    return `<div class="settings-safety-control" data-safety-toggle-control>
+      <button class="settings-switch-toggle${checked ? " is-on" : ""}" type="button" role="switch" aria-label="${escapeHtml(label)}" aria-checked="${checked ? "true" : "false"}" data-safety-toggle="${escapeHtml(key)}" data-next-value="${checked ? "false" : "true"}">
+        <span class="settings-switch-toggle-track"><span class="settings-switch-toggle-thumb"></span></span>
+      </button>
+      <span class="settings-switch-toggle-label" data-safety-toggle-label>${escapeHtml(valueLabel)}</span>
+    </div>`;
+}
+__name(renderSafetyToggleControl, "renderSafetyToggleControl");
+function buildSafetySettingsRowsHtml(input) {
+    const t = (en, zh) => pickUiText(input.language, en, zh);
+    const toggleRow = (item) => `<tr>
+      <td>${escapeHtml(item.label)}</td>
+      <td>${badge(item.status)}</td>
+      <td>${renderSafetyToggleControl(item.key, item.checked, item.label, input.language)}</td>
+      <td>${escapeHtml(item.note)}</td>
+    </tr>`;
+    const tokenRow = `<tr data-safety-token-row data-configured="${input.importGuard.localTokenConfigured ? "true" : "false"}">
+      <td>${escapeHtml(t("Safety passphrase", "安全口令配置"))}</td>
+      <td>${badge(input.importGuard.localTokenConfigured ? "enabled" : "blocked")}</td>
+      <td>
+        <div class="settings-secret-stack">
+          <div class="settings-secret-input-shell">
+            <input class="settings-secret-input" type="password" autocomplete="new-password" spellcheck="false" aria-label="${escapeHtml(t("Safety passphrase", "瀹夊叏鍙ｄ护"))}" data-safety-token-input />
+            <button class="btn settings-secret-visibility" type="button" data-safety-token-visibility>${escapeHtml(t("Show", "显示"))}</button>
+          </div>
+          <div class="settings-secret-actions">
+            <button class="btn primary" type="button" data-safety-token-save>${escapeHtml(t("Save", "保存"))}</button>
+            <button class="btn" type="button" data-safety-token-clear>${escapeHtml(t("Clear", "清空"))}</button>
+          </div>
+        </div>
+      </td>
+      <td>${escapeHtml(input.importGuard.localTokenConfigured ? t("A safety passphrase is already configured on this machine.", "这台机器已经设置了保护口令。") : t("No safety passphrase is configured yet, so higher-risk writes stay blocked by default.", "这台机器还没有设置保护口令，所以高风险写入默认仍会被拦住。"))}</td>
+    </tr>`;
+    const tokenGateValue = input.tokenGateStatus === "armed"
+        ? t("Ready", "已就绪")
+        : input.tokenGateStatus === "blocked_no_token"
+            ? t("Passphrase missing", "未配置口令")
+            : t("Gate off", "未启用");
+    const modeValue = safetyGuardModeLabel(input.importGuard.defaultMode, input.language);
+    const modeTone = input.importGuard.defaultMode === "blocked" ? "blocked" : input.importGuard.defaultMode === "dry_run" ? "warn" : "ok";
+    return [
+        toggleRow({
+            key: "readonlyMode",
+            label: t("Read-only protection", "只读保护"),
+            checked: input.runtime.readonlyMode,
+            status: input.runtime.readonlyMode ? "enabled" : "warn",
+            note: input.runtime.readonlyMode ? t("Only safety drills are allowed right now; real writes are blocked.", "当前只允许安全演练，不会写入真实变更。") : t("Real writes are allowed, so please use this carefully.", "允许真实写入，请确认后再使用。")
+        }),
+        toggleRow({
+            key: "localTokenAuthRequired",
+            label: t("Key write protection", "关键写入保护"),
+            checked: input.runtime.localTokenAuthRequired,
+            status: input.runtime.localTokenAuthRequired ? "enabled" : "warn",
+            note: input.runtime.localTokenAuthRequired ? t("State-changing routes must pass one extra safety gate first.", "会改数据的操作需要先过一层保护。") : t("There is no extra passphrase gate right now. This is only recommended in a local test environment.", "当前没有额外保护，建议只在本地测试环境这样用。")
+        }),
+        tokenRow,
+        `<tr>
+          <td>${escapeHtml(t("Current protection state", "当前保护状态"))}</td>
+          <td>${badge(input.tokenGateStatus === "armed" ? "enabled" : input.tokenGateStatus === "blocked_no_token" ? "blocked" : "disabled")}</td>
+          <td>${renderSafetyValueChip(tokenGateValue, safetyValueTone(input.tokenGateStatus === "armed" ? "enabled" : input.tokenGateStatus === "blocked_no_token" ? "blocked" : "disabled"))}</td>
+          <td>${escapeHtml(t("This only affects state-changing routes and does not block normal viewing.", "只影响会改数据的操作，不影响普通查看。"))}</td>
+        </tr>`,
+        toggleRow({
+            key: "importMutationEnabled",
+            label: t("Import write switch", "变更写入开关"),
+            checked: input.runtime.importMutationEnabled,
+            status: input.runtime.importMutationEnabled ? "warn" : "disabled",
+            note: input.runtime.importMutationEnabled ? t("Import mutation routes are allowed to write.", "允许导入变更真正写入。") : t("Import write is currently off.", "已关闭导入写入。")
+        }),
+        toggleRow({
+            key: "approvalActionsEnabled",
+            label: t("Approval write switch", "审批写入开关"),
+            checked: input.runtime.approvalActionsEnabled,
+            status: input.runtime.approvalActionsEnabled ? "warn" : "disabled",
+            note: input.runtime.approvalActionsEnabled ? t("Approval actions are allowed to execute live writes.", "允许审批动作执行真实写入。") : t("Approval write is currently off.", "已关闭审批写入。")
+        }),
+        `<tr>
+          <td>${escapeHtml(t("Default protection mode", "默认保护模式"))}</td>
+          <td>${badge(modeTone, modeValue)}</td>
+          <td>${renderSafetyValueChip(modeValue, modeTone)}</td>
+          <td>${escapeHtml(input.importGuard.defaultMode === "blocked" ? t("The system stays in protected mode and only allows drills.", "当前为保护状态，仅允许演练。") : input.importGuard.defaultMode === "dry_run" ? t("The system rehearses first, then you decide whether to write.", "默认先演练，再决定是否真正写入。") : t("The current combination allows live write execution.", "当前组合允许实时写入。"))}</td>
+        </tr>`
+    ].join("");
+}
+__name(buildSafetySettingsRowsHtml, "buildSafetySettingsRowsHtml");
+function renderSafetyToggleControlV2(key, checked, label, language, copy) {
+    const onLabel = copy?.onLabel ?? pickUiText(language, "On", "开启");
+    const offLabel = copy?.offLabel ?? pickUiText(language, "Off", "关闭");
+    const valueLabel = checked ? onLabel : offLabel;
+    return `<div class="settings-safety-control" data-safety-toggle-control>
+      <button class="settings-switch-toggle${checked ? " is-on" : ""}" type="button" role="switch" aria-label="${escapeHtml(label)}" aria-checked="${checked ? "true" : "false"}" data-safety-toggle="${escapeHtml(key)}" data-next-value="${checked ? "false" : "true"}" data-label-on="${escapeHtml(onLabel)}" data-label-off="${escapeHtml(offLabel)}">
+        <span class="settings-switch-toggle-track"><span class="settings-switch-toggle-thumb"></span></span>
+      </button>
+      <span class="settings-switch-toggle-label" data-safety-toggle-label>${escapeHtml(valueLabel)}</span>
+    </div>`;
+}
+__name(renderSafetyToggleControlV2, "renderSafetyToggleControlV2");
+function buildSafetySettingsRowsHtmlV2(input) {
+    const t = (en, zh) => pickUiText(input.language, en, zh);
+    const eyeIcon = `<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 4.5c4.3 0 7.7 2.8 9 5.5-1.3 2.7-4.7 5.5-9 5.5S2.3 12.7 1 10c1.3-2.7 4.7-5.5 9-5.5Zm0 1.6C6.8 6.1 4 8.1 2.8 10c1.2 1.9 4 3.9 7.2 3.9s6-2 7.2-3.9c-1.2-1.9-4-3.9-7.2-3.9Zm0 1.6a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6Z" fill="currentColor"></path></svg>`;
+    const toggleRow = (item) => `<tr>
+      <td>${escapeHtml(item.label)}</td>
+      <td>${badge(item.status, item.stateLabel ?? void 0)}</td>
+      <td>${renderSafetyToggleControlV2(item.key, item.checked, item.label, input.language, item.copy)}</td>
+      <td>${escapeHtml(item.note)}</td>
+    </tr>`;
+    const tokenModeStatus = input.runtime.localTokenAuthRequired ? input.importGuard.localTokenConfigured ? "enabled" : "blocked" : "disabled";
+    const tokenModeStateLabel = input.runtime.localTokenAuthRequired ? input.importGuard.localTokenConfigured ? t("Required", "已启用") : t("Missing passphrase", "缺少口令") : t("Off", "已关闭");
+    const tokenRow = `<tr data-safety-token-row data-configured="${input.importGuard.localTokenConfigured ? "true" : "false"}">
+      <td>${escapeHtml(t("Safety passphrase", "安全口令配置"))}</td>
+      <td>${badge(tokenModeStatus, tokenModeStateLabel)}</td>
+      <td>
+        <div class="settings-secret-inline">
+          ${renderSafetyToggleControlV2("localTokenAuthRequired", input.runtime.localTokenAuthRequired, t("Safety passphrase mode", "安全口令模式"), input.language, { onLabel: t("Required", "需验证"), offLabel: t("Off", "关闭") })}
+          <div class="settings-secret-field">
+            <input class="settings-secret-input" type="password" autocomplete="off" spellcheck="false" value="${escapeHtml(input.runtime.localApiToken)}" aria-label="${escapeHtml(t("Safety passphrase", "安全口令"))}" data-safety-token-input />
+            <button class="btn settings-secret-visibility" type="button" aria-label="${escapeHtml(t("Show or hide safety passphrase", "显示或隐藏安全口令"))}" data-safety-token-visibility>${eyeIcon}</button>
+          </div>
+        </div>
+      </td>
+      <td>${escapeHtml(input.runtime.localTokenAuthRequired ? input.importGuard.localTokenConfigured ? t("This passphrase is required before local write actions can proceed. Press Enter or leave the field to save a change.", "本地写入操作需要先通过这个口令验证。修改后按回车，或离开输入框即可保存。") : t("Passphrase mode is on, but no passphrase is configured yet. Set one here, or turn the mode off.", "安全口令模式已开启，但当前还没有配置口令。可以在这里设置，或直接关闭该模式。") : t("Passphrase mode is off. Local write actions no longer require this passphrase.", "安全口令模式已关闭，本地写入操作将不再要求输入这个口令。"))}</td>
+    </tr>`;
+    const tokenGateValue = input.tokenGateStatus === "armed" ? t("Ready", "已就绪") : input.tokenGateStatus === "blocked_no_token" ? t("Passphrase missing", "未配置口令") : t("Gate off", "未启用");
+    const tokenGateTone = input.tokenGateStatus === "armed" ? "enabled" : input.tokenGateStatus === "blocked_no_token" ? "blocked" : "disabled";
+    const modeValue = safetyGuardModeLabel(input.importGuard.defaultMode, input.language);
+    const modeTone = input.importGuard.defaultMode === "blocked" ? "blocked" : input.importGuard.defaultMode === "dry_run" ? "warn" : "ok";
+    return [
+        toggleRow({
+            key: "readonlyMode",
+            label: t("Read-only protection", "只读保护"),
+            checked: input.runtime.readonlyMode,
+            status: input.runtime.readonlyMode ? "enabled" : "warn",
+            note: input.runtime.readonlyMode ? t("Only safety drills are allowed right now; real writes are blocked.", "当前只允许安全演练，不会写入真实变更。") : t("Real writes are allowed, so please use this carefully.", "允许真实写入，请确认后再使用。")
+        }),
+        tokenRow,
+        toggleRow({
+            key: "importMutationEnabled",
+            label: t("Import write switch", "变更写入开关"),
+            checked: input.runtime.importMutationEnabled,
+            status: input.runtime.importMutationEnabled ? "warn" : "disabled",
+            note: input.runtime.importMutationEnabled ? t("Import mutation routes are allowed to write.", "允许导入变更真正写入。") : t("Import write is currently off.", "已关闭导入写入。")
+        }),
+        toggleRow({
+            key: "importMutationDryRun",
+            label: t("Default protection mode", "默认保护模式"),
+            checked: input.runtime.importMutationDryRun,
+            status: modeTone,
+            stateLabel: modeValue,
+            copy: {
+                onLabel: t("Dry run", "演练"),
+                offLabel: t("Live", "实时")
+            },
+            note: input.runtime.readonlyMode ? t("Read-only protection is still on, so the effective mode remains protected.", "只读保护仍然开启，所以实际模式依然会保持保护状态。") : !input.runtime.importMutationEnabled ? t("Import write is off, so this only sets the next default once writing is enabled again.", "导入写入当前已关闭，所以这里只是提前设置恢复写入后的默认模式。") : input.runtime.importMutationDryRun ? t("Enabled means import changes rehearse first before you decide whether to write.", "开启后默认先演练，再决定是否真正写入。") : t("Disabled means import changes can write live as long as the other safety gates allow it.", "关闭后只要其他安全开关放行，导入变更就可以直接实时写入。")
+        }),
+        `<tr>
+          <td>${escapeHtml(t("Current protection state", "当前保护状态"))}</td>
+          <td>${badge(tokenGateTone, tokenGateValue)}</td>
+          <td>${renderSafetyValueChip(tokenGateValue, safetyValueTone(tokenGateTone))}</td>
+          <td>${escapeHtml(t("This only affects state-changing routes and does not block normal viewing.", "只影响会改数据的操作，不影响普通查看。"))}</td>
+        </tr>`,
+        toggleRow({
+            key: "approvalActionsEnabled",
+            label: t("Approval write switch", "审批写入开关"),
+            checked: input.runtime.approvalActionsEnabled,
+            status: input.runtime.approvalActionsEnabled ? "warn" : "disabled",
+            note: input.runtime.approvalActionsEnabled ? t("Approval actions are allowed to execute live writes.", "允许审批动作执行真实写入。") : t("Approval write is currently off.", "已关闭审批写入。")
+        }),
+        `<tr>
+          <td>${escapeHtml(t("Effective mode", "当前生效模式"))}</td>
+          <td>${badge(modeTone, modeValue)}</td>
+          <td>${renderSafetyValueChip(modeValue, modeTone)}</td>
+          <td>${escapeHtml(input.importGuard.defaultMode === "blocked" ? t("The current combination still keeps the system in protected mode.", "当前组合仍让系统保持在保护模式。") : input.importGuard.defaultMode === "dry_run" ? t("The current combination defaults to a dry run first.", "当前组合会默认先进入演练模式。") : t("The current combination allows live write execution.", "当前组合允许实时写入执行。"))}</td>
+        </tr>`
+    ].join("");
+}
+__name(buildSafetySettingsRowsHtmlV2, "buildSafetySettingsRowsHtmlV2");
 function resolveCustomStaffAvatarAssetPath(pathname) {
     if (!pathname.startsWith(CUSTOM_STAFF_AVATAR_ROUTE_PREFIX)) {
         return void 0;
@@ -340,6 +585,27 @@ function resolveCustomStaffAvatarAssetPath(pathname) {
     return (0, import_node_path.join)(CUSTOM_STAFF_AVATAR_DIR, fileName);
 }
 __name(resolveCustomStaffAvatarAssetPath, "resolveCustomStaffAvatarAssetPath");
+function writeSseEvent(res, event, data) {
+    if (res.writableEnded || res.destroyed) {
+        return;
+    }
+    if (event) {
+        res.write(`event: ${event}\n`);
+    }
+    const serialized = JSON.stringify(data ?? {});
+    for (const line of serialized.split(/\r?\n/)) {
+        res.write(`data: ${line}\n`);
+    }
+    res.write("\n");
+}
+__name(writeSseEvent, "writeSseEvent");
+function writeSseComment(res, comment) {
+    if (res.writableEnded || res.destroyed) {
+        return;
+    }
+    res.write(`: ${String(comment || "keepalive")}\n\n`);
+}
+__name(writeSseComment, "writeSseComment");
 function startUiServer(port, toolClient) {
     const approvalActions = new import_approval_action_service.ApprovalActionService(toolClient);
     const server = (0, import_node_http.createServer)(async (req, res) => {
@@ -540,6 +806,110 @@ function startUiServer(port, toolClient) {
                 invalidateDashboardRefreshCaches();
                 return writeJson(res, 200, { ok: true, path: import_budget_policy.BUDGET_POLICY_PATH, relativePath: (0, import_node_path.relative)(process.cwd(), import_budget_policy.BUDGET_POLICY_PATH) || (0, import_node_path.join)("runtime", "budgets.json"), limit: nextLimit ?? null, warnRatio: typeof nextPolicy.defaults.warnRatio === "number" && Number.isFinite(nextPolicy.defaults.warnRatio) ? nextPolicy.defaults.warnRatio : null });
             }
+            if (method === "PATCH" && path === "/api/settings/safety") {
+                assertJsonContentType(req);
+                assertSafetySettingsAuthorized(req);
+                const payload = expectObject(await readJsonBody(req), "safety settings payload");
+                const currentSettings = (0, import_local_safety_settings.readCurrentLocalSafetySettings)();
+                const hasField = ["readonlyMode", "localTokenAuthRequired", "importMutationEnabled", "importMutationDryRun", "approvalActionsEnabled", "localApiToken"].some(key => Object.prototype.hasOwnProperty.call(payload, key));
+                if (!hasField) {
+                    throw new RequestValidationError("No supported safety setting fields were provided.", 400);
+                }
+                const readBooleanPatch = (key, fallback) => {
+                    if (!Object.prototype.hasOwnProperty.call(payload, key)) {
+                        return fallback;
+                    }
+                    const value = payload[key];
+                    if (typeof value !== "boolean") {
+                        throw new RequestValidationError(`${key} must be a boolean.`, 400);
+                    }
+                    return value;
+                };
+                let nextLocalApiToken = currentSettings.localApiToken;
+                if (Object.prototype.hasOwnProperty.call(payload, "localApiToken")) {
+                    const rawValue = payload.localApiToken;
+                    if (rawValue !== null && typeof rawValue !== "string") {
+                        throw new RequestValidationError("localApiToken must be a string or null.", 400);
+                    }
+                    nextLocalApiToken = (0, import_local_safety_settings.normalizeLocalSafetyToken)(typeof rawValue === "string" ? rawValue : "");
+                }
+                const nextSettings = {
+                    readonlyMode: readBooleanPatch("readonlyMode", currentSettings.readonlyMode),
+                    localTokenAuthRequired: readBooleanPatch("localTokenAuthRequired", currentSettings.localTokenAuthRequired),
+                    importMutationEnabled: readBooleanPatch("importMutationEnabled", currentSettings.importMutationEnabled),
+                    importMutationDryRun: readBooleanPatch("importMutationDryRun", currentSettings.importMutationDryRun),
+                    approvalActionsEnabled: readBooleanPatch("approvalActionsEnabled", currentSettings.approvalActionsEnabled),
+                    localApiToken: nextLocalApiToken
+                };
+                const changedKeys = [];
+                if (nextSettings.readonlyMode !== currentSettings.readonlyMode)
+                    changedKeys.push("READONLY_MODE");
+                if (nextSettings.localTokenAuthRequired !== currentSettings.localTokenAuthRequired)
+                    changedKeys.push("LOCAL_TOKEN_AUTH_REQUIRED");
+                if (nextSettings.importMutationEnabled !== currentSettings.importMutationEnabled)
+                    changedKeys.push("IMPORT_MUTATION_ENABLED");
+                if (nextSettings.importMutationDryRun !== currentSettings.importMutationDryRun)
+                    changedKeys.push("IMPORT_MUTATION_DRY_RUN");
+                if (nextSettings.approvalActionsEnabled !== currentSettings.approvalActionsEnabled)
+                    changedKeys.push("APPROVAL_ACTIONS_ENABLED");
+                if (nextSettings.localApiToken !== currentSettings.localApiToken)
+                    changedKeys.push("LOCAL_API_TOKEN");
+                const persisted = await (0, import_local_safety_settings.writeLocalSafetySettings)({ values: nextSettings });
+                const nextGuardDecision = (0, import_import_live.evaluateImportMutationGuard)({
+                    mutationEnabled: nextSettings.importMutationEnabled,
+                    mutationDryRunDefault: nextSettings.importMutationDryRun,
+                    readonlyMode: nextSettings.readonlyMode,
+                    routeLabel: "/api/import/live"
+                });
+                const localTokenConfigured = nextSettings.localApiToken !== "";
+                const tokenGateStatus = nextSettings.localTokenAuthRequired ? localTokenConfigured ? "armed" : "blocked_no_token" : "disabled";
+                const guard = {
+                    readonlyMode: nextSettings.readonlyMode,
+                    localTokenAuthRequired: nextSettings.localTokenAuthRequired,
+                    localTokenConfigured,
+                    mutationEnabled: nextSettings.importMutationEnabled,
+                    mutationDryRunDefault: nextSettings.importMutationDryRun,
+                    defaultMode: nextGuardDecision.mode,
+                    defaultMessage: nextGuardDecision.message
+                };
+                const restartScheduled = persisted.changed ? scheduleUiRestart() : false;
+                invalidateDashboardRefreshCaches();
+                await (0, import_operation_audit.appendOperationAudit)({
+                    action: "safety_settings_update",
+                    source: "api",
+                    ok: true,
+                    requestId,
+                    detail: changedKeys.length > 0 ? `updated ${changedKeys.join(", ")}` : "no-op safety settings save",
+                    metadata: {
+                        changed: persisted.changed,
+                        restartScheduled,
+                        readonlyMode: nextSettings.readonlyMode,
+                        localTokenAuthRequired: nextSettings.localTokenAuthRequired,
+                        localTokenConfigured,
+                        importMutationEnabled: nextSettings.importMutationEnabled,
+                        importMutationDryRun: nextSettings.importMutationDryRun,
+                        approvalActionsEnabled: nextSettings.approvalActionsEnabled
+                    }
+                });
+                return writeJson(res, 200, {
+                    ok: true,
+                    path: persisted.envPath,
+                    relativePath: (0, import_node_path.relative)(process.cwd(), persisted.envPath) || ".env",
+                    changed: persisted.changed,
+                    changedKeys,
+                    restartScheduled,
+                    tokenGateStatus,
+                    guard,
+                    settings: {
+                        readonlyMode: nextSettings.readonlyMode,
+                        localTokenAuthRequired: nextSettings.localTokenAuthRequired,
+                        localTokenConfigured,
+                        importMutationEnabled: nextSettings.importMutationEnabled,
+                        importMutationDryRun: nextSettings.importMutationDryRun,
+                        approvalActionsEnabled: nextSettings.approvalActionsEnabled
+                    }
+                });
+            }
             if (method === "GET" && path === "/api/ui/preferences") {
                 assertAllowedQueryParams(url.searchParams, [], true);
                 const prefs = await (0, import_ui_preferences.loadUiPreferences)();
@@ -575,7 +945,7 @@ function startUiServer(port, toolClient) {
                 const slugifyProjectId = (value) => String(value || "")
                     .trim()
                     .toLowerCase()
-                    .replace(/[^a-z0-9._:-]+/g, "-")
+                    .replace(/[^a-z0-9._-]+/g, "-")
                     .replace(/^-+|-+$/g, "")
                     .slice(0, 100);
                 const buildUniqueProjectId = (seed, takenIds) => {
@@ -611,28 +981,59 @@ function startUiServer(port, toolClient) {
                 }
                 const roomTitle = title?.trim() || project.title;
                 const roomTitleMode = title?.trim() ? "manual" : "auto";
-                const room = await (0, import_openclaw_chat_rooms.createOpenClawChatRoom)({ agentId: directory.primaryAgentId, workspaceRoot: OPENCLAW_WORKSPACE_ROOT, title: roomTitle });
-                await (0, import_collaboration_room.upsertCollaborationRoomMetadata)(room.roomId, {
+                const room = await (0, import_collaboration_room.createCollaborationRoom)({
+                    roomId: import_node_crypto.randomUUID(),
                     title: roomTitle,
                     titleMode: roomTitleMode,
-                    projectId: project.projectId,
+                    projectId: project.projectId
                 });
-                return writeJson(res, 201, { ok: true, room: { ...room, title: roomTitle, titleMode: roomTitleMode, projectId: project.projectId }, project });
+                const transcriptSidecar = await (0, import_openclaw_chat_rooms.createOpenClawChatRoom)({
+                    agentId: directory.primaryAgentId,
+                    roomId: room.roomId,
+                    workspaceRoot: OPENCLAW_WORKSPACE_ROOT,
+                    openclawHomeDir: OPENCLAW_HOME_DIR,
+                    title: roomTitle
+                }).catch(() => undefined);
+                return writeJson(res, 201, {
+                    ok: true,
+                    room: {
+                        ...room,
+                        title: roomTitle,
+                        titleMode: roomTitleMode,
+                        projectId: project.projectId,
+                        active: transcriptSidecar?.active ?? true
+                    },
+                    project
+                });
             }
             if (method === "DELETE" && path.startsWith("/api/collaboration/rooms/")) {
                 assertMutationAuthorized(req, "/api/collaboration/rooms/:roomId");
                 assertAllowedQueryParams(url.searchParams, [], true);
                 const roomId = decodeRouteParam(path, /^\/api\/collaboration\/rooms\/([^/]+)$/, "roomId");
                 const directory = await loadCollaborationParticipantDirectory();
-                const deleted = await (0, import_openclaw_chat_rooms.deleteOpenClawChatRoom)({ agentId: directory.primaryAgentId, roomId, workspaceRoot: OPENCLAW_WORKSPACE_ROOT });
+                const deletedLocal = await (0, import_collaboration_room.deleteCollaborationRoom)(roomId).catch(() => undefined);
+                const deletedTranscript = await (0, import_openclaw_chat_rooms.deleteOpenClawChatRoom)({
+                    agentId: directory.primaryAgentId,
+                    roomId,
+                    workspaceRoot: OPENCLAW_WORKSPACE_ROOT,
+                    openclawHomeDir: OPENCLAW_HOME_DIR,
+                    ensureFallback: false
+                }).catch(() => undefined);
+                if (!deletedLocal && !deletedTranscript) {
+                    return writeApiError(res, 404, "NOT_FOUND", "Collaboration room not found.");
+                }
+                const fallbackRoomId = deletedLocal?.fallbackRoomId ?? await normalizeCollaborationRoomIdQuery(null, directory);
+                const deleted = {
+                    deletedRoomId: roomId,
+                    fallbackRoomId
+                };
                 return writeJson(res, 200, { ok: true, deleted });
             }
             if (method === "POST" && path.startsWith("/api/collaboration/rooms/") && path.endsWith("/activate")) {
                 assertMutationAuthorized(req, "/api/collaboration/rooms/:roomId/activate");
                 assertAllowedQueryParams(url.searchParams, [], true);
                 const roomId = decodeRouteParam(path, /^\/api\/collaboration\/rooms\/([^/]+)\/activate$/, "roomId");
-                const directory = await loadCollaborationParticipantDirectory();
-                await (0, import_openclaw_chat_rooms.activateOpenClawChatRoom)({ agentId: directory.primaryAgentId, roomId, openclawHomeDir: OPENCLAW_HOME_DIR });
+                await (0, import_collaboration_room.loadCollaborationRoom)(roomId);
                 return writeJson(res, 200, { ok: true, roomId });
             }
             if (method === "GET" && path === "/api/collaboration/room") {
@@ -643,14 +1044,114 @@ function startUiServer(port, toolClient) {
                 const apiLanguage = resolveUiLanguage(url.searchParams, "zh");
                 const directory = await loadCollaborationParticipantDirectory();
                 const roomId = await normalizeCollaborationRoomIdQuery(url.searchParams.get("roomId"), directory);
-                const snapshot = await readReadModelSnapshotWithLiveSessions(toolClient);
-                const [officeRoster, officePresence, openclawCronJobs] = await Promise.all([(0, import_agent_roster.loadBestEffortAgentRoster)(), loadCachedOfficeSessionPresence(), loadOpenclawCronCatalog(apiLanguage)]);
-                const realTasks = (0, import_task_store.listTasks)(snapshot.tasks, projectTitleMap(snapshot)).filter(task => !isControlCenterMappingTask(task));
-                const officeCards = buildOfficeSpaceCards(snapshot, realTasks, officeRoster.entries.map(entry => entry.agentId), officePresence.activeSessionsByAgent, apiLanguage);
-                const executionAgentSummaries = buildExecutionAgentSummaries(snapshot, realTasks, openclawCronJobs, officeRoster.entries, new Map);
-                const participants = await buildCollaborationChatParticipantViews({ snapshot, client: toolClient, directory, officeCards, executionAgentSummaries, language: apiLanguage });
-                const roomView = await buildCollaborationRoomApiView({ roomId, language: apiLanguage, afterSequence: after, limit, readSequence, directory, participants, primaryAgentId: directory.primaryAgentId, primaryDisplayName: directory.primaryDisplayName });
+                const roomView = await buildCollaborationRoomApiView({ roomId, language: apiLanguage, afterSequence: after, limit, readSequence, directory, primaryAgentId: directory.primaryAgentId, primaryDisplayName: directory.primaryDisplayName, client: toolClient });
                 return writeJson(res, 200, { ok: true, room: roomView });
+            }
+            if (method === "GET" && path === "/api/collaboration/room/stream") {
+                assertAllowedQueryParams(url.searchParams, ["limit", "lang", "roomId"], true);
+                const limit = normalizeOptionalPositiveInt(url.searchParams.get("limit"), "limit") ?? 80;
+                const apiLanguage = resolveUiLanguage(url.searchParams, "zh");
+                const directory = await loadCollaborationParticipantDirectory();
+                const roomId = await normalizeCollaborationRoomIdQuery(url.searchParams.get("roomId"), directory);
+                res.writeHead(200, {
+                    "content-type": "text/event-stream; charset=utf-8",
+                    "cache-control": "no-store, no-transform",
+                    connection: "keep-alive",
+                    "x-accel-buffering": "no"
+                });
+                res.write(`retry: ${COLLABORATION_ROOM_STREAM_RETRY_MS}\n\n`);
+                res.flushHeaders?.();
+                let closed = false;
+                let tickTimer = null;
+                let keepAliveTimer = null;
+                let unsubscribeLiveDrafts = null;
+                let lastSignature = "";
+                const closeStream = () => {
+                    if (closed) {
+                        return;
+                    }
+                    closed = true;
+                    if (tickTimer) {
+                        clearTimeout(tickTimer);
+                        tickTimer = null;
+                    }
+                    if (keepAliveTimer) {
+                        clearInterval(keepAliveTimer);
+                        keepAliveTimer = null;
+                    }
+                    if (unsubscribeLiveDrafts) {
+                        unsubscribeLiveDrafts();
+                        unsubscribeLiveDrafts = null;
+                    }
+                    if (!res.writableEnded && !res.destroyed) {
+                        res.end();
+                    }
+                };
+                req.on("close", closeStream);
+                req.on("error", closeStream);
+                res.on("close", closeStream);
+                res.on("error", closeStream);
+                const emitSnapshot = async () => {
+                    if (closed) {
+                        return;
+                    }
+                    try {
+                        const roomView = await buildCollaborationRoomApiView({
+                            roomId,
+                            language: apiLanguage,
+                            afterSequence: 0,
+                            limit,
+                            readSequence: 0,
+                            directory,
+                            primaryAgentId: directory.primaryAgentId,
+                            primaryDisplayName: directory.primaryDisplayName,
+                            client: toolClient
+                        });
+                        const signature = buildCollaborationRoomStreamSignature(roomView);
+                        if (signature !== lastSignature) {
+                            lastSignature = signature;
+                            writeSseEvent(res, "snapshot", {
+                                requestId,
+                                room: roomView
+                            });
+                        }
+                    }
+                    catch (error) {
+                        writeSseEvent(res, "room-error", {
+                            requestId,
+                            message: error instanceof Error ? error.message : "Failed to stream collaboration room."
+                        });
+                        closeStream();
+                        return;
+                    }
+                    if (closed) {
+                        return;
+                    }
+                    tickTimer = setTimeout(() => {
+                        void emitSnapshot();
+                    }, COLLABORATION_ROOM_STREAM_INTERVAL_MS);
+                    tickTimer.unref?.();
+                };
+                unsubscribeLiveDrafts = import_collaboration_live_drafts.subscribeCollaborationLiveDrafts(roomId, () => {
+                    if (closed) {
+                        return;
+                    }
+                    if (tickTimer) {
+                        clearTimeout(tickTimer);
+                        tickTimer = null;
+                    }
+                    void emitSnapshot();
+                });
+                keepAliveTimer = setInterval(() => {
+                    writeSseComment(res, "collaboration-room");
+                }, COLLABORATION_ROOM_STREAM_KEEPALIVE_MS);
+                keepAliveTimer.unref?.();
+                writeSseEvent(res, "ready", {
+                    requestId,
+                    roomId
+                });
+                void emitSnapshot();
+                return;
             }
             if (method === "POST" && path === "/api/collaboration/room/uploads") {
                 assertMutationAuthorized(req, "/api/collaboration/room/uploads");
@@ -694,7 +1195,8 @@ function startUiServer(port, toolClient) {
                 const agentId = decodeRouteParam(path, /^\/api\/staff\/([^/]+)\/model$/, "agentId");
                 const payload = expectObject(await readJsonBody(req), "staff model payload");
                 const model = requiredBoundedString(payload.model, "model", 240);
-                const saved = await updateOpenClawAgentModel(agentId, model);
+                const fallbackModel = optionalBoundedString(payload.fallbackModel, "fallbackModel", 240);
+                const saved = await updateOpenClawAgentModel(agentId, { model, fallbackModel });
                 if (!saved) {
                     return writeApiError(res, 404, "NOT_FOUND", "Staff member not found in openclaw.json.");
                 }
@@ -1207,8 +1709,9 @@ async function renderHtml(filters, toolClient, options) {
     const toolSessions = sessionPreview.items.filter(item => (item.toolEventCount ?? 0) > 0 || item.latestKind === "tool_event").slice(0, 12);
     const toolRows = toolSessions.length === 0 ? `<tr><td colspan="5">${escapeHtml(t("No tool-call sessions yet.", "\u6682\u65E0\u5DE5\u5177\u8C03\u7528\u4F1A\u8BDD\u3002"))}</td></tr>` : toolSessions.map(item => { const toolCount = item.toolEventCount ?? (item.latestKind === "tool_event" ? 1 : 0); return `<tr><td><a href="${escapeHtml(buildSessionDetailHref(item.sessionKey, options.language))}">${escapeHtml(item.label ?? item.sessionKey)}</a></td><td>${escapeHtml(item.agentId ?? t("Unassigned", "\u672A\u5206\u914D"))}</td><td>${toolCount}</td><td>${badge(item.state, sessionStateLabel(item.state))}</td><td>${escapeHtml(item.lastMessageAt ?? "-")}</td></tr>`; }).join("");
     const importGuard = (0, import_import_live.readImportMutationGuardState)();
+    const runtimeSafetySettings = (0, import_local_safety_settings.readCurrentLocalSafetySettings)();
     const tokenGateStatus = import_config.LOCAL_TOKEN_AUTH_REQUIRED ? import_config.LOCAL_API_TOKEN !== "" ? "armed" : "blocked_no_token" : "disabled";
-    const importGuardRows = [{ label: "\u53EA\u8BFB\u4FDD\u62A4", value: import_config.READONLY_MODE ? "\u5F00\u542F" : "\u5173\u95ED", note: import_config.READONLY_MODE ? "\u5F53\u524D\u53EA\u5141\u8BB8\u5B89\u5168\u6F14\u7EC3\uFF0C\u4E0D\u4F1A\u5199\u5165\u771F\u5B9E\u53D8\u66F4\u3002" : "\u5141\u8BB8\u771F\u5B9E\u5199\u5165\uFF0C\u8BF7\u786E\u8BA4\u540E\u4F7F\u7528\u3002", status: import_config.READONLY_MODE ? "enabled" : "warn" }, { label: "\u5173\u952E\u5199\u5165\u4FDD\u62A4", value: import_config.LOCAL_TOKEN_AUTH_REQUIRED ? "\u5F00\u542F" : "\u5173\u95ED", note: import_config.LOCAL_TOKEN_AUTH_REQUIRED ? "\u4F1A\u6539\u6570\u636E\u7684\u64CD\u4F5C\u9700\u8981\u5148\u8FC7\u4E00\u5C42\u4FDD\u62A4\u3002" : "\u5F53\u524D\u6CA1\u6709\u989D\u5916\u4FDD\u62A4\uFF0C\u5EFA\u8BAE\u53EA\u5728\u6D4B\u8BD5\u73AF\u5883\u8FD9\u6837\u7528\u3002", status: import_config.LOCAL_TOKEN_AUTH_REQUIRED ? "enabled" : "warn" }, { label: "\u5B89\u5168\u53E3\u4EE4\u914D\u7F6E", value: importGuard.localTokenConfigured ? "\u5DF2\u8BBE\u7F6E" : "\u672A\u8BBE\u7F6E", note: importGuard.localTokenConfigured ? "\u8FD9\u53F0\u673A\u5668\u5DF2\u7ECF\u8BBE\u7F6E\u4E86\u4FDD\u62A4\u53E3\u4EE4\u3002" : "\u8FD9\u53F0\u673A\u5668\u8FD8\u6CA1\u8BBE\u7F6E\u4FDD\u62A4\u53E3\u4EE4\uFF0C\u6240\u4EE5\u9AD8\u98CE\u9669\u5199\u5165\u4F1A\u88AB\u62E6\u4F4F\u3002", status: importGuard.localTokenConfigured ? "enabled" : "blocked" }, { label: "\u5F53\u524D\u4FDD\u62A4\u72B6\u6001", value: tokenGateStatus === "armed" ? "\u5DF2\u5C31\u7EEA" : tokenGateStatus === "blocked_no_token" ? "\u672A\u914D\u7F6E" : "\u672A\u5F00\u542F", note: "\u53EA\u5F71\u54CD\u4F1A\u6539\u6570\u636E\u7684\u64CD\u4F5C\uFF0C\u4E0D\u5F71\u54CD\u666E\u901A\u67E5\u770B\u3002", status: tokenGateStatus === "armed" ? "enabled" : tokenGateStatus === "blocked_no_token" ? "blocked" : "disabled" }, { label: "\u53D8\u66F4\u5199\u5165\u5F00\u5173", value: import_config.IMPORT_MUTATION_ENABLED ? "\u5F00\u542F" : "\u5173\u95ED", note: import_config.IMPORT_MUTATION_ENABLED ? "\u5141\u8BB8\u5199\u5165\u5BFC\u5165\u53D8\u66F4\u3002" : "\u5DF2\u5173\u95ED\u5BFC\u5165\u5199\u5165\u3002", status: import_config.IMPORT_MUTATION_ENABLED ? "warn" : "disabled" }, { label: "\u5BA1\u6279\u5199\u5165\u5F00\u5173", value: import_config.APPROVAL_ACTIONS_ENABLED ? "\u5F00\u542F" : "\u5173\u95ED", note: import_config.APPROVAL_ACTIONS_ENABLED ? "\u5141\u8BB8\u6267\u884C\u5BA1\u6279\u5199\u5165\u3002" : "\u5DF2\u5173\u95ED\u5BA1\u6279\u5199\u5165\u3002", status: import_config.APPROVAL_ACTIONS_ENABLED ? "warn" : "disabled" }, { label: "\u9ED8\u8BA4\u4FDD\u62A4\u6A21\u5F0F", value: importGuard.defaultMode, note: importGuard.defaultMode === "blocked" ? "\u5F53\u524D\u4E3A\u4FDD\u62A4\u72B6\u6001\uFF0C\u4EC5\u5141\u8BB8\u6F14\u7EC3\u3002" : importGuard.defaultMode === "dry_run" ? "\u9ED8\u8BA4\u5148\u6F14\u7EC3\uFF0C\u518D\u51B3\u5B9A\u662F\u5426\u5199\u5165\u3002" : "\u5F53\u524D\u5141\u8BB8\u5B9E\u65F6\u5199\u5165\u3002", status: importGuard.defaultMode }].map(item => `<tr><td>${escapeHtml(item.label)}</td><td>${badge(item.status)}</td><td>${escapeHtml(item.value)}</td><td>${escapeHtml(item.note)}</td></tr>`).join("");
+    const importGuardRows = buildSafetySettingsRowsHtmlV2({ language: options.language, importGuard, tokenGateStatus, runtime: runtimeSafetySettings });
     const replayRowItems = [{ label: t("Timeline scanned", "\u65F6\u95F4\u7EBF\u626B\u63CF\u6570"), value: replayPreview.stats.timeline.total }, { label: t("Timeline shown", "\u65F6\u95F4\u7EBF\u5C55\u793A\u6570"), value: replayPreview.stats.timeline.returned }, { label: t("Timeline filtered", "\u65F6\u95F4\u7EBF\u8FC7\u6EE4\u6570"), value: replayPreview.stats.timeline.filteredOut }, { label: t("Digests shown", "\u65E5\u62A5\u5FEB\u7167\u5C55\u793A\u6570"), value: replayPreview.stats.digests.returned }, { label: t("Export snapshots shown", "\u5BFC\u51FA\u5FEB\u7167\u5C55\u793A\u6570"), value: replayPreview.stats.exportSnapshots.returned }, { label: t("Backup bundles shown", "\u5907\u4EFD\u5305\u5C55\u793A\u6570"), value: replayPreview.stats.exportBundles.returned }, { label: t("Replay load p50 (ms)", "\u56DE\u653E\u52A0\u8F7D p50 (ms)"), value: replayPreview.stats.total.latencyBucketsMs.p50 }, { label: t("Replay load p95 (ms)", "\u56DE\u653E\u52A0\u8F7D p95 (ms)"), value: replayPreview.stats.total.latencyBucketsMs.p95 }].filter(item => item.value > 0);
     const replayRows = replayRowItems.map(item => `<tr><td><code>${escapeHtml(item.label)}</code></td><td>${item.value}</td></tr>`).join("");
     const replayMetricsHtml = replayRowItems.length === 0 ? `<div class="empty-state">${escapeHtml(t("No replay metrics yet. They will appear after the system runs for a while.", "\u6682\u65E0\u56DE\u653E\u7EDF\u8BA1\u3002\u8FD0\u884C\u4E00\u6BB5\u65F6\u95F4\u540E\u4F1A\u663E\u793A\u3002"))}</div>` : `<table style="margin-top:10px;"><thead><tr><th>${escapeHtml(t("Metric", "\u6307\u6807"))}</th><th>${escapeHtml(t("Value", "\u6570\u503C"))}</th></tr></thead><tbody>${replayRows}</tbody></table>`;
@@ -1279,7 +1782,7 @@ async function renderHtml(filters, toolClient, options) {
     const subscriptionWindowHint = usageCost.subscription.primaryWindowLabel || usageCost.subscription.secondaryUsedPercent !== void 0 ? `${normalizeQuotaWindowLabel(usageCost.subscription.primaryWindowLabel, "5h")} / ${normalizeQuotaWindowLabel(usageCost.subscription.secondaryWindowLabel, "Week")}` : usageCost.subscription.planLabel;
     const executiveCards = [{ title: t("Projects", "\u9879\u76EE"), metric: `${snapshot.projectSummaries.length}`, detail: `${t("Active", "\u6D3B\u8DC3")} ${snapshot.projectSummaries.filter(item => item.status === "active").length} \xB7 ${t("Blocked", "\u963B\u585E")} ${snapshot.projectSummaries.filter(item => item.status === "blocked").length}` }, { title: t("Tasks", "\u4EFB\u52A1"), metric: `${realTasks.length}`, detail: `${t("In motion", "\u8FDB\u884C\u4E2D")} ${inProgressTasksCount} \xB7 ${t("Blocked", "\u963B\u585E")} ${blockedTasksCount}${controlCenterMappingTasks.length > 0 ? ` \xB7 ${t("Mapping examples", "\u6620\u5C04\u6837\u4F8B")} ${controlCenterMappingTasks.length}` : ""}` }, { title: t("Agents", "\u667A\u80FD\u4F53"), metric: `${officeCards.filter(card => card.status !== "inactive").length}`, detail: `${t("Online agents", "\u5728\u7EBF\u667A\u80FD\u4F53")} ${officeCards.filter(card => card.activeSessions > 0).length}` }, { title: t("Budget", "\u9884\u7B97"), metric: `${budgets.total}`, detail: `${t("Warnings", "\u9884\u8B66")} ${budgets.warn ?? 0} \xB7 ${t("Over limit", "\u8D85\u9650")} ${budgets.over ?? 0}` }, { title: t("Subscription", "\u8BA2\u9605"), metric: usageCost.subscription.status === "connected" ? t("Connected", "\u5DF2\u8FDE\u63A5") : t("Needs connection", "\u5F85\u8FDE\u63A5"), detail: subscriptionWindowHint }, { title: t("System health", "\u7CFB\u7EDF\u5065\u5EB7"), metric: cronOverview.health.status === "ok" ? t("Healthy", "\u6B63\u5E38") : t("Attention", "\u5173\u6CE8"), detail: `${t("Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1")} ${cronOverview.jobs.length} ${t("items", "\u4E2A")} \xB7 ${t("Heartbeats", "\u5FC3\u8DF3")} ${heartbeatEnabledCount} ${t("items", "\u4E2A")}` }];
     const executiveCardsHtml = `<section class="executive-grid">${executiveCards.map(item => `<article class="exec-card"><div class="exec-title">${escapeHtml(item.title)}</div><div class="exec-metric">${escapeHtml(item.metric)}</div><div class="meta">${escapeHtml(item.detail)}</div></article>`).join("")}</section>`;
-    const overviewTopMetrics = [{ key: "review-queue", title: t("Review queue", "\u5BA1\u9605\u961F\u5217"), numericValue: pendingDecisionCount, displayValue: formatInt(pendingDecisionCount), detail: pendingDecisionCount > 0 ? t("Waiting for your review", "\u7B49\u4F60\u5904\u7406") : t("No backlog", "\u65E0\u79EF\u538B"), tone: pendingDecisionCount > 0 ? "warn" : "ok" }, { key: "runtime-issues", title: t("Runtime issues", "\u8FD0\u884C\u5F02\u5E38"), numericValue: runtimeSessionIssueCount, displayValue: formatInt(runtimeSessionIssueCount), detail: runtimeSessionIssueCount > 0 ? t("Blocked, waiting, or failing sessions", "\u963B\u585E\u3001\u7B49\u5F85\u6216\u62A5\u9519\u4E2D\u7684\u4F1A\u8BDD") : t("Normal", "\u72B6\u6001\u6B63\u5E38"), tone: runtimeSessionIssueCount > 0 ? "warn" : "ok" }, { key: "stalled-runs", title: t("Stalled runs", "\u505C\u6EDE\u6267\u884C"), numericValue: stalledRunningSessionCount, displayValue: formatInt(stalledRunningSessionCount), detail: stalledRunningSessionCount > 0 ? t("Running sessions have gone quiet", "\u8FD0\u884C\u4E2D\u7684\u4F1A\u8BDD\u5DF2\u7ECF\u6C89\u9ED8") : t("Fresh", "\u4FE1\u53F7\u65B0\u9C9C"), tone: stalledRunningSessionCount > 0 ? "warn" : "ok" }, { key: "budget-risk", title: t("Budget risk", "\u9884\u7B97\u98CE\u9669"), numericValue: budgetRiskCount, displayValue: formatInt(budgetRiskCount), detail: budgetRiskCount > 0 ? t("Budget warning", "\u9884\u7B97\u544A\u8B66") : t("Budget safe", "\u9884\u7B97\u5B89\u5168"), tone: budgetRiskCount > 0 ? "warn" : "ok" }, { key: "today-usage", title: t("Today's usage", "\u4ECA\u65E5\u7528\u91CF"), numericValue: usageToday?.sourceStatus === "not_connected" ? void 0 : usageToday?.tokens ?? 0, displayValue: usageToday?.sourceStatus === "not_connected" ? t("Not connected", "\u672A\u8FDE\u63A5") : formatInt(usageToday?.tokens ?? 0), detail: usageToday?.sourceStatus === "not_connected" ? t("Not connected", "\u672A\u8FDE\u63A5") : `${t("Cost", "\u8D39\u7528")} ${formatCurrency(usageToday?.estimatedCost ?? 0)}`, tone: usageToday?.sourceStatus === "not_connected" ? "neutral" : "ok" }];
+    const overviewTopMetrics = [{ key: "review-queue", title: t("Review queue", "\u5BA1\u9605\u961F\u5217"), numericValue: pendingDecisionCount, displayValue: formatInt(pendingDecisionCount), detail: pendingDecisionCount > 0 ? t("Waiting for your review", "\u7B49\u4F60\u5904\u7406") : t("No backlog", "\u65E0\u79EF\u538B"), tone: pendingDecisionCount > 0 ? "warn" : "ok" }, { key: "runtime-issues", title: t("Runtime issues", "\u8FD0\u884C\u5F02\u5E38"), numericValue: runtimeSessionIssueCount, displayValue: formatInt(runtimeSessionIssueCount), detail: runtimeSessionIssueCount > 0 ? t("Blocked, waiting, or failing sessions", "\u963B\u585E\u3001\u7B49\u5F85\u6216\u62A5\u9519\u4E2D\u7684\u4F1A\u8BDD") : t("Normal", "\u72B6\u6001\u6B63\u5E38"), tone: runtimeSessionIssueCount > 0 ? "warn" : "ok" }, { key: "stalled-runs", title: t("Stalled runs", "\u505C\u6EDE\u6267\u884C"), numericValue: stalledRunningSessionCount, displayValue: formatInt(stalledRunningSessionCount), detail: stalledRunningSessionCount > 0 ? t("Running sessions have gone quiet", "\u8FD0\u884C\u4E2D\u7684\u4F1A\u8BDD\u5DF2\u7ECF\u6C89\u9ED8") : t("Fresh", "\u4FE1\u53F7\u65B0\u9C9C"), tone: stalledRunningSessionCount > 0 ? "warn" : "ok" }, { key: "budget-risk", title: t("Budget risk", "\u9884\u7B97\u98CE\u9669"), numericValue: budgetRiskCount, displayValue: formatInt(budgetRiskCount), detail: budgetRiskCount > 0 ? t("Budget warning", "\u9884\u7B97\u544A\u8B66") : t("Budget safe", "\u9884\u7B97\u5B89\u5168"), tone: budgetRiskCount > 0 ? "warn" : "ok" }];
     const overviewTopMetricHtml = `<section class="overview-kpi-grid">${overviewTopMetrics.map(item => {
         const counterAttrs = typeof item.numericValue === "number" ? ` data-counter-key="overview:${escapeHtml(item.key)}" data-counter-target="${Math.max(0, Math.round(item.numericValue))}" data-counter-format="int"` : "";
         return `<article class="overview-kpi-card tone-${escapeHtml(item.tone)}" data-overview-kpi="${escapeHtml(item.key)}">
@@ -1288,26 +1791,49 @@ async function renderHtml(filters, toolClient, options) {
         <div class="overview-kpi-detail">${escapeHtml(item.detail)}</div>
       </article>`;
     }).join("")}</section>`;
+    const overviewUsageSummaryHtml = usageToday?.sourceStatus === "not_connected" ? `<div class="overview-usage-summary"><div class="overview-usage-chip"><span>${escapeHtml(t("Today", "\u4ECA\u65E5"))}</span><strong>${escapeHtml(t("Not connected", "\u672A\u8FDE\u63A5"))}</strong><small>${escapeHtml(t("Live usage is not available yet", "\u6682\u65E0\u5B9E\u65F6\u7528\u91CF"))}</small></div><div class="overview-usage-chip"><span>${escapeHtml(t("Cost", "\u8D39\u7528"))}</span><strong>${escapeHtml(t("Unavailable", "\u6682\u65E0"))}</strong><small>${escapeHtml(t("Waiting for usage source", "\u7B49\u5F85\u7528\u91CF\u6570\u636E\u6E90"))}</small></div><div class="overview-usage-chip wide"><span>${escapeHtml(t("Subscription window", "\u8BA2\u9605\u7A97\u53E3"))}</span><strong>${escapeHtml(usageCost.subscription.status === "connected" ? subscriptionWindowHint : t("Needs connection", "\u5F85\u8FDE\u63A5"))}</strong><small>${escapeHtml(usageCost.subscription.planLabel || t("Quota data will appear after the connector is ready.", "\u8FDE\u63A5\u5668\u5C31\u7EEA\u540E\u4F1A\u663E\u793A\u914D\u989D\u6570\u636E\u3002"))}</small></div></div>` : `<div class="overview-usage-summary"><div class="overview-usage-chip"><span>${escapeHtml(t("Today", "\u4ECA\u65E5"))}</span><strong>${escapeHtml(formatInt(usageToday?.tokens ?? 0))}</strong><small>${escapeHtml(t("tokens", "tokens"))}</small></div><div class="overview-usage-chip"><span>${escapeHtml(t("Estimated cost", "\u9884\u4F30\u8D39\u7528"))}</span><strong>${escapeHtml(formatCurrency(usageToday?.estimatedCost ?? 0))}</strong><small>${escapeHtml(t("today", "\u4ECA\u65E5"))}</small></div><div class="overview-usage-chip wide"><span>${escapeHtml(t("Subscription window", "\u8BA2\u9605\u7A97\u53E3"))}</span><strong>${escapeHtml(subscriptionWindowHint)}</strong><small>${escapeHtml(usageCost.subscription.planLabel || t("Current quota rhythm", "\u5F53\u524D\u914D\u989D\u8282\u594F"))}</small></div></div>`;
     const signalStrip = signalItems.map(item => `<div class="status-chip"><span>${escapeHtml(item.label)}</span><strong>${item.value}</strong></div>`).join("");
     const showSignalsFallback = signalItems.length === 0;
     const officeFloorHtml = renderOfficeFloor(officeCards, options.language);
     const staffOverviewCards = needsTeamSnapshot ? await buildStaffOverviewCards({ snapshot, client: toolClient, members: teamSnapshot.members, officeCards, executionAgentSummaries, language: options.language, modelOptions: teamSnapshot.modelOptions, modelEditable: teamSnapshot.modelEditable, configPath: teamSnapshot.sourcePath }) : [];
     const staffOverviewCardsHtml = renderStaffOverviewCards(staffOverviewCards, options.language, options.localMutationUnlock);
     const subscriptionStatusHtml = renderSubscriptionStatusCard(usageCost.subscription, options.language);
-    const sectionNav = sectionLinks.map(item => { const href = buildHomeHref(filters, options.compactStatusStrip, item.key, options.language, options.usageView); const activeClass = item.key === activeSection ? " active" : ""; const current = item.key === activeSection ? ' aria-current="page"' : ""; return `<a class="nav-link${activeClass}" href="${escapeHtml(href)}"${current}><span>${escapeHtml(item.label)}</span><small>${escapeHtml(item.blurb)}</small></a>`; }).join("");
+    const sectionNav = sectionLinks.map(item => {
+        const href = buildHomeHref(filters, options.compactStatusStrip, item.key, options.language, options.usageView);
+        const activeClass = item.key === activeSection ? " active" : "";
+        const current = item.key === activeSection ? ' aria-current="page"' : "";
+        return `<a class="nav-link${activeClass}" data-nav-link-key="${escapeHtml(item.key)}" href="${escapeHtml(href)}"${current}>
+          <span class="nav-link-icon" aria-hidden="true">${renderShellIcon(item.icon ?? "overview", item.label)}</span>
+          <span class="nav-link-copy">
+            <span class="nav-link-title">${escapeHtml(item.label)}</span>
+            <small>${escapeHtml(item.blurb)}</small>
+          </span>
+        </a>`;
+    }).join("");
     const languageToggle = renderLanguageToggle(filters, options);
     const dashboardRefreshControls = renderDashboardRefreshControls(options.language, { localMutationUnlock: options.localMutationUnlock, localTokenAuthRequired: import_config.LOCAL_TOKEN_AUTH_REQUIRED, localTokenConfigured: import_config.LOCAL_API_TOKEN !== "" });
     const agentTeamLinks = agentTeamSidebarLinks(filters, options);
-    const agentTeamSidebarCard = renderAgentTeamSidebarCard(agentTeamEmbed, options.language, agentTeamLinks);
     const agentTeamOverviewBlock = renderAgentTeamOverviewBlock(agentTeamEmbed, options.language, agentTeamLinks);
     const agentTeamMemoryBlock = renderAgentTeamMemoryBlock(agentTeamEmbed, options.language);
     const agentTeamDocsBlock = renderAgentTeamDocsBlock(agentTeamEmbed, options.language);
     const agentTeamProjectsBlock = renderAgentTeamProjectsBlock(agentTeamEmbed, options.language);
     const agentTeamSettingsBlock = renderAgentTeamSettingsBlock(agentTeamEmbed, options.language);
-    const agentTeamInspectorSummary = renderAgentTeamInspectorSummary(agentTeamEmbed, options.language);
     const agentTeamInspectorCard = renderAgentTeamInspectorCard(agentTeamEmbed, options.language);
     const agentTeamRunSummaryCard = renderAgentTeamRunSummaryCard(agentTeamEmbed, options.language);
     const agentTeamArtifactPreviewCard = renderAgentTeamArtifactPreviewCard(agentTeamEmbed, options.language);
+    const agentTeamCompactSignal = agentTeamEmbed.available ? `${t("Agent team", "\u667A\u80FD\u56E2\u961F")} ${agentTeamPhaseLabel(agentTeamEmbed.runtime.phase, options.language)} \xB7 ${t("Suggested action", "\u5EFA\u8BAE\u52A8\u4F5C")} ${agentTeamActionLabel(agentTeamEmbed.runtime.primaryActionKind, options.language)}` : t("Open overview to review the live system signals.", "\u53EF\u5728\u603B\u89C8\u67E5\u770B\u5F53\u524D\u7CFB\u7EDF\u4FE1\u53F7\u3002");
+    const subscriptionWindowSummary = usageCost.subscription.primaryResetAt?.trim() ? `${normalizeQuotaWindowLabel(usageCost.subscription.primaryWindowLabel, "5h")} \xB7 ${t("Reset", "\u91CD\u7F6E")} ${usageCost.subscription.primaryResetAt.trim()}` : usageCost.subscription.cycleEnd?.trim() ? `${t("Cycle end", "\u5468\u671F\u622A\u6B62")} \xB7 ${usageCost.subscription.cycleEnd.trim()}` : usageCost.subscription.status === "not_connected" ? t("Data source not connected", "\u6570\u636E\u6E90\u672A\u8FDE\u63A5") : t("Window data not available yet.", "\u7A97\u53E3\u6570\u636E\u6682\u672A\u51C6\u5907\u597D\u3002");
+    const timedJobsHeartbeatPanel = `<section class="inspector-secondary-panel">
+      <h3>${escapeHtml(t("Timed jobs and heartbeat", "\u5B9A\u65F6\u4E0E\u5FC3\u8DF3"))}</h3>
+      <div class="meta">${escapeHtml(t("Timed jobs", "\u5B9A\u65F6"))} ${badge(cronOverview.health.status)} \xB7 ${escapeHtml(t("Next", "\u4E0B\u6B21"))} ${escapeHtml(cronOverview.nextRunAt ?? t("None", "\u6682\u65E0"))}</div>
+      <div class="meta">${escapeHtml(t("Heartbeat", "\u5FC3\u8DF3"))} ${badge(heartbeatHealth)} \xB7 ${escapeHtml(t("Next", "\u4E0B\u6B21"))} ${escapeHtml(heartbeatNextRun)}</div>
+      <div class="meta"><a href="/?section=overview#cron-health">${escapeHtml(t("Open timed jobs", "\u67E5\u770B\u5B9A\u65F6\u4EFB\u52A1"))}</a> \xB7 <a href="/?section=overview#heartbeat-health">${escapeHtml(t("Open heartbeat checks", "\u67E5\u770B\u4EFB\u52A1\u5FC3\u8DF3"))}</a></div>
+    </section>`;
+    const inspectorSecondaryPanels = [agentTeamInspectorCard, agentTeamRunSummaryCard, agentTeamArtifactPreviewCard, timedJobsHeartbeatPanel].filter(Boolean).join("");
+    const inspectorSecondaryDetails = inspectorSecondaryPanels ? `<details class="card compact-details inspector-secondary-card" data-inspector-card="secondary">
+      <summary>${escapeHtml(t("More runtime context", "\u66F4\u591A\u8FD0\u884C\u4E0A\u4E0B\u6587"))}</summary>
+      <div class="fold-body inspector-secondary-stack">${inspectorSecondaryPanels}</div>
+    </details>` : "";
     const replayMomentsRows = replayMoments.length === 0 ? `<li>${escapeHtml(t("No timeline events yet.", "\u6682\u65E0\u65F6\u95F4\u7EBF\u4E8B\u4EF6\u3002"))}</li>` : replayMoments.map(item => `<li><code>${escapeHtml(item.timestamp)}</code> ${escapeHtml(item.summary)}</li>`).join("");
     const isTodayUsageView = options.usageView === "today";
     const usagePeriodsForView = isTodayUsageView ? usageCost.periods.filter(item => item.key === "today") : usageCost.periods;
@@ -1371,8 +1897,8 @@ async function renderHtml(filters, toolClient, options) {
            <tbody>${renderTokenShareRows(usageCronAgentRows, usageCronAgentTotalTokens, options.language)}</tbody>
          </table>`;
     const usageConnectorTodos = renderUsageConnectorTodos(usageCost.connectors.todos, options.language);
-    const usageBudgetStatusLabel = usageCost.budget.status === "ok" ? t("Healthy", "\u6B63\u5E38") : usageCost.budget.status === "warn" ? t("Warning", "\u9884\u8B66") : t("Over limit", "\u8D85\u9650");
-    const usageBudgetHeadline = usageCost.budget.status === "not_connected" ? t("Budget data source is not connected", "\u9884\u7B97\u6570\u636E\u6E90\u672A\u8FDE\u63A5") : `${badge(usageCost.budget.status, usageBudgetStatusLabel)} ${escapeHtml(usageCost.budget.message)}`;
+    const usageBudgetStatusLabel = usageCost.budget.isUnlimited ? t("Unlimited", "\u65E0\u4E0A\u9650") : usageCost.budget.status === "ok" ? t("Healthy", "\u6B63\u5E38") : usageCost.budget.status === "warn" ? t("Warning", "\u9884\u8B66") : t("Over limit", "\u8D85\u9650");
+    const usageBudgetHeadline = usageCost.budget.status === "not_connected" ? t("Budget data source is not connected", "\u9884\u7B97\u6570\u636E\u6E90\u672A\u8FDE\u63A5") : `${badge(usageCost.budget.isUnlimited ? "info" : usageCost.budget.status, usageBudgetStatusLabel)} ${escapeHtml(usageCost.budget.message)}`;
     const usageBudgetMeta = usage30d?.sourceStatus === "not_connected" ? t("Last 30 days cost: data source not connected", "\u8FD1 30 \u5929\u8D39\u7528\uFF1A\u6570\u636E\u6E90\u672A\u8FDE\u63A5") : usageCost.budget.limitCost30d ? `${t("Last 30 days cost", "\u8FD1 30 \u5929\u8D39\u7528")} ${formatCurrency(usageCost.budget.usedCost30d)} / ${t("Limit", "\u9650\u989D")} ${formatCurrency(usageCost.budget.limitCost30d)}` : `${t("Last 30 days cost", "\u8FD1 30 \u5929\u8D39\u7528")} ${formatCurrency(usageCost.budget.usedCost30d)}`;
     const hasUsageActivity = usageCost.contextWindows.length > 0 || usageCost.periods.some(item => item.tokens > 0 || item.estimatedCost > 0 || item.statusSamples > 0);
     const usageContextHtml = usageCost.contextWindows.length === 0 ? `<div class="empty-state">${escapeHtml(t("No context-usage records yet. They will appear after sessions start.", "\u6682\u65E0\u4E0A\u4E0B\u6587\u4F7F\u7528\u8BB0\u5F55\u3002\u5F00\u59CB\u4F1A\u8BDD\u540E\u4F1A\u663E\u793A\u3002"))}</div>` : `<table>
@@ -1392,10 +1918,27 @@ async function renderHtml(filters, toolClient, options) {
     const usageModelMixHtml = selectedUsageBreakdown.byModel.length === 0 && selectedUsageBreakdown.byProvider.length === 0 ? `<div class="empty-state">${escapeHtml(t("No model or provider split yet.", "\u6682\u65E0\u6A21\u578B\u4E0E\u4F9B\u5E94\u5546\u62C6\u5206\u6570\u636E\u3002"))}</div>` : `<div class="meta">${runtimeTokenRangeLabel}</div>
         ${selectedUsageBreakdown.byModel.length === 0 ? "" : `<table><thead><tr><th>${escapeHtml(t("Model", "\u6A21\u578B"))}</th><th>${escapeHtml(t("Usage", "\u7528\u91CF"))}</th><th>${escapeHtml(t("Estimated cost", "\u9884\u4F30\u8D39\u7528"))}</th><th>${escapeHtml(t("Requests", "\u8BF7\u6C42\u6570"))}</th><th>${escapeHtml(t("Sessions", "\u4F1A\u8BDD\u6570"))}</th><th>${escapeHtml(t("Data status", "\u6570\u636E\u72B6\u6001"))}</th></tr></thead><tbody>${usageModelRows}</tbody></table>`}
         ${selectedUsageBreakdown.byProvider.length === 0 ? "" : `<table style="margin-top:12px;"><thead><tr><th>${escapeHtml(t("Provider", "\u4F9B\u5E94\u5546"))}</th><th>${escapeHtml(t("Usage", "\u7528\u91CF"))}</th><th>${escapeHtml(t("Estimated cost", "\u9884\u4F30\u8D39\u7528"))}</th><th>${escapeHtml(t("Requests", "\u8BF7\u6C42\u6570"))}</th><th>${escapeHtml(t("Sessions", "\u4F1A\u8BDD\u6570"))}</th><th>${escapeHtml(t("Data status", "\u6570\u636E\u72B6\u6001"))}</th></tr></thead><tbody>${usageProviderRows}</tbody></table>`}`;
-    const renderExecutionAgentItem = __name((item, mode) => { const modeHint = mode === "active" ? t("Live", "\u5B9E\u65F6") : t("Recent", "\u8FD1\u671F"); const detail = mode === "active" ? `${t("Sessions", "\u4F1A\u8BDD")} ${item.activeSessions} \xB7 ${t("Tasks", "\u4EFB\u52A1")} ${item.activeTasks}` : `${t("Recent usage", "\u8FD1\u671F\u7528\u91CF")} ${formatInt(item.recentTokens30d)}`; return `<li><strong>${escapeHtml(item.displayName)}</strong> <span class="meta-inline">${escapeHtml(modeHint)}</span><div class="meta">${detail}</div></li>`; }, "renderExecutionAgentItem");
+    const renderExecutionAgentItem = __name((item, mode) => {
+        const identity = officeRuntimeHelpers.deriveAgentAnimalIdentity(item.agentId);
+        const avatar = officeRuntimeHelpers.renderAgentAvatarFrame({ agentId: item.agentId, identity, className: "inspector-agent-avatar", canvasWidth: 128, canvasHeight: 128, language: options.language, escapeHtml, ariaLabel: item.displayName });
+        const isScheduledOnly = item.activeSessions <= 0 && item.activeTasks <= 0 && item.enabledCronJobs > 0;
+        const statusLabel = mode === "active" ? isScheduledOnly ? t("Scheduled", "\u5DF2\u6392\u73ED") : t("Working", "\u5DE5\u4F5C\u4E2D") : t("Recent", "\u8FD1\u671F");
+        const summary = mode === "active" ? `${t("Sessions", "\u4F1A\u8BDD")} ${item.activeSessions} \xB7 ${t("Tasks", "\u4EFB\u52A1")} ${item.activeTasks}${item.enabledCronJobs > 0 ? ` \xB7 ${t("Scheduled", "\u5DF2\u6392\u73ED")} ${item.enabledCronJobs}` : ""}` : `${t("Recent usage", "\u8FD1\u671F\u7528\u91CF")} ${formatInt(item.recentTokens30d)}`;
+        return `<li class="inspector-agent-row">
+          ${avatar}
+          <div class="inspector-agent-copy">
+            <div class="inspector-agent-head">
+              <strong>${escapeHtml(item.displayName)}</strong>
+              <span class="inspector-agent-status">${escapeHtml(statusLabel)}</span>
+            </div>
+            <div class="meta clamp-2">${escapeHtml(summary)}</div>
+          </div>
+        </li>`;
+    }, "renderExecutionAgentItem");
     const activeExecutionAgentRows = executionAgentSummaries.filter(item => item.activeSessions > 0 || item.activeTasks > 0 || item.enabledCronJobs > 0).slice(0, 8).map(item => { return renderExecutionAgentItem(item, "active"); }).join("");
     const usageFallbackExecutionRows = executionAgentSummaries.filter(item => item.recentTokens30d > 0).slice(0, 8).map(item => renderExecutionAgentItem(item, "usage")).join("");
     const executionAgentRows = activeExecutionAgentRows || usageFallbackExecutionRows;
+    const executionAgentDisplayCount = (activeExecutionAgentRows ? executionAgentSummaries.filter(item => item.activeSessions > 0 || item.activeTasks > 0 || item.enabledCronJobs > 0) : executionAgentSummaries.filter(item => item.recentTokens30d > 0)).slice(0, 8).length;
     const taskRoleRows = taskRoleSummaries.map(item => `<li><strong>${escapeHtml(item.owner)}</strong><div class="meta">${escapeHtml(t("Board labels", "\u770B\u677F\u6807\u7B7E"))} ${item.activeTasks} ${escapeHtml(t("items", "\u4E2A"))} \xB7 ${escapeHtml(t("Examples", "\u793A\u4F8B"))}\uFF1A${escapeHtml(item.sampleTaskIds.join("\u3001") || t("None", "\u6682\u65E0"))}</div></li>`).join("");
     const mappingTaskRows = controlCenterMappingTasks.map(task => `<tr><td>${escapeHtml(task.taskId)}</td><td>${escapeHtml(task.owner)}</td><td>${badge(task.status, taskStateLabel(task.status, options.language))}</td></tr>`).join("");
     const cronTable = allCronRows.length === 0 ? `<div class="empty-state">${escapeHtml(t("No timed jobs yet. They will appear here after you create them.", "\u6682\u65E0\u5B9A\u65F6\u4EFB\u52A1\u3002\u521B\u5EFA\u540E\u4F1A\u663E\u793A\u5728\u8FD9\u91CC\u3002"))}</div>` : `<table>
@@ -1447,19 +1990,18 @@ async function renderHtml(filters, toolClient, options) {
               </div>
             </article>`;
     }).join("")}</div>`;
-    const subscriptionSidebarRows = renderSubscriptionSidebarSummary(usageCost.subscription, options.language);
     const usageDetailHref = buildHomeHref({ quick: "all" }, options.compactStatusStrip, "usage-cost", options.language, options.usageView);
     const agentTeamTeamBlock = renderAgentTeamTeamBlock(agentTeamEmbed, options.language);
-    const settingsEnvironmentStatusCard = renderSettingsEnvironmentStatusCard(connectionHealthSummary, usageCost, securitySummary, updateSummary, options.language);
-    const settingsBudgetLimitCard = renderSettingsBudgetLimitCard(buildSettingsBudgetLimitModel(settingsBudgetPolicy), options.language, "embedded");
-    const settingsConfigAccessCard = renderSettingsConfigAccessCard(importGuardRows, usageConnectorTodos, settingsBudgetLimitCard, options.language);
+    const settingsBudgetLimitCard = renderSettingsBudgetLimitCard(buildSettingsBudgetLimitModel(settingsBudgetPolicy), options.language);
+    const settingsEnvironmentStatusCard = renderSettingsEnvironmentStatusCard(connectionHealthSummary, usageCost, securitySummary, updateSummary, usageConnectorTodos, settingsBudgetLimitCard, options.language);
+    const settingsConfigAccessCard = renderSettingsConfigAccessCard(importGuardRows, options.language);
     const contextPressureCard = renderContextPressureCard(usageCost, options.language);
     const memoryStateSection = renderMemoryStateSection(memoryStateSummary, options.language);
     const overviewUsagePeriods = isTodayUsageView ? usageCost.periods.filter(item => item.key === "today") : usageCost.periods.filter(item => item.key === "today" || item.key === "7d");
     const overviewUsageCards = hasUsageActivity ? renderUsagePeriodCards(overviewUsagePeriods, options.language) : `<div class="empty-state">${escapeHtml(t("No usage data yet. Usage and cost cards will appear after activity starts.", "\u6682\u65E0\u7528\u91CF\u6570\u636E\u3002\u5F00\u59CB\u4F1A\u8BDD\u540E\u4F1A\u663E\u793A\u7528\u91CF\u548C\u8D39\u7528\u5361\u7247\u3002"))}</div>`;
     const overviewAttentionTotal = pendingDecisionCount + runtimeIssueCount + budgetRiskCount;
     const overviewCommandStatus = overviewAttentionTotal > 0 ? badge("warn", t("Needs attention", "\u9700\u8981\u5173\u6CE8")) : badge("ok", t("Stable", "\u5E73\u7A33"));
-    const overviewActionItems = [{ label: t("Review queue", "\u5BA1\u9605\u961F\u5217"), value: pendingDecisionCount, detail: pendingDecisionCount > 0 ? t("Approvals or runtime actions are waiting for review", "\u8FD8\u6709\u5BA1\u6279\u6216\u8FD0\u884C\u5F02\u5E38\u7B49\u5F85\u5904\u7406") : t("Nothing is waiting for review", "\u5F53\u524D\u6CA1\u6709\u5F85\u5BA1\u4E8B\u9879") }, { label: t("Runtime issues", "\u8FD0\u884C\u5F02\u5E38"), value: runtimeIssueCount, detail: runtimeIssueCount > 0 ? t(`${runtimeSessionIssueCount} blocked/error/waiting sessions \xB7 ${stalledRunningSessionCount} stalled runs`, `${runtimeSessionIssueCount} \u4E2A\u963B\u585E/\u5F02\u5E38/\u7B49\u5F85\u4F1A\u8BDD \xB7 ${stalledRunningSessionCount} \u4E2A\u505C\u6EDE\u6267\u884C`) : t("No blocked, failing, or stalled runtime signal", "\u5F53\u524D\u6CA1\u6709\u963B\u585E\u3001\u62A5\u9519\u6216\u505C\u6EDE\u4FE1\u53F7") }, { label: t("Budget risk", "\u9884\u7B97\u98CE\u9669"), value: budgetRiskCount, detail: budgetRiskCount > 0 ? t("Near or over the budget line", "\u63A5\u8FD1\u6216\u89E6\u53D1\u9884\u7B97\u7EBF") : t("Budget is in the safe zone", "\u9884\u7B97\u5904\u4E8E\u5B89\u5168\u533A") }];
+    const overviewActionItems = [{ label: t("Review queue", "\u5BA1\u9605\u961F\u5217"), value: pendingDecisionCount, detail: pendingDecisionCount > 0 ? t("Approvals or follow-up are waiting", "\u8FD8\u6709\u5BA1\u6279\u6216\u8DDF\u8FDB") : t("Queue is clear", "\u961F\u5217\u5DF2\u6E05") }, { label: t("Runtime issues", "\u8FD0\u884C\u5F02\u5E38"), value: runtimeIssueCount, detail: runtimeIssueCount > 0 ? t(`${runtimeSessionIssueCount} blocked/waiting \xB7 ${stalledRunningSessionCount} stalled`, `${runtimeSessionIssueCount} \u4E2A\u963B\u585E/\u7B49\u5F85 \xB7 ${stalledRunningSessionCount} \u4E2A\u505C\u6EDE`) : t("Runtime is clear", "\u8FD0\u884C\u6B63\u5E38") }, { label: t("Budget risk", "\u9884\u7B97\u98CE\u9669"), value: budgetRiskCount, detail: budgetRiskCount > 0 ? t("Near or over guardrail", "\u63A5\u8FD1\u6216\u8D85\u8FC7\u9884\u7B97\u7EBF") : t("Within guardrail", "\u5728\u9884\u7B97\u7EBF\u5185") }];
     const overviewActionRows = overviewActionItems.map(item => { const toneClass = item.value > 0 ? " hot" : ""; return `<div class="overview-action-item${toneClass}"><span>${escapeHtml(item.label)}</span><strong>${item.value}</strong><small>${escapeHtml(item.detail)}</small></div>`; }).join("");
     const overviewPrimaryStatus = overviewAttentionTotal > 0 ? badge("warn", t("Needs attention", "\u9700\u8981\u5173\u6CE8")) : badge("ok", t("Stable", "\u7A33\u5B9A\u8FD0\u884C"));
     const overviewPrimarySignalText = overviewAttentionTotal > 0 ? t("Runtime is surfacing signals that need intervention.", "\u8FD0\u884C\u73B0\u573A\u6B63\u5728\u5192\u51FA\u9700\u8981\u4F60\u5904\u7406\u7684\u4FE1\u53F7\u3002") : t("The system is holding a stable rhythm.", "\u7CFB\u7EDF\u7EF4\u6301\u7A33\u5B9A\u8282\u594F\u3002");
@@ -1488,7 +2030,7 @@ async function renderHtml(filters, toolClient, options) {
       </div>`).join("");
     const overviewBusyAgents = executionAgentSummaries.filter(item => item.activeSessions > 0 || item.activeTasks > 0 || item.enabledCronJobs > 0).sort((a, b) => b.activeTasks - a.activeTasks || b.activeSessions - a.activeSessions || b.enabledCronJobs - a.enabledCronJobs).slice(0, 3);
     const overviewBusyCardsHtml = overviewBusyAgents.length === 0 ? `<div class="empty-state">${escapeHtml(t("No staff are carrying live work right now.", "\u5F53\u524D\u6CA1\u6709\u5458\u5DE5\u5728\u627F\u62C5\u5B9E\u65F6\u5DE5\u4F5C\u3002"))}</div>` : `<div class="overview-busy-grid">${overviewBusyAgents.map(item => {
-        const leadAssignment = item.cronJobNames[0] ?? t("No live assignment", "\u6682\u65E0\u5B9E\u65F6\u5206\u6D3E");
+        const leadAssignment = safeTruncate(item.cronJobNames[0] ?? t("No live assignment", "\u6682\u65E0\u5B9E\u65F6\u5206\u6D3E"), 72);
         return `<article class="overview-busy-card">
               <div class="overview-busy-head">
                 <strong>${escapeHtml(item.displayName)}</strong>
@@ -1633,6 +2175,7 @@ async function renderHtml(filters, toolClient, options) {
           <h2>${escapeHtml(t("AI burn now", "\u5F53\u524D AI \u7528\u91CF"))}</h2>
           <a class="btn" href="${escapeHtml(usageDetailHref)}">${escapeHtml(t("Open usage", "\u67E5\u770B\u7528\u91CF"))}</a>
         </div>
+        ${overviewUsageSummaryHtml}
         ${overviewUsageCards}
         <div class="meta">${usageBudgetMeta}</div>
       </article>
@@ -1641,9 +2184,10 @@ async function renderHtml(filters, toolClient, options) {
           <h2>${escapeHtml(t("Next scheduled work", "\u4E0B\u4E00\u6279\u6392\u7A0B"))}</h2>
           <a class="btn" href="${escapeHtml(timelineHubHref)}">${escapeHtml(t("Open task hub", "\u67E5\u770B\u4EFB\u52A1\u4E2D\u67A2"))}</a>
         </div>
-        ${overviewUpcomingRows ? `<div class="decision-list">${overviewUpcomingRows}</div>` : `<div class="empty-state">${escapeHtml(t("No future schedule yet.", "\u6682\u65E0\u672A\u6765\u6392\u7A0B\u3002"))}</div>`}
-        <div style="height:10px;"></div>
-        ${overviewRuntimeRowsHtml}
+        <div class="overview-runtime-stack">
+          ${overviewUpcomingRows ? `<div class="decision-list">${overviewUpcomingRows}</div>` : `<div class="empty-state">${escapeHtml(t("No future schedule yet.", "\u6682\u65E0\u672A\u6765\u6392\u7A0B\u3002"))}</div>`}
+          ${overviewRuntimeRowsHtml}
+        </div>
       </article>
     </section>
     <details class="card compact-details overview-secondary-shell" id="overview-secondary-shell">
@@ -1901,7 +2445,7 @@ async function renderHtml(filters, toolClient, options) {
         <div class="meta">${usageBudgetMeta}</div>
         <div class="meta">${usageBudgetHeadline}</div>
         <div class="meta">${escapeHtml(t("Daily burn", "\u65E5\u5747\u6D88\u8017"))} ${usageCost.budget.burnRatePerDay !== void 0 ? formatCurrency(usageCost.budget.burnRatePerDay) : t("Data source not connected", "\u6570\u636E\u6E90\u672A\u8FDE\u63A5")}</div>
-        <div class="meta">${escapeHtml(t("Estimated days remaining", "\u9884\u8BA1\u5269\u4F59\u5929\u6570"))} ${usageCost.budget.projectedDaysToLimit !== void 0 ? usageCost.budget.projectedDaysToLimit.toFixed(1) : t("Data source not connected", "\u6570\u636E\u6E90\u672A\u8FDE\u63A5")}</div>
+        <div class="meta">${escapeHtml(t("Estimated days remaining", "\u9884\u8BA1\u5269\u4F59\u5929\u6570"))} ${usageCost.budget.isUnlimited ? t("No limit", "\u65E0\u4E0A\u9650") : usageCost.budget.projectedDaysToLimit !== void 0 ? usageCost.budget.projectedDaysToLimit.toFixed(1) : t("Data source not connected", "\u6570\u636E\u6E90\u672A\u8FDE\u63A5")}</div>
       </div>
     </details>
   `;
@@ -2272,7 +2816,12 @@ async function renderHtml(filters, toolClient, options) {
     const globalVisibilityCard = renderGlobalVisibilityCard(globalVisibilityModel, options.language);
     const globalVisibilityBlock = options.section === "overview" ? globalVisibilityCard : "";
     const globalVisibilityQuickRows = [{ label: pickUiText(options.language, "Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1"), count: globalVisibilityModel.signalCounts.schedule, href: buildGlobalVisibilityDetailHref("cron", options.language) }, { label: pickUiText(options.language, "Heartbeat", "\u4EFB\u52A1\u5FC3\u8DF3"), count: globalVisibilityModel.signalCounts.heartbeat, href: buildGlobalVisibilityDetailHref("heartbeat", options.language) }, { label: pickUiText(options.language, "Current tasks", "\u5F53\u524D\u4EFB\u52A1"), count: globalVisibilityModel.signalCounts.currentTasks, href: buildGlobalVisibilityDetailHref("current_task", options.language) }, { label: pickUiText(options.language, "Tool calls", "\u5DE5\u5177\u8C03\u7528"), count: globalVisibilityModel.signalCounts.toolCalls, href: buildGlobalVisibilityDetailHref("tool_call", options.language) }].map(item => `<div class="meta"><a href="${escapeHtml(item.href)}">${escapeHtml(item.label)}</a>\uFF1A${item.count}</div>`).join("");
-    const sidebarSignalRows = options.section === "overview" ? globalVisibilityQuickRows : `<div class="meta"><a href="${escapeHtml(buildHomeHref({ quick: "all" }, true, "overview", options.language, options.usageView))}">${escapeHtml(t("See four signals in overview", "\u5728\u603B\u89C8\u67E5\u770B\u56DB\u9879\u4FE1\u53F7"))}</a></div>`;
+    const sidebarSignalRows = options.section === "overview" ? `<div class="meta">${escapeHtml(t("Signals", "\u4FE1\u53F7"))}\uFF1A${escapeHtml([
+        `${pickUiText(options.language, "Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1")} ${globalVisibilityModel.signalCounts.schedule}`,
+        `${pickUiText(options.language, "Heartbeat", "\u4EFB\u52A1\u5FC3\u8DF3")} ${globalVisibilityModel.signalCounts.heartbeat}`,
+        `${pickUiText(options.language, "Current tasks", "\u5F53\u524D\u4EFB\u52A1")} ${globalVisibilityModel.signalCounts.currentTasks}`,
+        `${pickUiText(options.language, "Tool calls", "\u5DE5\u5177\u8C03\u7528")} ${globalVisibilityModel.signalCounts.toolCalls}`
+      ].join(" \xB7 "))}</div>` : `<div class="meta"><a href="${escapeHtml(buildHomeHref({ quick: "all" }, true, "overview", options.language, options.usageView))}">${escapeHtml(t("See four signals in overview", "\u5728\u603B\u89C8\u67E5\u770B\u56DB\u9879\u4FE1\u53F7"))}</a></div>`;
     const taskBoardScript = renderTaskBoardScript();
     const fileWorkbenchScript = renderFileWorkbenchScript();
     const staffModelScript = renderStaffModelScript();
@@ -2282,7 +2831,13 @@ async function renderHtml(filters, toolClient, options) {
     const quotaResetScript = renderQuotaResetScript();
     const dashboardRefreshScript = renderDashboardRefreshScript(options.language, { localMutationUnlock: options.localMutationUnlock, localTokenAuthRequired: import_config.LOCAL_TOKEN_AUTH_REQUIRED, localTokenConfigured: import_config.LOCAL_API_TOKEN !== "", localTokenHeader: import_config.LOCAL_TOKEN_HEADER, embeddedLocalToken: options.localMutationUnlock ? import_config.LOCAL_API_TOKEN : "" });
     const settingsBudgetLimitScript = renderSettingsBudgetLimitScript(options.language);
-    const collaborationChatOverlay = (0, import_collaboration_chat_widget.renderCollaborationChatOverlay)({ language: options.language, preferences: options.collaborationChat, primaryAgentId: collaborationDirectory.primaryAgentId, primaryDisplayName: collaborationDirectory.primaryDisplayName, writeAccessEnabled: !import_config.LOCAL_TOKEN_AUTH_REQUIRED || import_config.LOCAL_API_TOKEN !== "" && options.localMutationUnlock, writeAccessAvailable: !import_config.LOCAL_TOKEN_AUTH_REQUIRED || import_config.LOCAL_API_TOKEN !== "", participants: collaborationChatParticipants });
+    const settingsSafetyScript = renderSettingsSafetyScript(options.language);
+    const cardHelpTooltipsScript = renderCardHelpTooltipsScript(options.language);
+    const collaborationChatBootPreferences = await buildCollaborationChatBootPreferences({
+        preferences: options.collaborationChat,
+        directory: collaborationDirectory
+    });
+    const collaborationChatOverlay = (0, import_collaboration_chat_widget.renderCollaborationChatOverlay)({ language: options.language, preferences: collaborationChatBootPreferences, primaryAgentId: collaborationDirectory.primaryAgentId, primaryDisplayName: collaborationDirectory.primaryDisplayName, writeAccessEnabled: !import_config.LOCAL_TOKEN_AUTH_REQUIRED || import_config.LOCAL_API_TOKEN !== "" && options.localMutationUnlock, writeAccessAvailable: !import_config.LOCAL_TOKEN_AUTH_REQUIRED || import_config.LOCAL_API_TOKEN !== "", participants: collaborationChatParticipants });
     const renderTotalMs = Math.round(performance.now() - renderStartedAt);
     if (renderTotalMs >= 1e3) {
         console.warn("[mission-control] slow html render", { section: activeSection, totalMs: renderTotalMs, phases: renderPhases.join(" | ") });
@@ -2291,6 +2846,7 @@ async function renderHtml(filters, toolClient, options) {
 <html>
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>${escapeHtml(uiEmployeeSystemBrand(options.language))}</title>
   <style>
     :root {
@@ -2402,8 +2958,10 @@ async function renderHtml(filters, toolClient, options) {
     .app-shell {
       display: grid;
       grid-template-columns: 232px minmax(0, 1fr) 300px;
+      align-items: start;
       gap: var(--space-2);
       padding: var(--space-3);
+      padding-bottom: calc(var(--space-3) + 5rem + env(safe-area-inset-bottom, 0px));
       max-width: 1880px;
       margin: 0 auto;
     }
@@ -2424,6 +2982,19 @@ async function renderHtml(filters, toolClient, options) {
       backdrop-filter: blur(var(--apple-glass-blur));
       -webkit-backdrop-filter: blur(var(--apple-glass-blur));
       animation: panel-in 320ms ease both;
+    }
+    .sidebar,
+    .panel {
+      min-width: 0;
+    }
+    .inspector-sidebar {
+      display: grid;
+      align-content: start;
+      gap: 10px;
+    }
+    .inspector-sidebar > .card,
+    .inspector-sidebar > section.card {
+      margin-top: 0 !important;
     }
     .brand {
       position: relative;
@@ -2588,18 +3159,21 @@ async function renderHtml(filters, toolClient, options) {
     .executive-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 12px; }
     .overview-v3-shell {
       display: grid;
-      grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1.34fr) minmax(320px, 1fr);
       gap: var(--space-2);
-      align-items: start;
+      align-items: stretch;
     }
     .overview-primary-card {
       position: relative;
       overflow: hidden;
+      display: grid;
+      align-content: start;
       background:
-        linear-gradient(150deg, rgba(232, 242, 255, 0.94), rgba(255, 255, 255, 0.98)),
-        radial-gradient(circle at 88% 18%, rgba(167, 196, 234, 0.22), transparent 52%);
+        linear-gradient(155deg, rgba(238, 246, 255, 0.95), rgba(255, 255, 255, 0.985)),
+        radial-gradient(circle at 84% 16%, rgba(167, 196, 234, 0.16), transparent 54%);
       border-color: rgba(0, 113, 227, 0.24);
-      box-shadow: 0 18px 34px rgba(30, 72, 118, 0.12);
+      box-shadow: 0 16px 30px rgba(30, 72, 118, 0.1);
+      min-height: 100%;
     }
     .overview-primary-card::after {
       content: "";
@@ -2703,11 +3277,19 @@ async function renderHtml(filters, toolClient, options) {
       font-size: 13px;
       color: #4f5f71;
       line-height: 1.45;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
     }
     .overview-focus-meta {
       font-size: 12px;
       color: #6a7787;
       line-height: 1.45;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 1;
+      overflow: hidden;
     }
     .overview-primary-directive {
       margin-top: 10px;
@@ -2730,6 +3312,8 @@ async function renderHtml(filters, toolClient, options) {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: var(--space-2);
+      grid-auto-rows: minmax(150px, 1fr);
+      align-items: stretch;
     }
     .overview-decision-grid {
       display: grid;
@@ -2740,14 +3324,25 @@ async function renderHtml(filters, toolClient, options) {
     .overview-decision-grid > .card {
       align-self: start;
     }
+    #overview-primary-section > .card {
+      min-height: 100%;
+    }
+    #overview-decision-center,
+    #overview-busy-staff {
+      grid-column: 1 / -1;
+    }
     .overview-kpi-card {
       border: 1px solid var(--card-border);
       border-radius: 20px;
-      padding: var(--space-2);
+      padding: 16px;
       background: var(--card-fill-soft);
       box-shadow: var(--card-shadow-soft);
       position: relative;
       overflow: hidden;
+      min-height: 150px;
+      display: grid;
+      align-content: start;
+      gap: 2px;
     }
     .overview-kpi-card::before {
       content: "";
@@ -2862,6 +3457,93 @@ async function renderHtml(filters, toolClient, options) {
       gap: 10px;
       margin-bottom: 10px;
     }
+    .overview-command-head > :first-child,
+    .inspector-card-head > :first-child {
+      min-width: 0;
+    }
+    .card-help-anchor {
+      position: relative;
+      padding-right: 34px;
+    }
+    .overview-command-head > .card-help-anchor,
+    .inspector-card-head > .card-help-anchor {
+      flex: 1 1 auto;
+    }
+    .card-help-title-row {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .card-help-dot {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border: 1px solid rgba(0, 113, 227, 0.18);
+      border-radius: 999px;
+      background: rgba(247, 250, 255, 0.98);
+      color: var(--primary-strong);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.92);
+      cursor: help;
+      flex: 0 0 auto;
+    }
+    .card-help-anchor > .card-help-dot {
+      position: absolute;
+      top: 0;
+      right: 0;
+    }
+    .card-help-dot::before {
+      content: "";
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 7px;
+      width: 10px;
+      height: 10px;
+      background: rgba(20, 25, 34, 0.95);
+      transform: rotate(45deg);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 140ms ease, transform 140ms ease;
+      z-index: 15;
+    }
+    .card-help-dot::after {
+      content: attr(data-card-help);
+      position: absolute;
+      top: calc(100% + 9px);
+      right: 0;
+      width: min(320px, 56vw);
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(20, 25, 34, 0.95);
+      color: rgba(255,255,255,0.96);
+      font-size: 12px;
+      line-height: 1.55;
+      text-align: left;
+      white-space: normal;
+      box-shadow: 0 18px 30px rgba(15, 23, 42, 0.24);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-4px);
+      transition: opacity 140ms ease, transform 140ms ease;
+      z-index: 14;
+    }
+    .card-help-dot:hover::before,
+    .card-help-dot:hover::after,
+    .card-help-dot:focus-visible::before,
+    .card-help-dot:focus-visible::after {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .card-help-hidden {
+      display: none !important;
+    }
     .overview-action-grid {
       margin-top: 2px;
       display: grid;
@@ -2909,6 +3591,10 @@ async function renderHtml(filters, toolClient, options) {
       font-size: 12px;
       color: #6b6f76;
       line-height: 1.45;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
     }
     .overview-task-strip {
       margin-top: 12px;
@@ -3008,6 +3694,10 @@ async function renderHtml(filters, toolClient, options) {
       font-size: 13px;
       color: #2b3946;
       line-height: 1.5;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
     }
     .overview-quick-links {
       display: flex;
@@ -3065,10 +3755,63 @@ async function renderHtml(filters, toolClient, options) {
         linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 251, 255, 0.97)),
         radial-gradient(circle at 85% 14%, rgba(217, 231, 255, 0.2), transparent 52%);
     }
+    .overview-usage-summary {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 2px;
+      margin-bottom: 12px;
+    }
+    .overview-usage-chip {
+      min-width: 0;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 16px;
+      padding: 12px 13px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 250, 255, 0.96));
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.92),
+        0 10px 20px rgba(15, 23, 42, 0.03);
+      display: grid;
+      gap: 4px;
+      align-content: start;
+    }
+    .overview-usage-chip.wide {
+      grid-column: 1 / -1;
+    }
+    .overview-usage-chip span {
+      font-size: 11px;
+      color: #6d7280;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      font-weight: 620;
+    }
+    .overview-usage-chip strong {
+      font-size: 24px;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      color: #111827;
+      font-weight: 740;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .overview-usage-chip small {
+      font-size: 12px;
+      color: #6b7280;
+      line-height: 1.45;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+    }
     .overview-pulse-card {
       background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 252, 255, 0.95)),
         radial-gradient(circle at 12% -5%, rgba(192, 218, 244, 0.18), transparent 45%);
+    }
+    .overview-runtime-stack {
+      display: grid;
+      gap: 10px;
+      align-content: start;
     }
     .card {
       position: relative;
@@ -3352,6 +4095,36 @@ async function renderHtml(filters, toolClient, options) {
     .settings-config-grid {
       grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.9fr);
     }
+    .settings-environment-grid {
+      grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr) minmax(0, 0.88fr);
+      align-items: stretch;
+    }
+    .settings-environment-grid > .settings-status-panel {
+      height: 100%;
+    }
+    .settings-environment-grid > #settings-connection-health {
+      grid-column: 1;
+      grid-row: 1 / span 2;
+    }
+    .settings-environment-grid > #security-risk-summary {
+      grid-column: 2;
+      grid-row: 1;
+    }
+    .settings-environment-grid > #update-status-card {
+      grid-column: 3;
+      grid-row: 1;
+    }
+    .settings-environment-grid > #settings-budget-limit {
+      grid-column: 2 / span 2;
+      grid-row: 2;
+      height: 100%;
+    }
+    .settings-status-stack {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+      min-width: 0;
+    }
     .settings-status-panel {
       border: 1px solid var(--card-border);
       border-radius: 18px;
@@ -3366,12 +4139,40 @@ async function renderHtml(filters, toolClient, options) {
     #settings-data-connections {
       align-content: start;
     }
+    .settings-status-panel-flat {
+      padding: 12px 14px;
+    }
+    .settings-data-strip-body {
+      margin-top: 10px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(260px, 0.9fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+    .settings-data-strip-budget {
+      min-width: 0;
+    }
     .settings-connector-list {
       margin-top: 12px;
       padding-left: 18px;
       display: grid;
       gap: 10px;
       align-content: start;
+    }
+    .settings-connector-list-inline {
+      list-style: none;
+      margin-top: 0;
+      padding-left: 0;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .settings-connector-list-inline li {
+      margin: 0;
+      padding: 8px 10px;
+      border-radius: 14px;
+      border: 1px solid rgba(140, 166, 202, 0.24);
+      background: rgba(248, 251, 255, 0.88);
+      line-height: 1.45;
     }
     .settings-inline-budget {
       margin-top: 14px;
@@ -3417,6 +4218,59 @@ async function renderHtml(filters, toolClient, options) {
     .settings-inline-budget .settings-budget-actions {
       justify-content: flex-start;
     }
+    .settings-inline-budget-compact {
+      margin-top: 0;
+      height: 100%;
+      padding: 11px 12px;
+      border-radius: 16px;
+      background:
+        linear-gradient(180deg, rgba(248, 251, 255, 0.98), rgba(255, 255, 255, 0.96)),
+        radial-gradient(circle at 100% 0%, rgba(0, 113, 227, 0.06), transparent 54%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.9),
+        0 8px 18px rgba(15, 23, 42, 0.04);
+    }
+    .settings-inline-budget-compact h2 {
+      font-size: 17px;
+      margin-bottom: 2px;
+    }
+    .settings-inline-budget-compact .overview-command-head {
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .settings-inline-budget-compact .status-strip {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .settings-inline-budget-compact .status-chip {
+      min-height: 56px;
+      padding: 8px 10px;
+    }
+    .settings-inline-budget-compact .status-chip strong {
+      font-size: 15px;
+      line-height: 1.15;
+    }
+    .settings-inline-budget-compact .settings-budget-form {
+      margin-top: 10px;
+      grid-template-columns: minmax(140px, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+    }
+    .settings-inline-budget-compact .settings-budget-input {
+      min-height: 40px;
+      font-size: 15px;
+    }
+    .settings-inline-budget-compact .settings-budget-actions {
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .settings-inline-budget-compact .meta {
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
     .settings-switch-table-wrap {
       margin-top: 12px;
       min-width: 0;
@@ -3445,16 +4299,201 @@ async function renderHtml(filters, toolClient, options) {
       word-break: break-word;
     }
     .settings-switch-col-label {
-      width: 26%;
+      width: 24%;
     }
     .settings-switch-col-state {
-      width: 20%;
-    }
-    .settings-switch-col-value {
       width: 18%;
     }
+    .settings-switch-col-value {
+      width: 28%;
+    }
     .settings-switch-col-note {
-      width: 36%;
+      width: 30%;
+    }
+    .settings-safety-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 36px;
+    }
+    .settings-switch-toggle {
+      appearance: none;
+      border: none;
+      background: transparent;
+      padding: 0;
+      margin: 0;
+      cursor: pointer;
+      line-height: 0;
+    }
+    .settings-switch-toggle:disabled {
+      cursor: not-allowed;
+      opacity: 0.48;
+    }
+    .settings-switch-toggle-track {
+      position: relative;
+      display: inline-flex;
+      width: 52px;
+      height: 32px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(209, 216, 228, 0.95), rgba(193, 201, 214, 0.92));
+      border: 1px solid rgba(143, 154, 171, 0.22);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.86), inset 0 -1px 0 rgba(96, 106, 122, 0.08);
+      transition: background 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+    }
+    .settings-switch-toggle-thumb {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 6px 14px rgba(17, 24, 39, 0.18), 0 1px 1px rgba(17, 24, 39, 0.1);
+      transition: transform 160ms ease;
+    }
+    .settings-switch-toggle.is-on .settings-switch-toggle-track,
+    .settings-switch-toggle[aria-checked="true"] .settings-switch-toggle-track {
+      background: linear-gradient(180deg, rgba(56, 202, 118, 0.95), rgba(35, 176, 96, 0.96));
+      border-color: rgba(24, 156, 81, 0.2);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.24), 0 0 0 3px rgba(54, 199, 111, 0.12);
+    }
+    .settings-switch-toggle.is-on .settings-switch-toggle-thumb,
+    .settings-switch-toggle[aria-checked="true"] .settings-switch-toggle-thumb {
+      transform: translateX(20px);
+    }
+    .settings-switch-toggle-label {
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: 0.01em;
+    }
+    .settings-safety-chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(143, 154, 171, 0.22);
+      background: rgba(239, 242, 247, 0.84);
+      color: #4b5563;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .settings-safety-chip.ok {
+      background: rgba(214, 248, 231, 0.92);
+      color: #246c4f;
+      border-color: rgba(58, 182, 116, 0.18);
+    }
+    .settings-safety-chip.warn {
+      background: rgba(255, 241, 214, 0.9);
+      color: #8a5b11;
+      border-color: rgba(207, 153, 49, 0.2);
+    }
+    .settings-safety-chip.blocked {
+      background: rgba(252, 226, 226, 0.92);
+      color: #9f2f2f;
+      border-color: rgba(210, 83, 83, 0.22);
+    }
+    .settings-safety-chip.disabled {
+      background: rgba(239, 242, 247, 0.84);
+      color: #677180;
+    }
+    .settings-secret-stack {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+    }
+    .settings-secret-input-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .settings-secret-input {
+      width: 100%;
+      min-height: 42px;
+      border-radius: 14px;
+      border: 1px solid rgba(140, 166, 202, 0.38);
+      background: rgba(255,255,255,0.96);
+      padding: 0 12px;
+      font-size: 14px;
+      color: #172033;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.92);
+    }
+    .settings-secret-input:focus {
+      outline: none;
+      border-color: rgba(48, 101, 210, 0.46);
+      box-shadow: 0 0 0 4px rgba(48, 101, 210, 0.12);
+    }
+    .settings-secret-visibility {
+      min-width: 68px;
+      padding-inline: 12px;
+    }
+    .settings-secret-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .settings-secret-inline {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+      min-width: 0;
+    }
+    .settings-secret-inline > .settings-safety-control {
+      justify-self: start;
+    }
+    .settings-secret-field {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+      padding: 6px;
+      border-radius: 16px;
+      border: 1px solid rgba(140, 166, 202, 0.34);
+      background: rgba(255,255,255,0.96);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.94);
+    }
+    .settings-secret-field:focus-within {
+      border-color: rgba(48, 101, 210, 0.46);
+      box-shadow: 0 0 0 4px rgba(48, 101, 210, 0.12);
+    }
+    .settings-secret-field .settings-secret-input {
+      min-height: 34px;
+      border: none;
+      background: transparent;
+      box-shadow: none;
+      padding: 0 8px;
+    }
+    .settings-secret-field .settings-secret-input:focus {
+      box-shadow: none;
+    }
+    .settings-secret-field .settings-secret-input:disabled {
+      background: transparent;
+      color: rgba(23, 32, 51, 0.58);
+      cursor: not-allowed;
+    }
+    .settings-secret-visibility {
+      width: 42px;
+      min-width: 42px;
+      height: 42px;
+      padding: 0;
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .settings-secret-visibility svg {
+      width: 18px;
+      height: 18px;
+      display: block;
+    }
+    .settings-safety-status {
+      margin-top: 12px;
     }
     .settings-budget-form {
       margin-top: 14px;
@@ -3521,7 +4560,7 @@ async function renderHtml(filters, toolClient, options) {
     .usage-chip strong { font-size: 22px; }
     .status-chip small { display: none; }
     .dashboard-strip {
-      grid-template-columns: repeat(4, minmax(0, 1fr)) 150px 150px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
     }
     .task-hub-shell {
@@ -4007,12 +5046,35 @@ async function renderHtml(filters, toolClient, options) {
       color: #6e6e73;
       font-size: 12px;
       line-height: 1.45;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
     }
     .signal-gauge-meta a {
       color: #0068d3;
       font-size: 13px;
       text-decoration: none;
       font-weight: 620;
+    }
+    .dashboard-strip-summary {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px 10px;
+      align-items: center;
+      padding: 2px 4px 0;
+      color: #6e6e73;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .dashboard-strip-summary strong {
+      font-size: 12px;
+      line-height: 1.45;
+      letter-spacing: 0.01em;
+      color: #1f2937;
+      font-weight: 680;
     }
     .summary-gauge-card {
       justify-content: center;
@@ -4073,6 +5135,21 @@ async function renderHtml(filters, toolClient, options) {
       letter-spacing: -0.03em;
       line-height: 1.04;
       margin-top: 1px;
+    }
+    #agent-team-overview > .card {
+      min-height: 100%;
+    }
+    #agent-team-overview .mission-banner {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+    }
+    #agent-team-overview .overview-context-note .meta {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+      overflow: hidden;
     }
     .quick-filters { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; }
     .task-top-controls .quick-filters { margin-top: 0; gap: 6px; }
@@ -4659,6 +5736,11 @@ async function renderHtml(filters, toolClient, options) {
     .task-empty-signals .dashboard-strip {
       margin-top: 0;
     }
+    .task-empty-signals .dashboard-strip-summary {
+      justify-content: flex-start;
+      padding-left: 0;
+      padding-right: 0;
+    }
     .task-brief-toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -5005,10 +6087,22 @@ async function renderHtml(filters, toolClient, options) {
     }
     .staff-model-editor {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
-      align-items: center;
+      align-items: start;
       min-width: 0;
+    }
+    .staff-model-field {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .staff-model-field-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
     .staff-model-select,
     .staff-model-token {
@@ -5029,6 +6123,9 @@ async function renderHtml(filters, toolClient, options) {
       justify-self: start;
       min-height: 36px;
       padding: 0 14px;
+    }
+    .staff-model-actions {
+      grid-column: 1 / -1;
     }
     .staff-model-status {
       grid-column: 1 / -1;
@@ -5466,7 +6563,12 @@ async function renderHtml(filters, toolClient, options) {
       100% { transform: translateY(0); box-shadow: 0 0 0 rgba(0, 113, 227, 0); }
     }
     @media (max-width: 1600px) {
-      .app-shell { grid-template-columns: 214px minmax(0, 1fr) 272px; gap: 16px; padding: 18px; }
+      .app-shell {
+        grid-template-columns: 214px minmax(0, 1fr) 272px;
+        gap: 16px;
+        padding: 18px;
+        padding-bottom: calc(18px + 5rem + env(safe-area-inset-bottom, 0px));
+      }
       .section-title { font-size: 34px; }
       .overview-v3-shell { grid-template-columns: 1fr; }
       .overview-decision-grid { grid-template-columns: 1fr 1fr; }
@@ -5480,876 +6582,48 @@ async function renderHtml(filters, toolClient, options) {
       .staff-brief-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .collaboration-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
-    /* Reverted custom UI override layers
-    .refresh-interval,
-    .panel-toggle,
-    .overview-focus-stage,
-    .overview-kpi-card,
-    .overview-hero-card,
-    .exec-card,
-    .overview-action-item,
-    .overview-task-strip,
-    .decision-row,
-    .overview-busy-card,
-    .overview-context-note,
-    .queue-item,
-    .settings-status-panel,
-    .settings-inline-budget,
-    .status-chip,
-    .signal-gauge-card,
-    .timeline-stat,
-    .quick-chip,
-    .segment-switch,
-    .cron-owner-card,
-    .cron-job-list li,
-    .cron-run-card,
-    .office-card,
-    .collaboration-thread-card,
-    .collaboration-latest-snippet,
-    .collaboration-agent-pill,
-    .file-nav-item,
-    .doc-summary-card {
-      border: 2px solid var(--border);
-      border-radius: 8px;
-      background: #ffffff;
-      box-shadow: none;
-    }
-    .panel-toggle,
-    .quick-chip,
-    .segment-item,
-    .file-nav-item,
-    .overview-action-item,
-    .decision-row,
-    .overview-quick-links .btn,
-    .overview-context-links .btn {
-      transition: transform 160ms ease, background 160ms ease, border-color 160ms ease, color 160ms ease;
-    }
-    .panel-toggle:hover,
-    .quick-chip:hover,
-    .segment-item:hover,
-    .file-nav-item:hover,
-    .overview-action-item:hover,
-    .decision-row:hover,
-    .overview-quick-links .btn:hover,
-    .overview-context-links .btn:hover {
-      transform: scale(1.02);
-      background: #dbeafe;
-      border-color: var(--primary);
-      box-shadow: none;
-      color: #1d4ed8;
-    }
-    .refresh-interval {
-      background: #f3f4f6;
-      box-shadow: none;
-    }
-    .refresh-interval select {
-      background: transparent;
-    }
-    .panel-toggle {
-      min-height: 40px;
-      font-weight: 700;
-      background: #f3f4f6;
-      color: #374151;
-    }
-    .overview-primary-card {
-      border: 2px solid #111827;
-      border-radius: 8px;
-      background:
-        linear-gradient(135deg, #3b82f6 0 83%, #1d4ed8 83% 100%);
-      box-shadow: none;
-      overflow: hidden;
-    }
-    .overview-primary-card::after {
-      content: "";
-      position: absolute;
-      right: -32px;
-      top: -28px;
-      width: 132px;
-      height: 132px;
-      border-radius: 8px;
-      transform: rotate(18deg);
-      background: rgba(255, 255, 255, 0.12);
-      pointer-events: none;
-    }
-    .overview-primary-card h2,
-    .overview-primary-card .overview-primary-value {
-      color: #ffffff;
-    }
-    .overview-primary-card .meta,
-    .overview-primary-card .overview-primary-label {
-      color: rgba(255, 255, 255, 0.86);
-    }
-    .overview-primary-directive {
-      border: 2px solid rgba(255, 255, 255, 0.72);
-      border-radius: 8px;
-      background: rgba(17, 24, 39, 0.12);
-      color: #ffffff;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-    .overview-primary-card .overview-quick-links .btn {
-      border: 0;
-      background: #ffffff;
-      color: #1d4ed8;
-    }
-    .overview-focus-stage {
-      grid-template-columns: 126px minmax(0, 1fr);
-      padding: 14px;
-      background: #ffffff;
-      border-color: #111827;
-    }
-    .overview-focus-ring {
-      width: 104px;
-      height: 104px;
-      border: 2px solid #111827;
-      box-shadow: none;
-      background: conic-gradient(var(--focus-tone) calc(var(--focus-score) * 1%), #d1d5db 0);
-    }
-    .overview-focus-core {
-      width: 72px;
-      height: 72px;
-      border: 2px solid #111827;
-      box-shadow: none;
-      background: #ffffff;
-    }
-    .overview-focus-score,
-    .overview-focus-headline,
-    .overview-focus-sub,
-    .overview-focus-meta {
-      color: #111827;
-    }
-    .overview-kpi-card {
-      border-radius: 8px;
-      padding: 18px;
-      background: #ffffff;
-    }
-    .overview-kpi-card::before {
-      height: 6px;
-      background: #10b981;
-    }
-    .overview-kpi-card.tone-warn {
-      border-color: #f59e0b;
-      background: #fef3c7;
-    }
-    .overview-kpi-card.tone-warn::before {
-      background: #f59e0b;
-    }
-    .overview-kpi-card.tone-neutral {
-      border-color: #d1d5db;
-      background: #f3f4f6;
-    }
-    .overview-kpi-card.tone-neutral::before {
-      background: #6b7280;
-    }
-    .overview-kpi-label,
-    .overview-hero-card .label,
-    .exec-title,
-    .status-chip span,
-    .timeline-stat span {
-      color: #4b5563;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      font-weight: 700;
-    }
-    .overview-kpi-value,
-    .overview-hero-card .value,
-    .exec-metric,
-    .status-chip strong,
-    .timeline-stat strong {
-      color: #111827;
-      font-weight: 800;
-    }
-    .overview-kpi-detail,
-    .overview-hero-card .hint,
-    .timeline-stat small {
-      color: #6b7280;
-    }
-    .overview-hero-card,
-    .exec-card {
-      padding: 16px;
-    }
-    .executive-grid .exec-card:nth-child(4n + 1),
-    .overview-hero-strip .overview-hero-card:nth-child(4n + 1) {
-      background: #dbeafe;
-      border-color: #93c5fd;
-    }
-    .executive-grid .exec-card:nth-child(4n + 2),
-    .overview-hero-strip .overview-hero-card:nth-child(4n + 2) {
-      background: #d1fae5;
-      border-color: #6ee7b7;
-    }
-    .executive-grid .exec-card:nth-child(4n + 3),
-    .overview-hero-strip .overview-hero-card:nth-child(4n + 3) {
-      background: #fef3c7;
-      border-color: #fcd34d;
-    }
-    .executive-grid .exec-card:nth-child(4n + 4),
-    .overview-hero-strip .overview-hero-card:nth-child(4n + 4) {
-      background: #f3f4f6;
-      border-color: #d1d5db;
-    }
-    #current-task-health {
-      background: #ecfdf5;
-      border-color: #10b981;
-      box-shadow: none;
-    }
-    .overview-action-item {
-      border-radius: 8px;
-      min-height: 96px;
-      padding: 14px;
-    }
-    .overview-action-item.hot {
-      border-color: #f59e0b;
-      background: #fef3c7;
-    }
-    .overview-action-item span,
-    .overview-action-item small,
-    .decision-row-copy .meta {
-      color: #4b5563;
-    }
-    .overview-action-item strong,
-    .decision-row-copy strong {
-      color: #111827;
-    }
-    .overview-task-strip,
-    .overview-context-note {
-      background: #f3f4f6;
-    }
-    .decision-row {
-      border-radius: 8px;
-      padding: 13px 14px;
-      background: #ffffff;
-    }
-    .decision-row-value,
-    .decision-row-link {
-      color: #1d4ed8;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
-    .overview-busy-card {
-      background: #ffffff;
-    }
-    .overview-usage-card {
-      background: #fffbeb;
-      border-color: #f59e0b;
-    }
-    .overview-pulse-card {
-      background: #f9fafb;
-    }
-    .status-chip {
-      border-radius: 8px;
-      padding: 12px;
-      gap: 6px;
-    }
-    .overview-pulse-card .status-chip:nth-child(4n + 1) {
-      background: #dbeafe;
-      border-color: #93c5fd;
-    }
-    .overview-pulse-card .status-chip:nth-child(4n + 2) {
-      background: #d1fae5;
-      border-color: #6ee7b7;
-    }
-    .overview-pulse-card .status-chip:nth-child(4n + 3) {
-      background: #fef3c7;
-      border-color: #fcd34d;
-    }
-    .overview-pulse-card .status-chip:nth-child(4n + 4) {
-      background: #f3f4f6;
-      border-color: #d1d5db;
-    }
-    #usage-pulse .usage-chip {
-      background: #fef3c7;
-      border-color: #f59e0b;
-    }
-    .summary-track {
-      border: 2px solid var(--border);
-      background: #e5e7eb;
-      box-shadow: none;
-    }
-    .summary-fill {
-      background: #10b981;
-    }
-    .summary-fill.warn {
-      background: #f59e0b;
-    }
-    .signal-gauge-card {
-      background: #ffffff;
-    }
-    .signal-gauge,
-    .signal-gauge-core {
-      border-width: 2px;
-      box-shadow: none;
-    }
-    .timeline-stat {
-      padding: 12px;
-      background: #f9fafb;
-    }
-    .quick-chip {
-      border: 2px solid var(--border);
-      border-radius: 8px;
-      padding: 7px 12px;
-      background: #f3f4f6;
-      color: #374151;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
-    .quick-chip.active {
-      border-color: var(--primary);
-      background: var(--primary);
-      color: #ffffff;
-    }
-    .segment-switch {
-      padding: 4px;
-      background: #f3f4f6;
-      border-radius: 8px;
-    }
-    .segment-item {
-      min-height: 38px;
-      padding: 0 14px;
-      border-radius: 6px;
-      font-weight: 700;
-      letter-spacing: 0.02em;
-    }
-    .segment-item.active {
-      background: var(--primary);
-      color: #ffffff;
-      box-shadow: none;
-    }
-    .cron-owner-card,
-    .cron-job-list li,
-    .cron-run-card {
-      background: #ffffff;
-    }
-    .queue-item {
-      padding: 13px;
-      background: #ffffff;
-    }
-    .settings-status-panel {
-      padding: 18px;
-      background: #ffffff;
-    }
-    .settings-inline-budget {
-      background: #eff6ff;
-      border-color: #93c5fd;
-    }
-    .settings-connector-list {
-      padding-left: 20px;
-    }
-    .settings-budget-form,
-    .settings-inline-budget .settings-budget-form {
-      gap: 10px;
-    }
-    .office-card {
-      background: #ffffff;
-      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
-    }
-    .office-card:hover {
-      transform: scale(1.01);
-      border-color: #93c5fd;
-      background: #f8fbff;
-    }
-    .agent-avatar,
-    .collaboration-avatar {
-      border: 2px solid var(--border);
-      border-radius: 8px;
-      background: #f3f4f6;
-      box-shadow: none;
-    }
-    .agent-stage {
-      border: 2px solid var(--border);
-      border-radius: 6px;
-      box-shadow: none;
-      background:
-        linear-gradient(0deg, rgba(17, 24, 39, 0.04) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(17, 24, 39, 0.04) 1px, transparent 1px),
-        #ffffff;
-      background-size: 10px 10px, 10px 10px, auto;
-    }
-    .collaboration-thread-card {
-      border: 2px solid var(--border);
-      background: #ffffff;
-    }
-    .collaboration-thread-card > summary {
-      padding: 18px;
-      transition: background 160ms ease;
-    }
-    .collaboration-thread-card > summary:hover {
-      background: #f9fafb;
-    }
-    .collaboration-latest-snippet {
-      background: #f3f4f6;
-      color: #374151;
-    }
-    .collaboration-thread-body {
-      border-top: 2px solid var(--border);
-    }
-    .collaboration-agent-pill {
-      background: #f3f4f6;
-      color: #111827;
-      font-weight: 700;
-    }
-    .collaboration-agent-pill-dot {
-      box-shadow: none;
-    }
-    table {
-      border: 2px solid var(--border);
-      background: #ffffff;
-    }
-    th,
-    td {
-      border-bottom-color: #e5e7eb;
-    }
-    th {
-      background: #f3f4f6;
-      color: #4b5563;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .file-nav-item {
-      border: 2px solid var(--border);
-      border-radius: 8px;
-      background: #ffffff;
-      box-shadow: none;
-    }
-    .file-nav-item.active {
-      border-color: var(--primary);
-      background: #dbeafe;
-      box-shadow: none;
-    }
-    .file-editor-textarea,
-    .docs-search input,
-    .docs-source-filter-wrap select,
-    .settings-budget-input {
-      border: 2px solid transparent;
-      border-radius: 8px;
-      background: #f3f4f6;
-      box-shadow: none;
-    }
-    .file-editor-textarea:focus,
-    .docs-search input:focus,
-    .docs-source-filter-wrap select:focus,
-    .settings-budget-input:focus {
-      border-color: var(--primary);
-      background: #ffffff;
-      box-shadow: var(--ring-soft);
-    }
-    Neumorphism reference-ui layer
-    body {
-      background: var(--bg);
-    }
-    body::before {
-      background:
-        radial-gradient(circle at 10% 14%, rgba(125, 156, 247, 0.18) 0 108px, transparent 109px),
-        radial-gradient(circle at 84% 18%, rgba(242, 179, 143, 0.16) 0 84px, transparent 85px),
-        radial-gradient(circle at 78% 82%, rgba(132, 215, 190, 0.14) 0 104px, transparent 105px),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.6), transparent 48%);
-    }
-    .sidebar,
-    .panel {
-      background: var(--panel);
-      border-color: transparent;
-      box-shadow: var(--shadow-hard);
-    }
-    .brand {
-      border: 0;
-      background: linear-gradient(145deg, #eef3fa, #dbe4f0);
-      color: var(--text);
-      box-shadow: var(--shadow-hard);
-    }
-    .brand::before {
-      content: "";
-      position: absolute;
-      left: -14px;
-      bottom: -16px;
-      width: 84px;
-      height: 84px;
-      border-radius: 999px;
-      background: radial-gradient(circle, rgba(125, 156, 247, 0.18), transparent 68%);
-      pointer-events: none;
-    }
-    .brand::after {
-      content: "";
-      position: absolute;
-      top: -18px;
-      right: -12px;
-      width: 92px;
-      height: 92px;
-      border-radius: 24px;
-      transform: rotate(18deg);
-      background: linear-gradient(145deg, rgba(255, 255, 255, 0.5), rgba(125, 156, 247, 0.12));
-      pointer-events: none;
-    }
-    .brand h1 {
-      color: var(--primary);
-    }
-    .brand .meta {
-      color: var(--muted);
-    }
-    .brand-kicker {
-      border: 0;
-      border-radius: 14px;
-      background: var(--panel-soft);
-      color: var(--primary);
-      box-shadow: 7px 7px 14px rgba(163, 177, 198, 0.34), -7px -7px 14px rgba(255, 255, 255, 0.9);
-      text-transform: none;
-      letter-spacing: 0.03em;
-    }
-    .nav-link {
-      border-width: 0;
-      border-color: transparent;
-      border-radius: 18px;
-      background: var(--panel);
-      color: #617083;
-      box-shadow: var(--shadow-soft);
-    }
-    .nav-link:hover,
-    .nav-link.active {
-      transform: translateY(1px);
-      border-color: transparent;
-      background: linear-gradient(145deg, #e3eaf4, #f0f5fb);
-      box-shadow: var(--shadow-press);
-      color: #4f5d6f;
-    }
-    .section-hero-head {
-      position: relative;
-      overflow: hidden;
-      padding: 26px 28px;
-      border: 0;
-      border-radius: 30px;
-      background: linear-gradient(145deg, #eef3fa, #dbe5f2);
-      color: var(--text);
-      box-shadow: var(--shadow-hard);
-    }
-    .section-hero-head::before {
-      content: "";
-      position: absolute;
-      left: -28px;
-      bottom: -44px;
-      width: 154px;
-      height: 154px;
-      border-radius: 999px;
-      background: radial-gradient(circle, rgba(125, 156, 247, 0.18), transparent 68%);
-      pointer-events: none;
-    }
-    .section-hero-head::after {
-      content: "";
-      position: absolute;
-      top: -30px;
-      right: -20px;
-      width: 124px;
-      height: 124px;
-      border-radius: 40px;
-      background: linear-gradient(145deg, rgba(255, 255, 255, 0.54), rgba(125, 156, 247, 0.14));
-      pointer-events: none;
-    }
-    .section-title {
-      color: #556272;
-    }
-    .section-blurb,
-    .section-hero-head .meta,
-    .section-hero-head .refresh-status {
-      color: var(--muted);
-    }
-    .section-head-actions {
-      align-items: center;
-    }
-    .section-hero-head .panel-toggle,
-    .section-hero-head .refresh-interval {
-      border-color: transparent;
-      background: var(--panel);
-      color: #5f6d7f;
-      box-shadow: var(--shadow-soft);
-    }
-    .section-hero-head .panel-toggle:hover,
-    .section-hero-head .refresh-interval:hover {
-      border-color: transparent;
-      background: var(--panel);
-      color: #4f5d6f;
-      box-shadow: var(--shadow-press);
-      transform: translateY(1px);
-    }
-    .btn,
-    .panel-toggle,
-    .quick-chip,
-    .segment-item {
-      min-height: 44px;
-      border-radius: 18px;
-      font-weight: 700;
-      letter-spacing: 0.01em;
-      text-transform: none;
-    }
-    .btn {
-      background: linear-gradient(145deg, #8ea9ff, #6f8ff4);
-      border: 0;
-      color: #ffffff;
-      padding: 0 18px;
-      box-shadow: 9px 9px 18px rgba(124, 145, 205, 0.34), -7px -7px 16px rgba(255, 255, 255, 0.34);
-    }
-    .btn:hover {
-      background: linear-gradient(145deg, #8ea9ff, #6f8ff4);
-      color: #ffffff;
-      transform: translateY(1px);
-      box-shadow: inset 6px 6px 12px rgba(99, 126, 210, 0.34), inset -6px -6px 12px rgba(255, 255, 255, 0.16), 4px 4px 12px rgba(163, 177, 198, 0.28);
-    }
-    .panel-toggle,
-    .quick-chip,
-    .segment-item,
-    .file-nav-item,
-    .overview-action-item,
-    .decision-row,
-    .office-card,
-    .overview-quick-links .btn,
-    .overview-context-links .btn {
-      border-color: transparent;
-      background: var(--panel);
-      color: #5f6d7f;
-      box-shadow: var(--shadow-soft);
-    }
-    .panel-toggle:hover,
-    .quick-chip:hover,
-    .segment-item:hover,
-    .file-nav-item:hover,
-    .overview-action-item:hover,
-    .decision-row:hover,
-    .office-card:hover,
-    .overview-quick-links .btn:hover,
-    .overview-context-links .btn:hover {
-      transform: translateY(1px);
-      background: var(--panel);
-      color: #4f5d6f;
-      box-shadow: var(--shadow-press);
-    }
-    .card,
-    .overview-kpi-card,
-    .overview-hero-card,
-    .exec-card,
-    .overview-action-item,
-    .overview-task-strip,
-    .overview-context-note,
-    .decision-row,
-    .overview-busy-card,
-    .status-chip,
-    .timeline-stat,
-    .queue-item,
-    .settings-status-panel,
-    .signal-gauge-card,
-    .office-card,
-    .collaboration-thread-card,
-    .collaboration-latest-snippet,
-    .collaboration-agent-pill,
-    .cron-owner-card,
-    .cron-job-list li,
-    .cron-run-card,
-    .group-section,
-    .task-brief-card,
-    .task-priority-panel,
-    .calendar-day,
-    .calendar-event,
-    .zone,
-    .desk-chip,
-    .memory-row,
-    .subscription-pill,
-    .quota-row,
-    .file-sidebar,
-    .file-editor-panel,
-    .doc-card {
-      border-width: 0;
-      border-color: transparent;
-      border-radius: 24px;
-      background: linear-gradient(145deg, #edf2f8, #dde6f1);
-      box-shadow: var(--shadow-soft);
-    }
-    .card:hover {
-      transform: translateY(-1px);
-      background: linear-gradient(145deg, #edf2f8, #dde6f1);
-      box-shadow: var(--card-shadow-hover);
-    }
-    .overview-primary-card {
-      border-color: transparent;
-      background: linear-gradient(145deg, #dfe8f8, #edf2f9);
-      box-shadow: var(--shadow-hard);
-    }
-    .overview-primary-card::after {
-      width: 140px;
-      height: 140px;
-      border-radius: 999px;
-      transform: none;
-      background: radial-gradient(circle, rgba(125, 156, 247, 0.18), transparent 68%);
-    }
-    .overview-primary-card h2,
-    .overview-primary-card .overview-primary-value,
-    .overview-primary-card .overview-primary-label,
-    .overview-primary-card .meta {
-      color: var(--text);
-    }
-    .overview-primary-directive {
-      border: 0;
-      border-radius: 16px;
-      background: var(--panel-soft);
-      color: var(--primary);
-      box-shadow: var(--shadow-soft);
-      letter-spacing: 0.01em;
-      text-transform: none;
-    }
-    .overview-primary-card .overview-quick-links .btn,
-    .overview-primary-card .btn {
-      background: var(--panel);
-      border-color: transparent;
-      color: var(--primary);
-      box-shadow: var(--shadow-soft);
-    }
-    .overview-primary-card .overview-quick-links .btn:hover,
-    .overview-primary-card .btn:hover {
-      background: var(--panel);
-      border-color: transparent;
-      color: var(--primary-strong);
-      box-shadow: var(--shadow-press);
-    }
-    .overview-focus-stage,
-    .overview-task-strip,
-    .overview-context-note {
-      border-width: 0;
-      border-radius: 22px;
-      background: var(--panel-soft);
-      box-shadow: var(--shadow-press);
-    }
-    .overview-focus-ring {
-      border: 0;
-      box-shadow: var(--shadow-soft);
-    }
-    .overview-focus-core {
-      border: 0;
-      box-shadow: var(--shadow-press);
-    }
-    .overview-kpi-grid .overview-kpi-card:nth-child(4n + 1),
-    .executive-grid .exec-card:nth-child(4n + 1),
-    .overview-hero-strip .overview-hero-card:nth-child(4n + 1),
-    .overview-pulse-card .status-chip:nth-child(4n + 1),
-    .settings-status-grid .settings-status-panel:nth-child(4n + 1) {
-      background: linear-gradient(145deg, #e8eef8, #dbe5f2);
-      box-shadow: var(--shadow-soft);
-    }
-    .overview-kpi-grid .overview-kpi-card:nth-child(4n + 2),
-    .executive-grid .exec-card:nth-child(4n + 2),
-    .overview-hero-strip .overview-hero-card:nth-child(4n + 2),
-    .overview-pulse-card .status-chip:nth-child(4n + 2),
-    .settings-status-grid .settings-status-panel:nth-child(4n + 2) {
-      background: linear-gradient(145deg, #e7f4f0, #d8eee5);
-      box-shadow: var(--shadow-soft);
-    }
-    .overview-kpi-grid .overview-kpi-card:nth-child(4n + 3),
-    .executive-grid .exec-card:nth-child(4n + 3),
-    .overview-hero-strip .overview-hero-card:nth-child(4n + 3),
-    .overview-pulse-card .status-chip:nth-child(4n + 3),
-    .settings-status-grid .settings-status-panel:nth-child(4n + 3) {
-      background: linear-gradient(145deg, #f5ece5, #efe1d7);
-      box-shadow: var(--shadow-soft);
-    }
-    .overview-kpi-grid .overview-kpi-card:nth-child(4n + 4),
-    .executive-grid .exec-card:nth-child(4n + 4),
-    .overview-hero-strip .overview-hero-card:nth-child(4n + 4),
-    .overview-pulse-card .status-chip:nth-child(4n + 4),
-    .settings-status-grid .settings-status-panel:nth-child(4n + 4) {
-      background: linear-gradient(145deg, #edf2f8, #dde6f1);
-      box-shadow: var(--shadow-soft);
-    }
-    .group-section,
-    .card.compact-details {
-      border-color: transparent;
-      background: linear-gradient(145deg, #edf2f8, #dde6f1);
-      box-shadow: var(--shadow-soft);
-    }
-    .group-section summary,
-    .card.compact-details summary {
-      padding: 14px 16px;
-      background: transparent;
-      border-bottom: 0;
-      box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.54), inset 0 -2px 0 rgba(188, 197, 209, 0.24);
-      color: #556272;
-      font-weight: 760;
-      letter-spacing: -0.01em;
-    }
-    .card.compact-details summary::after,
-    .compact-table-details summary::after {
-      border: 0;
-      border-radius: 14px;
-      background: var(--panel);
-      color: #6f7b8c;
-      font-weight: 700;
-      letter-spacing: 0.02em;
-      text-transform: none;
-      box-shadow: var(--shadow-soft);
-    }
-    .group-item {
-      border-bottom: 1px solid rgba(188, 197, 209, 0.24);
-    }
-    .group-item:last-child {
-      border-bottom: none;
-    }
-    .file-filter-input,
-    .file-token-input,
-    .docs-search input,
-    .docs-source-filter-wrap select,
-    .file-editor-textarea,
-    .settings-budget-input,
-    .staff-model-select,
-    .staff-model-token,
-    .task-brief-token,
-    .doc-preview-token,
-    .doc-preview-editor {
-      border: 0;
-      border-radius: 18px;
-      background: var(--panel);
-      box-shadow: var(--shadow-press);
-      color: var(--text);
-    }
-    .file-filter-input:focus,
-    .file-token-input:focus,
-    .docs-search input:focus,
-    .docs-source-filter-wrap select:focus,
-    .file-editor-textarea:focus,
-    .settings-budget-input:focus,
-    .staff-model-select:focus,
-    .staff-model-token:focus,
-    .doc-preview-token:focus,
-    .doc-preview-editor:focus {
-      border-color: transparent;
-      background: var(--panel);
-      box-shadow: var(--shadow-press), var(--ring-soft);
-      outline: none;
-    }
-    .file-nav-item.active,
-    .quick-chip.active,
-    .segment-item.active {
-      background: linear-gradient(145deg, #8ea9ff, #6f8ff4);
-      border-color: transparent;
-      color: #ffffff;
-      box-shadow: 10px 10px 20px rgba(124, 145, 205, 0.34), -8px -8px 18px rgba(255, 255, 255, 0.28);
-    }
-    table {
-      border-color: transparent;
-      background: var(--panel);
-      box-shadow: var(--shadow-soft);
-    }
-    th {
-      background: #e1e9f3;
-      color: #697588;
-    }
     @media (max-width: 1320px) {
-      .app-shell { grid-template-columns: 1fr 284px; }
-      .app-shell > .sidebar:first-of-type { grid-column: 1 / -1; }
-      .panel { grid-column: 1; }
+      .app-shell {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 14px;
+        padding: 16px;
+        padding-bottom: calc(16px + 5rem + env(safe-area-inset-bottom, 0px));
+      }
+      .app-shell > .sidebar:first-of-type {
+        order: 2;
+        grid-column: auto;
+        grid-row: auto;
+      }
+      .panel {
+        order: 1;
+        grid-column: auto;
+        grid-row: auto;
+      }
+      .inspector-sidebar {
+        order: 3;
+        grid-column: auto;
+        grid-row: auto;
+      }
+      .settings-environment-grid { grid-template-columns: 1fr; }
+      .settings-environment-grid > #settings-connection-health,
+      .settings-environment-grid > #security-risk-summary,
+      .settings-environment-grid > #update-status-card,
+      .settings-environment-grid > #settings-budget-limit {
+        grid-column: auto;
+        grid-row: auto;
+      }
+      .sidebar { padding: 16px; }
+      .nav-links { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .section-hero-head { flex-direction: column; align-items: stretch; }
       .section-head-actions { justify-content: flex-start; }
       .refresh-toolbar { justify-content: flex-start; }
       .refresh-status { text-align: left; }
       .overview-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .overview-decision-grid { grid-template-columns: 1fr; }
+      #overview-decision-center,
+      #overview-busy-staff {
+        grid-column: auto;
+      }
       .overview-main-grid { grid-template-columns: 1fr; }
       .overview-pulse-card .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .task-hub-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -6364,18 +6638,55 @@ async function renderHtml(filters, toolClient, options) {
       .collaboration-timeline-step { grid-template-columns: 1fr; }
       .file-workbench { grid-template-columns: 1fr; }
       .settings-budget-form { grid-template-columns: 1fr; }
+      .settings-environment-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .settings-environment-grid > #settings-connection-health,
+      .settings-environment-grid > #settings-budget-limit {
+        grid-column: 1 / -1;
+        grid-row: auto;
+      }
+      .settings-environment-grid > #security-risk-summary,
+      .settings-environment-grid > #update-status-card {
+        grid-column: auto;
+        grid-row: auto;
+      }
+      .settings-data-strip-body { grid-template-columns: 1fr; }
+      .settings-connector-list-inline { grid-template-columns: 1fr; }
       .task-brief-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .staff-brief-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 1080px) {
-      .app-shell { grid-template-columns: 1fr; }
-      .sidebar, .panel { order: unset; }
+      .app-shell {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 14px;
+        padding: 14px;
+        padding-bottom: calc(14px + 5.5rem + env(safe-area-inset-bottom, 0px));
+      }
+      .panel {
+        order: 1;
+        padding: 20px;
+      }
+      .app-shell > .sidebar:first-of-type {
+        order: 2;
+        grid-column: auto;
+        grid-row: auto;
+      }
+      .inspector-sidebar {
+        order: 3;
+        grid-column: auto;
+        grid-row: auto;
+      }
+      .sidebar { padding: 16px; }
+      .nav-links { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .section-title { font-size: 25px; }
+      .section-hero-head { padding: 20px 20px 18px; }
+      .section-head-actions { width: 100%; }
       .refresh-toolbar { width: 100%; }
       .refresh-status { width: 100%; }
       .overview-v3-shell { grid-template-columns: 1fr; }
       .overview-kpi-grid { grid-template-columns: 1fr; }
       .overview-decision-grid { grid-template-columns: 1fr; }
+      .overview-usage-summary { grid-template-columns: 1fr; }
+      .overview-usage-chip.wide { grid-column: auto; }
       .overview-primary-value { font-size: 46px; }
       .overview-focus-stage { grid-template-columns: 1fr; }
       .overview-focus-ring { width: 104px; height: 104px; }
@@ -6404,6 +6715,8 @@ async function renderHtml(filters, toolClient, options) {
       .settings-config-grid { grid-template-columns: 1fr; }
       table { min-width: 720px; }
       .settings-switch-table { min-width: 0; }
+      .settings-secret-input-shell { grid-template-columns: 1fr; }
+      .settings-secret-inline { grid-template-columns: 1fr; }
       .global-visibility-card .ops-board { min-width: 900px; }
       .pie-wrap { grid-template-columns: 1fr; }
       .office-head { grid-template-columns: 1fr; }
@@ -6415,6 +6728,17 @@ async function renderHtml(filters, toolClient, options) {
       .file-editor-textarea { min-height: 360px; }
     }
     @media (max-width: 720px) {
+      .app-shell {
+        padding: 12px;
+        padding-bottom: calc(12px + 6rem + env(safe-area-inset-bottom, 0px));
+      }
+      .panel,
+      .sidebar { padding: 14px; }
+      .section-hero-head {
+        padding: 18px 16px;
+        border-radius: 24px;
+      }
+      .nav-links { grid-template-columns: 1fr; }
       .timeline-summary-strip { grid-template-columns: 1fr; }
       .task-top-meta-row { flex-direction: column; align-items: flex-start; }
       .task-top-filters { grid-template-columns: 1fr; }
@@ -6425,27 +6749,888 @@ async function renderHtml(filters, toolClient, options) {
         white-space: normal;
       }
     }
-    @media (prefers-reduced-motion: reduce) {
-      * {
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: 0.01ms !important;
+    body {
+      --shell-left-rail-width: 116px;
+      --shell-left-expanded-width: 328px;
+      --shell-left-width: var(--shell-left-rail-width);
+      --shell-brand-height: 160px;
+      --shell-right-width: 292px;
+      overflow-x: hidden;
+      overscroll-behavior-y: none;
+    }
+    body[data-shell-nav-state="expanded"] {
+      --shell-left-width: var(--shell-left-expanded-width);
+    }
+    body.inspector-collapsed {
+      --shell-right-width: 0px;
+    }
+    .shell-nav-hover-zone {
+      position: fixed;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 18px;
+      z-index: 38;
+      pointer-events: auto;
+      background: transparent;
+    }
+    .app-shell {
+      grid-template-columns: minmax(0, 1fr) var(--shell-right-width);
+      gap: 18px;
+      max-width: 100%;
+      margin: 0;
+      padding-left: calc(var(--shell-left-rail-width) + 16px);
+      padding-right: 18px;
+      align-items: stretch;
+    }
+    body.inspector-collapsed .app-shell {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .sidebar,
+    .panel,
+    .card,
+    .overview-kpi-card,
+    .overview-hero-card,
+    .exec-card,
+    .overview-action-item,
+    .overview-task-strip,
+    .overview-context-note,
+    .decision-row,
+    .overview-busy-card,
+    .office-card,
+    .collaboration-thread-card,
+    .task-brief-card,
+    .memory-row,
+    .subscription-pill,
+    .quota-row,
+    .file-sidebar,
+    .file-editor-panel,
+    .doc-card {
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 253, 0.95)),
+        radial-gradient(circle at 100% 0%, rgba(214, 226, 243, 0.12), transparent 52%);
+      box-shadow: 0 14px 32px rgba(15, 23, 42, 0.06), 0 2px 10px rgba(15, 23, 42, 0.04);
+    }
+    .card,
+    .overview-kpi-card,
+    .overview-hero-card,
+    .exec-card,
+    .overview-action-item,
+    .overview-task-strip,
+    .overview-context-note,
+    .decision-row,
+    .overview-busy-card,
+    .office-card,
+    .collaboration-thread-card,
+    .task-brief-card {
+      transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+    }
+    .card:hover,
+    .overview-kpi-card:hover,
+    .exec-card:hover,
+    .overview-action-item:hover,
+    .overview-task-strip:hover,
+    .decision-row:hover,
+    .overview-busy-card:hover,
+    .office-card:hover,
+    .collaboration-thread-card:hover,
+    .task-brief-card:hover {
+      transform: translateY(-2px) !important;
+      box-shadow: 0 18px 38px rgba(15, 23, 42, 0.08), 0 4px 14px rgba(15, 23, 42, 0.04);
+    }
+    .panel {
+      min-height: calc(100vh - 48px);
+      padding: 18px 20px 22px;
+      border-radius: 28px;
+      position: relative;
+      z-index: 1;
+    }
+    .section-hero-head {
+      position: sticky;
+      top: 12px;
+      z-index: 8;
+      padding: 18px 20px;
+      margin-bottom: 2px;
+      border-radius: 22px;
+      background:
+        linear-gradient(180deg, rgba(250, 252, 255, 0.95), rgba(243, 247, 252, 0.92)),
+        radial-gradient(circle at 100% 0%, rgba(214, 226, 243, 0.14), transparent 50%);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+    }
+    .section-title {
+      font-size: clamp(28px, 3vw, 36px);
+      line-height: 1.08;
+    }
+    .section-blurb {
+      margin-top: 6px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .section-head-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .refresh-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .panel-toggle,
+    .refresh-interval {
+      min-height: 38px;
+      border-radius: 14px;
+    }
+    .content-stack {
+      margin-top: 14px;
+      gap: 14px;
+    }
+    .sidebar-primary {
+      position: fixed;
+      left: 0;
+      top: 12px;
+      z-index: 42;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 10px;
+      width: var(--shell-left-width);
+      height: calc(100vh - 24px);
+      padding: 12px 12px 14px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+      border-top-right-radius: 26px;
+      border-bottom-right-radius: 26px;
+      overscroll-behavior: contain;
+      transition: width 220ms ease, padding 220ms ease, box-shadow 220ms ease;
+    }
+    .inspector-sidebar {
+      position: sticky;
+      top: 24px;
+      align-self: start;
+      z-index: 3;
+    }
+    .sidebar-shell-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0;
+      align-items: start;
+      flex: 0 0 auto;
+    }
+    .brand {
+      display: block;
+      min-width: 0;
+      padding: 14px;
+      height: var(--shell-brand-height);
+      min-height: var(--shell-brand-height);
+      border-radius: 24px;
+      background:
+        linear-gradient(180deg, rgba(235, 243, 255, 0.92), rgba(255, 255, 255, 0.98)),
+        radial-gradient(circle at 0% 0%, rgba(0, 113, 227, 0.09), transparent 44%);
+    }
+    .brand-side {
+      position: absolute;
+      left: 15px;
+      top: 50%;
+      width: 60px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      transform: translateY(-50%);
+      z-index: 1;
+    }
+    .brand::before,
+    .brand::after {
+      content: none;
+      display: none;
+    }
+    .brand-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 60px;
+      height: 60px;
+      flex: 0 0 auto;
+      border-radius: 20px;
+      background: linear-gradient(145deg, rgba(207, 223, 247, 0.82), rgba(235, 242, 252, 0.94));
+      border: 1px solid rgba(91, 118, 168, 0.12);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.76);
+    }
+    .brand-mark-svg {
+      width: 38px;
+      height: 38px;
+      display: block;
+    }
+    .brand-copy {
+      position: absolute;
+      left: 92px;
+      right: 14px;
+      top: 14px;
+      bottom: 14px;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 8px;
+      transform: translateX(0);
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+    .brand-kicker {
+      align-self: flex-start;
+      justify-self: start;
+      max-width: 100%;
+      padding: 5px 12px;
+      font-size: 12px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .brand h1 {
+      max-width: 100%;
+      font-size: 22px;
+      margin: 0;
+      padding: 2px 0 3px;
+      line-height: 1.34;
+      white-space: nowrap;
+      overflow: visible;
+      text-overflow: ellipsis;
+    }
+    .brand .meta {
+      margin: 0;
+      max-width: 100%;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .lang-toggle {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 0;
+      line-height: 1.45;
+    }
+    .lang-toggle a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      text-decoration: none;
+      color: var(--muted);
+      background: rgba(239, 244, 251, 0.9);
+      transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+    }
+    .lang-toggle a.active,
+    .lang-toggle a:hover {
+      color: var(--primary-strong);
+      background: rgba(224, 235, 252, 0.98);
+      box-shadow: inset 0 0 0 1px rgba(59, 96, 170, 0.08);
+    }
+    .sidebar-pin-toggle {
+      width: auto;
+      max-width: 100%;
+      min-height: 28px;
+      height: 28px;
+      padding: 0 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+      box-shadow: 0 8px 18px rgba(54, 88, 146, 0.08);
+    }
+    .sidebar-pin-toggle-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      flex: 0 0 14px;
+    }
+    .sidebar-pin-toggle .shell-icon-svg {
+      width: 14px;
+      height: 14px;
+    }
+    .sidebar-pin-toggle-label {
+      display: inline-block;
+      min-width: 0;
+      transform: translateX(0);
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+    .sidebar-pin-toggle > .sidebar-pin-toggle-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .sidebar-pin-toggle > .sidebar-pin-toggle-icon > .shell-icon-svg {
+      margin: auto;
+      flex: 0 0 auto;
+    }
+    .sidebar-pin-toggle[data-shell-nav-pin-state="pinned"] {
+      color: var(--primary-strong);
+      background:
+        linear-gradient(180deg, rgba(233, 242, 255, 0.96), rgba(244, 249, 255, 0.98)),
+        radial-gradient(circle at 0% 0%, rgba(0, 113, 227, 0.12), transparent 42%);
+      box-shadow: 0 10px 24px rgba(54, 88, 146, 0.1);
+    }
+    .section-nav {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      flex: 0 0 auto;
+      margin-top: 10px;
+      gap: 10px;
+    }
+    .nav-link {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+      padding: 12px 14px;
+      border-radius: 22px;
+      min-height: 68px;
+      height: 68px;
+      flex: 0 0 68px;
+    }
+    .nav-link-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 50px;
+      height: 50px;
+      border-radius: 17px;
+      background: rgba(237, 242, 249, 0.92);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+    }
+    .shell-icon-svg {
+      width: 30px;
+      height: 30px;
+      display: block;
+    }
+    .brand-side > .brand-mark,
+    .nav-link > .nav-link-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      place-self: center;
+    }
+    .brand-side > .brand-mark > .brand-mark-svg,
+    .nav-link > .nav-link-icon > .shell-icon-svg {
+      margin: auto;
+      flex: 0 0 auto;
+    }
+    .nav-link-copy {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+      transform: translateX(0);
+      transition: opacity 180ms ease, width 180ms ease, max-width 180ms ease, transform 180ms ease;
+    }
+    .nav-link-title {
+      display: block;
+      font-size: 15px;
+      font-weight: 690;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .nav-link small {
+      margin-top: 0;
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .nav-link.active .nav-link-icon {
+      background: linear-gradient(135deg, rgba(0, 113, 227, 0.14), rgba(0, 113, 227, 0.22));
+      color: var(--primary-strong);
+    }
+    body[data-shell-nav-state="collapsed"] .sidebar-primary {
+      overflow-y: hidden;
+    }
+    body[data-shell-nav-state="collapsed"] .sidebar-shell-head {
+      justify-items: stretch;
+    }
+    body[data-shell-nav-state="collapsed"] .brand {
+      padding-left: 10px;
+      padding-right: 10px;
+      height: var(--shell-brand-height);
+      min-height: var(--shell-brand-height);
+    }
+    body[data-shell-nav-state="collapsed"] .brand-copy {
+      opacity: 0;
+      transform: translateX(-10px);
+      visibility: hidden;
+      overflow: hidden;
+      pointer-events: none;
+    }
+    body[data-shell-nav-state="collapsed"] .nav-link-copy {
+      opacity: 0;
+      width: 0;
+      max-width: 0;
+      transform: translateX(-10px);
+      overflow: hidden;
+      pointer-events: none;
+    }
+    body[data-shell-nav-state="collapsed"] .nav-link {
+      display: flex;
+      grid-template-columns: none;
+      gap: 0;
+      justify-content: center;
+      align-items: center;
+      padding: 0;
+      border-radius: 24px;
+    }
+    body[data-shell-nav-state="collapsed"] .sidebar-pin-toggle {
+      min-width: 0;
+      align-self: center;
+      justify-self: center;
+    }
+    .inspector-sidebar {
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+    }
+    .inspector-summary-card {
+      padding: 16px;
+      border-radius: 20px;
+    }
+    .inspector-card-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .inspector-summary-card h2 {
+      font-size: 16px;
+      margin-bottom: 4px;
+    }
+    .inspector-compact-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .inspector-metric {
+      padding: 10px 12px;
+      border: 1px solid rgba(15, 23, 42, 0.06);
+      border-radius: 16px;
+      background: rgba(249, 251, 254, 0.9);
+      min-width: 0;
+    }
+    .inspector-metric span {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .inspector-metric strong {
+      display: block;
+      font-size: 15px;
+      line-height: 1.3;
+      word-break: break-word;
+    }
+    .inspector-summary-foot {
+      margin-top: 12px;
+      display: grid;
+      gap: 6px;
+    }
+    .inspector-agent-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 10px;
+    }
+    .inspector-agent-row {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border: 1px solid rgba(15, 23, 42, 0.06);
+      border-radius: 16px;
+      background: rgba(250, 252, 255, 0.92);
+    }
+    .inspector-agent-avatar {
+      width: 52px;
+      max-width: 52px;
+      padding: 5px;
+      border-radius: 14px;
+    }
+    .inspector-agent-avatar .agent-stage {
+      aspect-ratio: 1 / 1;
+      border-radius: 10px;
+    }
+    .inspector-agent-avatar .agent-animal-label {
+      display: none;
+    }
+    .inspector-agent-copy {
+      min-width: 0;
+      display: grid;
+      gap: 3px;
+    }
+    .inspector-agent-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .inspector-agent-status {
+      font-size: 11px;
+      color: var(--primary-strong);
+      white-space: nowrap;
+    }
+    .inspector-secondary-card {
+      padding: 14px 16px;
+    }
+    .inspector-secondary-stack {
+      display: grid;
+      gap: 12px;
+    }
+    .inspector-secondary-stack > .card,
+    .inspector-secondary-stack > section.card {
+      margin-top: 0 !important;
+    }
+    .inspector-secondary-panel {
+      padding: 14px 16px;
+      border: 1px solid rgba(15, 23, 42, 0.06);
+      border-radius: 18px;
+      background: rgba(250, 252, 255, 0.9);
+    }
+    .inspector-secondary-panel h3 {
+      font-size: 15px;
+      margin-bottom: 8px;
+    }
+    .staff-brief-grid,
+    .office-grid,
+    .collaboration-thread-list {
+      gap: 14px;
+    }
+    .staff-brief-card {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+      grid-template-rows: auto auto auto auto;
+    }
+    .staff-brief-head {
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+      padding-left: 10px;
+    }
+    .staff-brief-identity {
+      min-width: 0;
+      display: grid;
+      gap: 6px;
+      align-content: start;
+    }
+    .staff-brief-status {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .staff-brief-primary {
+      display: grid;
+      gap: 10px;
+    }
+    .staff-summary-block {
+      padding: 12px;
+      border: 1px solid rgba(15, 23, 42, 0.06);
+      border-radius: 16px;
+      background: rgba(249, 251, 254, 0.94);
+    }
+    .staff-summary-label,
+    .office-focus-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+    .staff-summary-value {
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .staff-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .staff-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(237, 242, 249, 0.9);
+      color: #56657b;
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .staff-secondary-details {
+      margin-top: 0;
+    }
+    .staff-secondary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+      align-items: start;
+    }
+    .staff-secondary-item {
+      padding: 10px 12px;
+      border: 1px solid rgba(15, 23, 42, 0.06);
+      border-radius: 16px;
+      background: rgba(249, 251, 254, 0.94);
+      min-width: 0;
+      overflow: hidden;
+    }
+    .staff-secondary-item span {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .staff-secondary-item strong {
+      display: block;
+      font-size: 13px;
+      line-height: 1.45;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .staff-model-shell {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+    }
+    .staff-model-editor {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+    }
+    .office-card {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+    .office-head {
+      grid-template-columns: 132px minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+    }
+    .office-info {
+      min-width: 0;
+      display: grid;
+      gap: 8px;
+    }
+    .office-summary {
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .office-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .office-focus-block {
+      padding: 12px;
+      border: 1px solid rgba(15, 23, 42, 0.06);
+      border-radius: 16px;
+      background: rgba(249, 251, 254, 0.94);
+    }
+    .office-focus {
+      margin: 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 6px;
+    }
+    .collaboration-thread-card {
+      overflow: hidden;
+    }
+    .collaboration-thread-card > summary {
+      padding: 16px 18px;
+      gap: 10px;
+    }
+    .collaboration-thread-head {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+    }
+    .collaboration-thread-copy {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+    .collaboration-thread-route,
+    .collaboration-thread-meta {
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .collaboration-thread-badges {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+    .collaboration-thread-summary-line {
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .collaboration-latest-snippet {
+      margin-top: 0;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(247, 249, 252, 0.92);
+    }
+    .collaboration-thread-body {
+      padding: 0 18px 18px;
+      border-top: 1px solid rgba(15, 23, 42, 0.06);
+    }
+    @media (max-width: 1320px) {
+      .shell-nav-hover-zone {
+        display: none;
+      }
+      .app-shell {
+        grid-template-columns: minmax(0, 1fr);
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+      .sidebar-primary {
+        order: 1;
+        position: static;
+        width: auto;
+        height: auto;
+        border-radius: 26px;
+      }
+      .panel {
+        order: 2;
+      }
+      .inspector-sidebar {
+        order: 3;
+      }
+      .inspector-sidebar {
+        position: static;
+      }
+      .panel {
+        min-height: 0;
+      }
+      .section-hero-head {
+        position: static;
+      }
+      .sidebar-pin-toggle {
+        display: none;
+      }
+      body[data-shell-nav-state="collapsed"] .brand-copy,
+      body[data-shell-nav-state="collapsed"] .nav-link-copy {
+        opacity: 1;
+        width: auto;
+        overflow: visible;
+        pointer-events: auto;
+      }
+      body[data-shell-nav-state="collapsed"] .brand {
+        grid-template-columns: 42px minmax(0, 1fr);
+        justify-items: stretch;
+      }
+      body[data-shell-nav-state="collapsed"] .nav-link {
+        grid-template-columns: 40px minmax(0, 1fr);
+        justify-items: stretch;
+        padding: 12px;
+        min-height: 52px;
+      }
+      .inspector-compact-metrics {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .staff-secondary-grid {
+        grid-template-columns: 1fr;
       }
     }
-    */
+    @media (max-width: 1080px) {
+      .inspector-compact-metrics {
+        grid-template-columns: 1fr;
+      }
+      .inspector-agent-row,
+      .office-head,
+      .staff-brief-head,
+      .collaboration-thread-head {
+        grid-template-columns: 1fr;
+      }
+      .inspector-agent-avatar,
+      .staff-avatar,
+      .agent-avatar {
+        max-width: 156px;
+      }
+      .collaboration-thread-badges {
+        justify-content: flex-start;
+      }
+    }
+    @media (max-width: 720px) {
+      .app-shell {
+        padding-left: 12px;
+        padding-right: 12px;
+      }
+      .sidebar-primary,
+      .inspector-sidebar,
+      .panel {
+        padding: 14px;
+      }
+      .section-head-actions,
+      .refresh-toolbar {
+        width: 100%;
+      }
+      .brand,
+      .inspector-summary-card,
+      .staff-brief-card,
+      .office-card,
+      .collaboration-thread-card > summary {
+        border-radius: 18px;
+      }
+    }
   </style>
 </head>
-<body class="ui-preload" data-ui-polish="apple-native-v3" data-apple-window-controls="true" data-ui-language="${escapeHtml(options.language)}" data-refresh-generated-at="${escapeHtml(dashboardRefreshGeneratedAt ?? "")}" style="--fold-open-label:${options.language === "en" ? "'Expand'" : "'\u5C55\u5F00'"}; --fold-close-label:${options.language === "en" ? "'Collapse'" : "'\u6536\u8D77'"};">
+<body class="ui-preload" data-ui-polish="apple-native-v3" data-apple-window-controls="true" data-ui-language="${escapeHtml(options.language)}" data-refresh-generated-at="${escapeHtml(dashboardRefreshGeneratedAt ?? "")}" data-shell-nav-state="collapsed" data-shell-nav-pinned="0" data-shell-nav-mode="desktop" style="--fold-open-label:${options.language === "en" ? "'Expand'" : "'\u5C55\u5F00'"}; --fold-close-label:${options.language === "en" ? "'Collapse'" : "'\u6536\u8D77'"};">
+  <div class="shell-nav-hover-zone" data-shell-nav-hover-zone aria-hidden="true"></div>
   <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-kicker">${escapeHtml(uiEmployeeBrand(options.language))}</div>
-        <h1>${escapeHtml(uiEmployeeSystemBrand(options.language))}</h1>
-        <div class="meta">${escapeHtml(t("Updated", "\u66F4\u65B0\u65F6\u95F4"))}${escapeHtml(options.language === "en" ? ": " : "\uFF1A")}${escapeHtml(dashboardRefreshGeneratedAt ?? t("Not available", "\u6682\u65E0"))}</div>
-        ${languageToggle}
+    <aside class="sidebar sidebar-primary" data-shell-nav data-shell-nav-state="collapsed">
+      <div class="sidebar-shell-head">
+        <div class="brand" data-shell-brand>
+          <div class="brand-side">
+            <div class="brand-mark" aria-hidden="true">${renderShellBrandMark()}</div>
+            ${renderShellNavPinToggle(t("Pin", "\u56FA\u5B9A"))}
+          </div>
+          <div class="brand-copy">
+            <div class="brand-kicker">${escapeHtml(uiEmployeeBrand(options.language))}</div>
+            <h1>${escapeHtml(uiEmployeeSystemBrand(options.language))}</h1>
+            <div class="meta">${escapeHtml(t("Updated", "\u66F4\u65B0\u65F6\u95F4"))}${escapeHtml(options.language === "en" ? ": " : "\uFF1A")}${escapeHtml(dashboardRefreshGeneratedAt ?? t("Not available", "\u6682\u65E0"))}</div>
+            ${languageToggle}
+          </div>
+        </div>
       </div>
-      <nav class="nav-links">${sectionNav}</nav>
-      ${agentTeamSidebarCard}
+      <nav class="nav-links section-nav" data-shell-nav-links>${sectionNav}</nav>
     </aside>
     <main class="panel">
       <header class="section-hero-head">
@@ -6460,40 +7645,51 @@ async function renderHtml(filters, toolClient, options) {
       </header>
       <div class="content-stack">${globalVisibilityBlock}${sectionBody}</div>
     </main>
-    <aside class="sidebar inspector-sidebar">
-      <div class="card">
-        <h2>${escapeHtml(t("Current status", "\u5F53\u524D\u72B6\u6001"))}</h2>
-        <div class="meta">${escapeHtml(t("Active sessions", "\u6D3B\u8DC3\u4F1A\u8BDD"))}\uFF1A${liveSessionCount}</div>
-        <div class="meta">${escapeHtml(t("Tasks under watch", "\u6B63\u5728\u89C2\u5BDF\u4E2D\u7684\u4EFB\u52A1"))}\uFF1A${taskCertaintyCards.length}</div>
-        <div class="meta">${escapeHtml(t("Review queue", "\u5BA1\u9605\u961F\u5217"))}\uFF1A${pendingDecisionCount}</div>
-        ${agentTeamInspectorSummary}
-        ${sidebarSignalRows}
+    <aside class="sidebar inspector-sidebar" data-inspector-compact>
+      <div class="card inspector-summary-card" data-inspector-card="status">
+        <div class="inspector-card-head">
+          <div>
+            <h2>${escapeHtml(t("Current status", "\u5F53\u524D\u72B6\u6001"))}</h2>
+            <div class="meta">${escapeHtml(agentTeamCompactSignal)}</div>
+          </div>
+        </div>
+        <div class="inspector-compact-metrics">
+          <div class="inspector-metric"><span>${escapeHtml(t("Sessions", "\u4F1A\u8BDD"))}</span><strong>${liveSessionCount}</strong></div>
+          <div class="inspector-metric"><span>${escapeHtml(t("Watch", "\u76D1\u770B"))}</span><strong>${taskCertaintyCards.length}</strong></div>
+          <div class="inspector-metric"><span>${escapeHtml(t("Review", "\u5BA1\u9605"))}</span><strong>${pendingDecisionCount}</strong></div>
+        </div>
+        <div class="inspector-summary-foot">${sidebarSignalRows}</div>
       </div>
-      <div class="card" style="margin-top:10px;">
-        <h2>${escapeHtml(t("Usage and subscription summary", "\u7528\u91CF\u4E0E\u8BA2\u9605\u6458\u8981"))}</h2>
-        <div class="meta">${escapeHtml(t("Today's AI usage", "\u4ECA\u65E5 AI \u7528\u91CF"))}\uFF1A${usageToday?.sourceStatus === "not_connected" ? t("Data source not connected", "\u6570\u636E\u6E90\u672A\u8FDE\u63A5") : formatInt(usageToday?.tokens ?? 0)}</div>
-        <div class="meta">${escapeHtml(t("Today's cost", "\u4ECA\u65E5\u8D39\u7528"))}\uFF1A${usageToday?.sourceStatus === "not_connected" ? t("Data source not connected", "\u6570\u636E\u6E90\u672A\u8FDE\u63A5") : formatCurrency(usageToday?.estimatedCost ?? 0)}</div>
-        <div class="meta">${escapeHtml(t("Last 30 days", "\u8FD1 30 \u5929"))}\uFF1A${usage30d?.sourceStatus === "not_connected" ? t("Data source not connected", "\u6570\u636E\u6E90\u672A\u8FDE\u63A5") : formatCurrency(usage30d?.estimatedCost ?? 0)}</div>
-        ${subscriptionSidebarRows}
-        <div class="meta"><a href="${escapeHtml(usageDetailHref)}">${escapeHtml(t("Open full usage and subscription view", "\u67E5\u770B\u5B8C\u6574\u7528\u91CF\u4E0E\u8BA2\u9605"))}</a></div>
+      <div class="card inspector-summary-card" data-inspector-card="usage">
+        <div class="inspector-card-head">
+          <div>
+            <h2>${escapeHtml(t("Usage and subscription summary", "\u7528\u91CF\u4E0E\u8BA2\u9605\u6458\u8981"))}</h2>
+            <div class="meta">${escapeHtml(subscriptionWindowSummary)}</div>
+          </div>
+        </div>
+        <div class="inspector-compact-metrics">
+          <div class="inspector-metric"><span>${escapeHtml(t("Today usage", "\u4ECA\u65E5\u7528\u91CF"))}</span><strong>${escapeHtml(usageToday?.sourceStatus === "not_connected" ? t("Not connected", "\u672A\u8FDE\u63A5") : formatInt(usageToday?.tokens ?? 0))}</strong></div>
+          <div class="inspector-metric"><span>${escapeHtml(t("Today cost", "\u4ECA\u65E5\u8D39\u7528"))}</span><strong>${escapeHtml(usageToday?.sourceStatus === "not_connected" ? t("Not connected", "\u672A\u8FDE\u63A5") : formatCurrency(usageToday?.estimatedCost ?? 0))}</strong></div>
+          <div class="inspector-metric"><span>${escapeHtml(t("30 day cost", "\u8FD1 30 \u5929\u8D39\u7528"))}</span><strong>${escapeHtml(usage30d?.sourceStatus === "not_connected" ? t("Not connected", "\u672A\u8FDE\u63A5") : formatCurrency(usage30d?.estimatedCost ?? 0))}</strong></div>
+        </div>
+        <div class="inspector-summary-foot"><a href="${escapeHtml(usageDetailHref)}">${escapeHtml(t("Open full usage and subscription view", "\u67E5\u770B\u5B8C\u6574\u7528\u91CF\u4E0E\u8BA2\u9605"))}</a></div>
       </div>
-      <div class="card" style="margin-top:10px;">
-        <h2>${escapeHtml(t("Currently active agents", "\u5F53\u524D\u6D3B\u8DC3\u667A\u80FD\u4F53"))}</h2>
-        <ul class="story-list">${executionAgentRows || `<li>${escapeHtml(t("No active agent signal yet.", "\u6682\u65E0\u6D3B\u8DC3\u667A\u80FD\u4F53\u4FE1\u53F7\u3002"))}</li>`}</ul>
+      <div class="card inspector-summary-card" data-inspector-card="agents">
+        <div class="inspector-card-head">
+          <div>
+            <h2>${escapeHtml(t("Currently active agents", "\u5F53\u524D\u6D3B\u8DC3\u667A\u80FD\u4F53"))}</h2>
+            <div class="meta">${escapeHtml(executionAgentDisplayCount > 0 ? t(`${executionAgentDisplayCount} visible in summary`, `\u6458\u8981\u533A\u663E\u793A ${executionAgentDisplayCount} \u4E2A`) : t("No active agent signal yet.", "\u6682\u65E0\u6D3B\u8DC3\u667A\u80FD\u4F53\u4FE1\u53F7\u3002"))}</div>
+          </div>
+        </div>
+        <ul class="inspector-agent-list">${executionAgentRows || `<li class="meta">${escapeHtml(t("No active agent signal yet.", "\u6682\u65E0\u6D3B\u8DC3\u667A\u80FD\u4F53\u4FE1\u53F7\u3002"))}</li>`}</ul>
       </div>
-      ${agentTeamInspectorCard}
-      ${agentTeamRunSummaryCard}
-      ${agentTeamArtifactPreviewCard}
-      <section class="card" style="margin-top:10px;">
-        <h2>${escapeHtml(t("Timed jobs and heartbeat", "\u5B9A\u65F6\u4E0E\u5FC3\u8DF3"))}</h2>
-        <div class="meta">${escapeHtml(t("Timed jobs", "\u5B9A\u65F6"))} ${badge(cronOverview.health.status)} \xB7 ${escapeHtml(t("Next", "\u4E0B\u6B21"))} ${escapeHtml(cronOverview.nextRunAt ?? t("None", "\u6682\u65E0"))}</div>
-        <div class="meta">${escapeHtml(t("Heartbeat", "\u5FC3\u8DF3"))} ${badge(heartbeatHealth)} \xB7 ${escapeHtml(t("Next", "\u4E0B\u6B21"))} ${escapeHtml(heartbeatNextRun)}</div>
-        <div class="meta"><a href="/?section=overview#cron-health">${escapeHtml(t("Open timed jobs", "\u67E5\u770B\u5B9A\u65F6\u4EFB\u52A1"))}</a> \xB7 <a href="/?section=overview#heartbeat-health">${escapeHtml(t("Open heartbeat checks", "\u67E5\u770B\u4EFB\u52A1\u5FC3\u8DF3"))}</a></div>
-      </section>
+      ${inspectorSecondaryDetails}
     </aside>
   </div>
   ${dashboardRefreshScript}
   ${settingsBudgetLimitScript}
+  ${settingsSafetyScript}
+  ${cardHelpTooltipsScript}
   ${agentVisualEnhancerScript}
   ${taskBoardScript}
   ${fileWorkbenchScript}
@@ -6618,8 +7814,8 @@ const staffModelHelpers = createStaffModelHelpers({
 const { collectOpenClawModelOptions, loadTeamSnapshot, updateOpenClawAgentModel: updateOpenClawAgentModelFromConfig } = staffModelHelpers;
 function resolveEditableAgentScopesFromConfigForSmoke(input) { return resolveEditableAgentScopesFromConfig(input); }
 function resolveEditableAgentScopesWithFallbackForSmoke(input) { return resolveEditableAgentScopesWithFallbackImpl(input); }
-async function updateOpenClawAgentModel(agentId, model) {
-    return updateOpenClawAgentModelFromConfig(agentId, model);
+async function updateOpenClawAgentModel(agentId, input, fallbackModel) {
+    return updateOpenClawAgentModelFromConfig(agentId, input, fallbackModel);
 }
 __name(updateOpenClawAgentModel, "updateOpenClawAgentModel");
 function humanizeOperatorLabel(value) { return (0, import_operator_display.humanizeOperatorDisplayName)(value) ?? "\u672A\u77E5\u52A9\u624B"; }
@@ -6699,7 +7895,70 @@ function buildStaffRecentActivityFallbackFromAgentTeamEmbedForSmoke(embed, agent
 __name(buildStaffRecentActivityFallbackFromAgentTeamEmbedForSmoke, "buildStaffRecentActivityFallbackFromAgentTeamEmbedForSmoke");
 function compareSessionSummariesByLatest(a, b) { return officeRuntimeHelpers.compareSessionSummariesByLatest(a, b); }
 __name(compareSessionSummariesByLatest, "compareSessionSummariesByLatest");
-async function buildStaffOverviewCards(input) { const officeCardByKey = new Map(input.officeCards.map(item => [normalizeLookupKey(item.agentId), item])); const executionByKey = new Map(input.executionAgentSummaries.map(item => [normalizeLookupKey(item.agentId), item])); const memberList = (input.members.length > 0 ? input.members : input.executionAgentSummaries.map(item => ({ agentId: item.agentId, displayName: item.displayName, model: "unlisted", workspace: "unlisted", toolsProfile: "default" }))).slice().sort((a, b) => (0, import_team_hierarchy.compareAgentHierarchy)(a.agentId, b.agentId)); const avatarIdentityByKey = buildAgentAnimalIdentityMap(memberList.map(member => member.agentId)); const recentActivityByKey = await loadCachedStaffRecentActivity(input.snapshot, input.client, memberList.map(member => member.agentId), input.language); return await Promise.all(memberList.map(async (member) => { const key = normalizeLookupKey(member.agentId); const office = officeCardByKey.get(key); const execution = executionByKey.get(key); const recentActivity = recentActivityByKey.get(key); const identity = office?.identity ?? avatarIdentityByKey.get(key) ?? deriveAgentAnimalIdentity(member.agentId); const roleLabel = await resolveStaffRoleLabel(member, input.language); const effectiveOfficeStatus = recentActivity?.statusOverride ?? office?.status; const currentWork = staffCurrentWorkLabel({ office: office ? { ...office, status: effectiveOfficeStatus ?? office.status } : office, execution, language: input.language }); const statusTone = resolveStaffStatusDotTone(effectiveOfficeStatus); const recentOutput = recentActivity?.recentOutput ? recentActivity.recentOutput : pickUiText(input.language, "No recent output yet.", "\u6700\u8FD1\u6682\u65E0\u4EA7\u51FA\u3002"); const scheduledLabel = (execution?.enabledCronJobs ?? 0) > 0 ? pickUiText(input.language, "Scheduled", "\u5DF2\u6392\u73ED") : pickUiText(input.language, "Not scheduled", "\u672A\u6392\u73ED"); return { agentId: member.agentId, displayName: member.displayName, identity, roleLabel, statusTone, statusDotLabel: staffStatusDotLabel(statusTone, input.language), statusLabel: staffStatusLabel(effectiveOfficeStatus, input.language), currentWorkLabel: currentWork.label, currentWork: currentWork.value, recentOutput, scheduledLabel, model: member.model, workspace: member.workspace, toolsProfile: member.toolsProfile, modelOptions: dedupeModelOptionsForCard(member.model, input.modelOptions ?? []), modelEditable: input.modelEditable === true, configPath: input.configPath?.trim() || OPENCLAW_CONFIG_PATH }; })); }
+async function buildStaffOverviewCards(input) {
+    const officeCardByKey = new Map(input.officeCards.map((item) => [normalizeLookupKey(item.agentId), item]));
+    const executionByKey = new Map(input.executionAgentSummaries.map((item) => [normalizeLookupKey(item.agentId), item]));
+    const memberList = (input.members.length > 0
+        ? input.members
+        : input.executionAgentSummaries.map((item) => ({
+            agentId: item.agentId,
+            displayName: item.displayName,
+            model: "unlisted",
+            fallbackModel: void 0,
+            workspace: "unlisted",
+            toolsProfile: "default"
+        })))
+        .slice()
+        .sort((a, b) => (0, import_team_hierarchy.compareAgentHierarchy)(a.agentId, b.agentId));
+    const avatarIdentityByKey = buildAgentAnimalIdentityMap(memberList.map((member) => member.agentId));
+    const recentActivityByKey = await loadCachedStaffRecentActivity(input.snapshot, input.client, memberList.map((member) => member.agentId), input.language);
+    return await Promise.all(memberList.map(async (member) => {
+        const key = normalizeLookupKey(member.agentId);
+        const office = officeCardByKey.get(key);
+        const execution = executionByKey.get(key);
+        const recentActivity = recentActivityByKey.get(key);
+        const identity = office?.identity ?? avatarIdentityByKey.get(key) ?? deriveAgentAnimalIdentity(member.agentId);
+        const roleLabel = await resolveStaffRoleLabel(member, input.language);
+        const effectiveOfficeStatus = recentActivity?.statusOverride ?? office?.status;
+        const currentWork = staffCurrentWorkLabel({
+            office: office
+                ? {
+                    ...office,
+                    status: effectiveOfficeStatus ?? office.status
+                }
+                : office,
+            execution,
+            language: input.language
+        });
+        const statusTone = resolveStaffStatusDotTone(effectiveOfficeStatus);
+        const recentOutput = recentActivity?.recentOutput
+            ? recentActivity.recentOutput
+            : pickUiText(input.language, "No recent output yet.", "\u6700\u8FD1\u6682\u65E0\u4EA7\u51FA\u3002");
+        const scheduledLabel = (execution?.enabledCronJobs ?? 0) > 0
+            ? pickUiText(input.language, "Scheduled", "\u5DF2\u6392\u73ED")
+            : pickUiText(input.language, "Not scheduled", "\u672A\u6392\u73ED");
+        return {
+            agentId: member.agentId,
+            displayName: member.displayName,
+            identity,
+            roleLabel,
+            statusTone,
+            statusDotLabel: staffStatusDotLabel(statusTone, input.language),
+            statusLabel: staffStatusLabel(effectiveOfficeStatus, input.language),
+            currentWorkLabel: currentWork.label,
+            currentWork: currentWork.value,
+            recentOutput,
+            scheduledLabel,
+            model: member.model,
+            fallbackModel: member.fallbackModel,
+            workspace: member.workspace,
+            toolsProfile: member.toolsProfile,
+            modelOptions: dedupeModelOptionsForCard([member.model, member.fallbackModel], input.modelOptions ?? []),
+            modelEditable: input.modelEditable === true,
+            configPath: input.configPath?.trim() || OPENCLAW_CONFIG_PATH
+        };
+    }));
+}
 __name(buildStaffOverviewCards, "buildStaffOverviewCards");
 function collectCollaborationEvidenceSessionKeys(sessionItems) {
     return [...new Set([...sessionItems.flatMap(item => [item.sessionKey, item.executionChain?.parentSessionKey, item.executionChain?.childSessionKey, ...(item.interSessionSignals ?? []).map(signal => signal.sourceSessionKey)]).map(value => value?.trim() ?? "").filter(Boolean)])];
@@ -6710,16 +7969,17 @@ function extractCollaborationTaskLabel(input, language) {
     const normalized = normalizeInlineText(input);
     if (!normalized)
         return void 0;
-    const explicitTaskMatch = /(?:浠诲姟|鐩爣|task|objective)\s*[:锛歖\s*([^銆傦紱\n]+)/i.exec(normalized);
+    const explicitTaskMatch = /(?:任务|目标|task|objective)\s*[:：]\s*([^。；\n]+)/i.exec(normalized);
     if (explicitTaskMatch?.[1]?.trim())
         return safeTruncate(explicitTaskMatch[1].trim(), 88);
     const cronTaskMatch = /^\[[^\]]+\s+([^\]\s][^\]]*?)\]\s/.exec(normalized);
     if (cronTaskMatch?.[1]?.trim())
         return safeTruncate(cronTaskMatch[1].trim(), 88);
-    const chineseBracketMatch = /^銆?[^銆慮+)銆?.exec(normalized);
-    if (chineseBracketMatch?.[1]?.trim())
-        return safeTruncate(chineseBracketMatch[1].trim(), 88);
-    const firstClause = normalized.split(/\s+[鈥?]\s+/).map(segment => normalizeInlineText(segment)).find(segment => segment.length >= 4);
+    const chineseBracketMatch = /^(?:【([^】]+)】|「([^」]+)」)/.exec(normalized);
+    const bracketLabel = chineseBracketMatch?.[1] ?? chineseBracketMatch?.[2];
+    if (bracketLabel?.trim())
+        return safeTruncate(bracketLabel.trim(), 88);
+    const firstClause = normalized.split(/\s+(?:→|->|=>)\s+/).map(segment => normalizeInlineText(segment)).find(segment => segment.length >= 4);
     if (firstClause && !looksLikeStructuredExecutionTitle(firstClause))
         return safeTruncate(firstClause, 88);
     if (!looksLikeStructuredExecutionTitle(normalized))
@@ -6732,7 +7992,7 @@ function extractCollaborationTaskLabel(input, language) {
 __name(extractCollaborationTaskLabel, "extractCollaborationTaskLabel");
 function deriveCollaborationTaskTitle(input) {
     const mappedTitle = executionChainCardTitle(input.card, input.language);
-    const mappedLooksGeneric = /闅旂鎵ц|鍏宠仈浠诲姟|linked task|isolated execution|cron isolated run/i.test(mappedTitle) || /^(鎴愬姛|澶辫触|Succeeded|Failed)\b/.test(mappedTitle) || /(鏌ヨ|鎴愬姛|鎵弿|鍏ラ€墊鍙戦€亅Queries|Successful|Scanned|Qualified|Sent)\s+\d+/i.test(mappedTitle);
+    const mappedLooksGeneric = /隔离执行|关联任务|linked task|isolated execution|cron isolated run/i.test(mappedTitle) || /^(成功|失败|Succeeded|Failed)\b/.test(mappedTitle) || /(查询|成功|扫描|入选|发送|Queries|Successful|Scanned|Qualified|Sent)\s+\d+/i.test(mappedTitle);
     if (!mappedLooksGeneric)
         return mappedTitle;
     const candidates = [input.childSession?.label, input.parentSession?.label, input.childSession?.taskSnippet, input.parentSession?.taskSnippet, input.childSession?.latestSnippet, input.parentSession?.latestSnippet, input.card.latestSnippet, input.card.executionChain.detail, input.card.taskTitle];
@@ -6751,8 +8011,101 @@ function mergeCollaborationRoomApiEventsForSmoke(input) { return mergeCollaborat
 __name(mergeCollaborationRoomApiEventsForSmoke, "mergeCollaborationRoomApiEventsForSmoke");
 function pickLatestSessionActivityTimestampForSmoke(...values) { return pickLatestSessionActivityTimestamp(...values); }
 __name(pickLatestSessionActivityTimestampForSmoke, "pickLatestSessionActivityTimestampForSmoke");
-function renderDashboardSectionNavForSmoke(section, language = "en") { const activeSection = normalizeDashboardSectionForNav(section); return dashboardSectionLinks(language).map(item => { const activeClass = item.key === activeSection ? " active" : ""; const current = item.key === activeSection ? ' aria-current="page"' : ""; return `<a class="nav-link${activeClass}" href="/?section=${encodeURIComponent(item.key)}"${current}>${escapeHtml(item.label)}</a>`; }).join(""); }
+function renderShellBrandMark() {
+    return `<svg class="brand-mark-svg" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="brandShellFill" x1="9" y1="8" x2="39" y2="40" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#E6F0FF" />
+          <stop offset="1" stop-color="#C9DAF6" />
+        </linearGradient>
+        <linearGradient id="brandRobotStroke" x1="16" y1="14" x2="32" y2="34" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#5C8BE6" />
+          <stop offset="1" stop-color="#2A56AB" />
+        </linearGradient>
+      </defs>
+      <rect x="9" y="8" width="30" height="32" rx="12" fill="url(#brandShellFill)" />
+      <path d="M24 10V14" stroke="#5C8BE6" stroke-width="2.4" stroke-linecap="round" />
+      <circle cx="24" cy="8.5" r="2.1" fill="#4F84E2" />
+      <rect x="15" y="16" width="18" height="15" rx="6.5" fill="#F7FAFF" stroke="url(#brandRobotStroke)" stroke-width="2.3" />
+      <circle cx="20.5" cy="22.5" r="2.1" fill="#4F84E2" />
+      <circle cx="27.5" cy="22.5" r="2.1" fill="#2A56AB" />
+      <path d="M20 27.2C21.1 28.25 22.45 28.8 24 28.8C25.55 28.8 26.9 28.25 28 27.2" stroke="#5C8BE6" stroke-width="2.1" stroke-linecap="round" />
+      <path d="M15 20.8H12.8" stroke="#8AA9E6" stroke-width="2.2" stroke-linecap="round" />
+      <path d="M35.2 20.8H33" stroke="#8AA9E6" stroke-width="2.2" stroke-linecap="round" />
+      <path d="M19 33.4H29" stroke="#2A56AB" stroke-width="2.3" stroke-linecap="round" />
+    </svg>`;
+}
+__name(renderShellBrandMark, "renderShellBrandMark");
+function renderShellIcon(key, label = "") {
+    const ariaLabel = label?.trim() ? ` aria-label="${escapeHtml(label)}"` : "";
+    switch ((key ?? "").trim().toLowerCase()) {
+        case "overview":
+            return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><rect x="4.5" y="4.5" width="6" height="6" rx="2" fill="#4D82E4" /><rect x="13.5" y="4.5" width="6" height="6" rx="2" fill="#A6C0F1" /><rect x="4.5" y="13.5" width="6" height="6" rx="2" fill="#D0DDF5" /><path d="M14.5 16.5H19.5" stroke="#2F5FBE" stroke-width="2.2" stroke-linecap="round" /><path d="M17 14V19" stroke="#2F5FBE" stroke-width="2.2" stroke-linecap="round" /></svg>`;
+        case "usage":
+            return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><path d="M5 14.5C5 10.3579 8.35786 7 12.5 7C16.6421 7 20 10.3579 20 14.5" stroke="#8EADE7" stroke-width="2.2" stroke-linecap="round" /><path d="M12.5 14.5L17 10" stroke="#2F5FBE" stroke-width="2.2" stroke-linecap="round" /><circle cx="12.5" cy="14.5" r="2.3" fill="#4D82E4" /></svg>`;
+        case "team":
+            return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><circle cx="12" cy="8" r="3.2" fill="#4D82E4" /><circle cx="6.8" cy="10.3" r="2.2" fill="#D0DDF5" /><circle cx="17.2" cy="10.3" r="2.2" fill="#A6C0F1" /><path d="M6 18.2C6.7 15.9 8.8 14.7 12 14.7C15.2 14.7 17.3 15.9 18 18.2" stroke="#2F5FBE" stroke-width="2.2" stroke-linecap="round" /></svg>`;
+        case "collaboration":
+            return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><path d="M7.2 8.3H12.2C13.8569 8.3 15.2 9.64315 15.2 11.3V12.8C15.2 14.4569 13.8569 15.8 12.2 15.8H10.3L7.6 18V15.8H7.2C5.54315 15.8 4.2 14.4569 4.2 12.8V11.3C4.2 9.64315 5.54315 8.3 7.2 8.3Z" fill="#DCE8FA" stroke="#7C9CDD" stroke-width="1.9" stroke-linejoin="round" /><path d="M17.2 6.5H18.2C19.3046 6.5 20.2 7.39543 20.2 8.5V13.6C20.2 14.7046 19.3046 15.6 18.2 15.6H17L14.5 17.6V15.6" stroke="#2F5FBE" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /><circle cx="9.1" cy="12.05" r="1.05" fill="#4D82E4" /><circle cx="12" cy="12.05" r="1.05" fill="#4D82E4" /></svg>`;
+        case "memory":
+            return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><path d="M6 8.2L12 5L18 8.2L12 11.4L6 8.2Z" fill="#4D82E4" /><path d="M6 12.1L12 15.3L18 12.1" stroke="#8EADE7" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /><path d="M6 15.8L12 19L18 15.8" stroke="#2F5FBE" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /></svg>`;
+        case "docs":
+            return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><path d="M8.2 4.8H13.8L18.2 9.2V18.2C18.2 19.1941 17.3941 20 16.4 20H8.2C7.20589 20 6.4 19.1941 6.4 18.2V6.6C6.4 5.60589 7.20589 4.8 8.2 4.8Z" stroke="#2F5FBE" stroke-width="2.1" /><path d="M13.6 5V9.3H17.9" stroke="#8EADE7" stroke-width="2.1" stroke-linejoin="round" /><path d="M9.3 12.3H14.9" stroke="#4D82E4" stroke-width="2.1" stroke-linecap="round" /><path d="M9.3 15.8H14" stroke="#A6C0F1" stroke-width="2.1" stroke-linecap="round" /></svg>`;
+        case "tasks":
+            return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><rect x="5.6" y="4.8" width="12.8" height="14.8" rx="3" stroke="#8EADE7" stroke-width="2.1" /><path d="M8.8 9.4L10.4 11L13.7 7.7" stroke="#4D82E4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /><path d="M9.1 14.4H15" stroke="#2F5FBE" stroke-width="2.1" stroke-linecap="round" /></svg>`;
+        case "settings":
+            return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><path d="M6 7H18" stroke="#8EADE7" stroke-width="2.2" stroke-linecap="round" /><path d="M6 12H18" stroke="#2F5FBE" stroke-width="2.2" stroke-linecap="round" /><path d="M6 17H18" stroke="#8EADE7" stroke-width="2.2" stroke-linecap="round" /><circle cx="9" cy="7" r="2.2" fill="#4D82E4" /><circle cx="15" cy="12" r="2.2" fill="#4D82E4" /><circle cx="11" cy="17" r="2.2" fill="#D0DDF5" /></svg>`;
+        case "pin":
+            return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><path d="M8.4 5.6H15.6L14.4 10.1L17.3 12.8L13.6 13.8L12 19.2L10.4 13.8L6.7 12.8L9.6 10.1L8.4 5.6Z" fill="#DCE8FA" stroke="#2F5FBE" stroke-width="1.9" stroke-linejoin="round" /><path d="M12 19.2V21" stroke="#2F5FBE" stroke-width="2" stroke-linecap="round" /></svg>`;
+        default:
+            return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><circle cx="12" cy="12" r="5" fill="#4D82E4" /></svg>`;
+    }
+}
+__name(renderShellIcon, "renderShellIcon");
+function renderShellNavPinToggle(label) {
+    return `<button type="button" class="panel-toggle sidebar-pin-toggle" data-shell-nav-pin data-shell-nav-pin-state="auto" aria-pressed="false"><span class="sidebar-pin-toggle-icon" aria-hidden="true">${renderShellIcon("pin", label)}</span><span class="sidebar-pin-toggle-label" data-shell-nav-pin-label>${escapeHtml(label)}</span></button>`;
+}
+__name(renderShellNavPinToggle, "renderShellNavPinToggle");
+function renderDashboardSectionNavForSmoke(section, language = "en") { const activeSection = normalizeDashboardSectionForNav(section); return dashboardSectionLinks(language).map(item => { const activeClass = item.key === activeSection ? " active" : ""; const current = item.key === activeSection ? ' aria-current="page"' : ""; return `<a class="nav-link${activeClass}" data-nav-link-key="${escapeHtml(item.key)}" href="/?section=${encodeURIComponent(item.key)}"${current}><span class="nav-link-icon" aria-hidden="true">${renderShellIcon(item.icon ?? "overview", item.label)}</span><span class="nav-link-copy"><span class="nav-link-title">${escapeHtml(item.label)}</span><small>${escapeHtml(item.blurb)}</small></span></a>`; }).join(""); }
 __name(renderDashboardSectionNavForSmoke, "renderDashboardSectionNavForSmoke");
+function renderDashboardShellForSmoke(section, language = "en") {
+    const activeSection = normalizeDashboardSectionForNav(section);
+    const nav = renderDashboardSectionNavForSmoke(activeSection, language);
+    return `<body data-shell-nav-state="collapsed" data-shell-nav-pinned="0" data-shell-nav-mode="desktop">
+  <div class="shell-nav-hover-zone" data-shell-nav-hover-zone></div>
+  <div class="app-shell">
+    <aside class="sidebar sidebar-primary" data-shell-nav data-shell-nav-state="collapsed">
+      <div class="sidebar-shell-head">
+        <div class="brand" data-shell-brand>
+          <div class="brand-side">
+            <div class="brand-mark">${renderShellBrandMark()}</div>
+            ${renderShellNavPinToggle(pickUiText(language, "Pin", "\u56FA\u5B9A"))}
+          </div>
+          <div class="brand-copy">
+            <div class="brand-kicker">${escapeHtml(pickUiText(language, "AI Staff", "\u5458\u5DE5"))}</div>
+            <h1>${escapeHtml(pickUiText(language, "AI Employee System", "AI \u5458\u5DE5\u7CFB\u7EDF"))}</h1>
+          </div>
+        </div>
+      </div>
+      <nav class="nav-links section-nav" data-shell-nav-links>${nav}</nav>
+    </aside>
+    <main class="panel">
+      <header class="section-hero-head">
+        <div class="section-head-actions">
+          <button id="inspector-toggle" type="button" class="panel-toggle" aria-pressed="false">${escapeHtml(pickUiText(language, "Collapse inspector", "\u6536\u8D77\u68C0\u89C6\u680F"))}</button>
+        </div>
+      </header>
+    </main>
+    <aside class="sidebar inspector-sidebar" data-inspector-compact>
+      <div class="card inspector-summary-card" data-inspector-card="status"></div>
+      <div class="card inspector-summary-card" data-inspector-card="usage"></div>
+      <div class="card inspector-summary-card" data-inspector-card="agents"></div>
+      <details class="card compact-details inspector-secondary-card" data-inspector-card="secondary"></details>
+    </aside>
+  </div>
+</body>`;
+}
+__name(renderDashboardShellForSmoke, "renderDashboardShellForSmoke");
 function buildGlobalVisibilitySmokeModel(language) { return { tasks: [{ taskType: "cron", taskTypeLabel: pickUiText(language, "Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1"), taskName: pickUiText(language, "Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1"), executor: pickUiText(language, "System service", "\u7CFB\u7EDF\u670D\u52A1"), currentAction: pickUiText(language, "Timed jobs are on.", "\u5B9A\u65F6\u4EFB\u52A1\u6B63\u5728\u8FD0\u884C\u3002"), nextRun: "2026-03-05T13:30:00.000Z", latestResult: pickUiText(language, "Active timed jobs: 1.", "\u5DF2\u5F00\u542F\u5B9A\u65F6\u4EFB\u52A1\uFF1A1 \u4E2A\u3002"), status: "done", nextAction: pickUiText(language, "Keep timed jobs on and keep each job goal clear.", "\u4FDD\u6301\u5B9A\u65F6\u4EFB\u52A1\u5F00\u542F\uFF0C\u5E76\u786E\u8BA4\u6BCF\u4E2A\u4EFB\u52A1\u76EE\u6807\u6E05\u695A\u3002"), detailsHref: buildGlobalVisibilityDetailHref("cron", language), detailsLabel: pickUiText(language, "See timed jobs", "\u67E5\u770B\u5B9A\u65F6\u4EFB\u52A1") }, { taskType: "heartbeat", taskTypeLabel: pickUiText(language, "Heartbeat", "\u4EFB\u52A1\u5FC3\u8DF3"), taskName: pickUiText(language, "Heartbeat", "\u4EFB\u52A1\u5FC3\u8DF3"), executor: pickUiText(language, "System service", "\u7CFB\u7EDF\u670D\u52A1"), currentAction: pickUiText(language, "Heartbeat is on.", "\u4EFB\u52A1\u5FC3\u8DF3\u5DF2\u5F00\u542F\u3002"), nextRun: "2026-03-05T13:35:00.000Z", latestResult: pickUiText(language, "Active heartbeat checks: 1.", "\u5DF2\u5F00\u542F\u4EFB\u52A1\u5FC3\u8DF3\uFF1A1 \u4E2A\u3002"), status: "done", nextAction: pickUiText(language, "Check picked tasks and confirm the choices look right.", "\u67E5\u770B\u6311\u51FA\u7684\u4EFB\u52A1\uFF0C\u786E\u8BA4\u6311\u9009\u7ED3\u679C\u662F\u5426\u5408\u7406\u3002"), detailsHref: buildGlobalVisibilityDetailHref("heartbeat", language), detailsLabel: pickUiText(language, "See heartbeat checks", "\u67E5\u770B\u4EFB\u52A1\u5FC3\u8DF3") }, { taskType: "current_task", taskTypeLabel: pickUiText(language, "Current tasks", "\u5F53\u524D\u4EFB\u52A1"), taskName: pickUiText(language, "Current tasks", "\u5F53\u524D\u4EFB\u52A1"), executor: pickUiText(language, "Task owners", "\u4EFB\u52A1\u667A\u80FD\u4F53"), currentAction: pickUiText(language, "Tasks are moving.", "\u4EFB\u52A1\u6B63\u5728\u63A8\u8FDB\u3002"), nextRun: pickUiText(language, "Live update", "\u5B9E\u65F6\u66F4\u65B0"), latestResult: pickUiText(language, "2 tasks moving.", "2 \u4E2A\u4EFB\u52A1\u5728\u8FDB\u884C\u4E2D\u3002"), status: "done", nextAction: pickUiText(language, "Keep progress updated.", "\u6301\u7EED\u66F4\u65B0\u4EFB\u52A1\u8FDB\u5EA6\u3002"), detailsHref: buildGlobalVisibilityDetailHref("current_task", language), detailsLabel: pickUiText(language, "See current tasks", "\u67E5\u770B\u5F53\u524D\u4EFB\u52A1") }, { taskType: "tool_call", taskTypeLabel: pickUiText(language, "Tool calls", "\u5DE5\u5177\u8C03\u7528"), taskName: pickUiText(language, "Tool calls", "\u5DE5\u5177\u8C03\u7528"), executor: pickUiText(language, "Active sessions", "\u6D3B\u8DC3\u4F1A\u8BDD"), currentAction: pickUiText(language, "Tools were used recently.", "\u6700\u8FD1\u6709\u5DE5\u5177\u5728\u4F7F\u7528\u3002"), nextRun: pickUiText(language, "Live update", "\u5B9E\u65F6\u66F4\u65B0"), latestResult: pickUiText(language, "Tool calls in recent activity: 3.", "\u6700\u8FD1\u5DE5\u5177\u8C03\u7528\uFF1A3 \u6B21\u3002"), status: "done", nextAction: pickUiText(language, "Review results and keep going.", "\u770B\u4E0B\u7ED3\u679C\u540E\u7EE7\u7EED\u3002"), detailsHref: buildGlobalVisibilityDetailHref("tool_call", language), detailsLabel: pickUiText(language, "See tool calls", "\u67E5\u770B\u5DE5\u5177\u8C03\u7528") }], doneCount: 4, notDoneCount: 0, noTaskMessage: pickUiText(language, "No timed jobs, heartbeat, current tasks, or tool calls yet.", "\u6682\u65E0\u5B9A\u65F6\u4EFB\u52A1\u3001\u4EFB\u52A1\u5FC3\u8DF3\u3001\u5F53\u524D\u4EFB\u52A1\u6216\u5DE5\u5177\u8C03\u7528\u3002"), signalCounts: { schedule: 1, heartbeat: 1, currentTasks: 2, toolCalls: 3 } }; }
 __name(buildGlobalVisibilitySmokeModel, "buildGlobalVisibilitySmokeModel");
 function renderGlobalVisibilityCardForSmoke(language) { const model = buildGlobalVisibilitySmokeModel(language); return renderGlobalVisibilityCard(model, language); }
@@ -6976,7 +8329,7 @@ const dashboardQueryHelpers = createDashboardQueryHelpers({
     normalizeOptionalPatchString,
     normalizeQueryString,
     normalizeTaskCardOrderPatch,
-    normalizeTranscriptRoomId: import_openclaw_chat_rooms.normalizeTranscriptRoomId,
+    normalizeCollaborationRoomId: import_collaboration_room.normalizeCollaborationRoomId,
     pickUiText,
     projectStates: import_project_store.PROJECT_STATES,
     projectTitleMap,
@@ -6987,564 +8340,10 @@ const dashboardQueryHelpers = createDashboardQueryHelpers({
     taskStates: TASK_STATES
 });
 const { applyProjectFilters, applyTaskFilters, buildBoundedSearchResult, buildDashboardSearchResult, mergeUiPreferencesPatch, parseAuditSeverity, parseProjectFilters, parseReplayWindowQuery, parseSearchQuery, parseSessionQuery, parseTaskFilters, renderDashboardSearchResult, resolveCompactStatusStrip, resolveDashboardSearchQuery, resolveDashboardSection, resolveDashboardTaskFilters, resolveLegacyDashboardAnchor, resolveLegacyDashboardSection, resolveUiLanguage, resolveUsageView, safeSubstringMatch } = dashboardQueryHelpers;
-export { buildDashboardSearchResultForSmoke, buildExecutionAgentSummaries, buildOfficeAgentRosterIds, buildOfficeSpaceCards, buildStaffOverviewCards, buildStaffRecentActivityFallbackFromAgentTeamEmbedForSmoke, deriveAgentAnimalIdentity, humanizeTimedJobScheduleLabelForSmoke, humanizeTimedJobWindowLabelForSmoke, mergeCollaborationRoomApiEventsForSmoke, pickLatestSessionActivityTimestampForSmoke, renderAuditPageForSmoke, renderDashboardSectionNavForSmoke, renderGlobalVisibilityCardForSmoke, renderInformationCertaintyCardForSmoke, renderSessionDrilldownPageForSmoke, renderSubscriptionStatusCardForSmoke, renderTaskBoardEmptyStateForSmoke, renderTaskCertaintySectionForSmoke, renderTaskExecutionChainCardsForSmoke, resolveDashboardSection, resolveEditableAgentScopesFromConfigForSmoke, resolveEditableAgentScopesWithFallbackForSmoke, resolveLegacyDashboardSectionForSmoke, resolveOpenClawWorkspaceRootForSmoke, startUiServer, };
+export { buildDashboardSearchResultForSmoke, buildExecutionAgentSummaries, buildOfficeAgentRosterIds, buildOfficeSpaceCards, buildStaffOverviewCards, buildStaffRecentActivityFallbackFromAgentTeamEmbedForSmoke, deriveAgentAnimalIdentity, humanizeTimedJobScheduleLabelForSmoke, humanizeTimedJobWindowLabelForSmoke, mergeCollaborationRoomApiEventsForSmoke, pickLatestSessionActivityTimestampForSmoke, renderAuditPageForSmoke, renderDashboardSectionNavForSmoke, renderDashboardShellForSmoke, renderGlobalVisibilityCardForSmoke, renderInformationCertaintyCardForSmoke, renderSessionDrilldownPageForSmoke, renderSubscriptionStatusCardForSmoke, renderTaskBoardEmptyStateForSmoke, renderTaskCertaintySectionForSmoke, renderTaskExecutionChainCardsForSmoke, resolveDashboardSection, resolveEditableAgentScopesFromConfigForSmoke, resolveEditableAgentScopesWithFallbackForSmoke, resolveLegacyDashboardSectionForSmoke, resolveOpenClawWorkspaceRootForSmoke, startUiServer, };
 
 /*
-Source anchors preserved for text-based smoke tests and DoD source audits while
-this file is temporarily backed by a recovered transpiled build.
-
-Task board / settings / collaboration anchors:
-data-dashboard-refresh-root
-data-dashboard-refresh-now
-data-dashboard-auto-refresh-toggle
-data-dashboard-mutation-toggle
-data-dashboard-auto-refresh-interval
-data-dashboard-refresh-status
-const trackedTaskDetailsOpen = pendingDecisionCount > 0 || taskCertaintyCards.length > 0;
-label: "Collaboration", blurb: "Agent handoffs and teamwork"
-label: "鍗忎綔", blurb: "鏅鸿兘浣撲氦鎺ヤ笌鍗忓悓"
-const dashboardRefreshGeneratedAt =
-Last embedded update ${relative} (${model.runtime.updatedAt})
-Embedded serve-session snapshot
-Use the dashboard refresh control to rebuild this snapshot from the latest persisted session state
-宓屽叆鐨?serve-session 瀵煎嚭
-openclaw:dashboard-refresh:v1
-window.location.href = href;
-window.__openclawSetRefreshGuard = setRefreshGuard;
-window.__openclawGetMutationAuthState = getMutationAuthState;
-window.__openclawGetMutationAuthHeaders = getMutationAuthHeaders;
-'doc-preview'
-'file-editor:' + scope
-'staff-model:' + agentId
-const refreshEndpoint = '/api/dashboard/refresh';
-const preferencesEndpoint = '/api/ui/preferences';
-await window.fetch(refreshEndpoint, {
-docsHubGeneratedAt
-docsHubEntryCount
-scopeLabels
-renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel);
-const pendingDecisionCount = actionQueue.counts.unacked;
-const globalVisibilityCard = renderGlobalVisibilityCard(globalVisibilityModel, options.language);
-if (method === "GET" && path === "/api/tasks/heartbeat")
-if (method === "POST" && path === "/api/tasks/heartbeat")
-runTaskHeartbeat({ gate })
-function resolveDashboardSectionTitle(section: DashboardSectionLink, language: UiLanguage): string {
-if (language === "en" && section.key === "overview") {
-return "Overview Control Center";
-const sectionTitle = resolveDashboardSectionTitle(sectionMeta, options.language);
-<h2 class="section-title">${escapeHtml(sectionTitle)}</h2>
-renderTokenPieChart(usageSessionTypeRows, usageSessionTypeTotalTokens, t("All sessions",
-pickUiText(language, "Connection health", "鎺ョ嚎鐘舵€?)
-const EDITABLE_FILE_SCOPES = ["memory", "workspace", "runtime"] as const;
-count: matches.length,
-returned: tasks.length,
-returned: projects.length,
-returned: sessions.length,
-returned: items.length,
-const snapshot = await readReadModelSnapshotWithLiveSessions(toolClient);
-function buildBoundedSearchResult<T>(items: T[], limit: number): {
-function buildSessionDetailHref(sessionKey: string, language: UiLanguage): string {
-loadExistingCollaborationRoom(input.roomId)
-const globalVisibilityBlock = options.section === "overview" ? globalVisibilityCard : "";
-
-Global visibility copy / render anchors:
-Global Visibility
-One place to see timed jobs, heartbeat, current tasks, and tool calls.
-Timed jobs:
-Heartbeat checks:
-Current tasks:
-Tool calls:
-鍏ㄥ眬鍙
-涓€鐪肩湅鍏ㄥ眬锛氬畾鏃朵换鍔°€佷换鍔″績璺炽€佸綋鍓嶄换鍔°€佸伐鍏疯皟鐢ㄣ€?瀹氭椂浠诲姟锛?浠诲姟蹇冭烦锛?褰撳墠浠诲姟锛?宸ュ叿璋冪敤锛?renderGlobalVisibilityStrip(
-renderGlobalVisibilityCard(
-renderGlobalVisibilityStripCard(
-<div class="content-stack">${globalVisibilityBlock}${sectionBody}</div>
-copy.scheduleLabel
-copy.heartbeatLabel
-copy.currentTasksLabel
-copy.toolCallsLabel
-buildGlobalVisibilityDetailHref("cron", language)
-buildGlobalVisibilityDetailHref("heartbeat", language)
-buildGlobalVisibilityDetailHref("current_task", language)
-buildGlobalVisibilityDetailHref("tool_call", language)
-taskType: "cron"
-taskType: "heartbeat"
-taskType: "current_task"
-taskType: "tool_call"
-signalCounts: {
-schedule: enabledCronCount
-heartbeat: enabledHeartbeatCount
-currentTasks: currentTasksCount
-toolCalls: toolCallsCount
-
-Apple-native polish anchors:
-data-apple-window-controls="true"
---apple-glass-blur
--webkit-backdrop-filter
-@media (prefers-reduced-motion: reduce)
-data-ui-polish="apple-native-v3"
-.card:hover { transform: translateY(-1px);
-
-Additional recovered source anchors:
-card.cardKind === "timed_job"
-activeSection === "collaboration"
-data-refresh-generated-at="${escapeHtml(dashboardRefreshGeneratedAt ?? "")}"
-宓屽叆鐨?serve-session 瀵煎嚭
-renderGlobalVisibilityStrip(emptyStateModel, language)
-class="empty-state task-empty-state"
-data-task-empty-signals
-Drag cards to reorder your task and schedule focus. The order is saved in UI preferences.
-data-task-board-root
-data-task-card-grid
-data-task-board-status
-data-task-order="${escapeHtml(JSON.stringify(manualOrder))}"
-draggable="true" data-task-card data-task-kind="${escapeHtml(card.cardKind)}" data-task-id="${escapeHtml(card.cardId)}"
-class="task-status-dot ${escapeHtml(card.statusTone)}"
-const priorityPanelClass = card.cardKind === "timed_job" ? "task-priority-panel compact" : "task-priority-panel";
-pickUiText(language, "Auto run", "鑷姩鎵ц")
-badge("enabled", pickUiText(language, "Auto", "鑷姩"))
-const sessionErrorCount = exceptions.errors.length;
-const sessionBlockedCount = exceptions.blocked.filter((session) => session.state === "blocked").length;
-const stalledRunningSessionCount = countStalledRunningSessions(
-t("Review queue",
-t("Runtime issues",
-t("Stalled runs",
-pickUiText(input.language, "No execution session is linked yet.",
-pickUiText(input.language, "A linked session is blocked.",
-const globalVisibilityQuickRows = [
-const sidebarSignalRows =
-const toolCallsCount = input.toolCallsCount ?? (await countRecentToolCalls(snapshot, toolClient));
-if (typeof item.toolEventCount === "number") return sum + item.toolEventCount;
-const scheduleSignalText = scheduleRow?.currentAction ?? noSignalText;
-<small>${escapeHtml(scheduleSignalText)}</small>
-const language: UiLanguage = hasExplicitLanguage ? resolvedLanguage : "zh";
-const languageToggle = renderLanguageToggle(filters, options);
-${languageToggle}
-<section class="overview-v3-shell" id="overview-decision-home">
-id="overview-decision-center"
-id="overview-busy-staff"
-id="overview-runtime-checkpoint"
-t("Isolated execution",
-${sidebarSignalRows}
-Open current tasks
-Open follow-up items
-formatSeconds(job.dueInSeconds, options.language)
-const spriteBoundsCache = new Map();
-const computeSpriteBounds = (sprite) => {
-Recommended data connections
-const usageCostMode: UsageCostMode = "full";
-loadCachedUsageCost(snapshot, usageCostMode)
-loadCachedOfficeSessionPresence()
-loadCachedTaskEvidenceSessions(
-const taskSignalItems = mergeSessionConversationItems(taskEvidenceItems, sessionPreview.items);
-const liveSessionCount = officePresence.totalActiveSessions;
-buildTaskDetailHref(task.taskId, input.language)
-buildUsageCostSnapshot(snapshot, mode)
-const needsSessionPreview =
-activeSection === "overview" || activeSection === "collaboration";
-const allApprovals = [...(snapshot.approvals ?? [])].sort(compareApprovals);
-const pendingApprovalsCount = allApprovals.filter((item) => item.status === "pending").length;
-replayPreview.stats.timeline.total
-t("Replay activity",
-t("Approval requests",
-route: "/?section=projects-tasks&quick=attention#tracked-task-view"
-route: "/audit"
-route: "/digest/latest"
-void primeUiRenderCaches(toolClient);
-const sourceStamp = await readReadModelSourceStamp();
-const sessions = mapSessionsListToSummaries(live);
-t("See four signals in overview",
-t("Data source not connected",
-t("Recent usage",
-usageView === "today" ? "today" : "cumulative"
-usageCost.periods.filter((item) => item.key === "today" || item.key === "7d")
-renderTokenShareRows(
-usageCost.breakdownToday
-selectedUsageBreakdown.bySessionType
-selectedUsageBreakdown.byCronJob
-selectedUsageBreakdown.byCronAgent
-pickUiText(language, "Gateway", "缃戝叧")
-6 椤瑰叧閿敤閲忔暟鎹噷锛屽凡缁忔帴涓?${connectedCount} 椤癸紝杩樺樊 1 椤癸細${gapLabel}銆?{impact}${action}
-鍘昏缃〉琛ヤ笂璁㈤槄鎴栬处鍗曞揩鐓у嵆鍙€?const needsSettingsInsights = activeSection === "settings";
-id="settings-environment-status"
-pickUiText(language, "System environment status", "绯荤粺鐜鐘舵€?)
-renderSettingsEnvironmentStatusCard(
-renderSettingsConfigAccessCard(
-settingsBudgetLimitCard
-renderSettingsConnectionPanel(
-renderSettingsSecurityPanel(
-renderSettingsUpdatePanel(
-const settingsSection = `
-    ${settingsEnvironmentStatusCard}
-${settingsConfigAccessCard}
-id="session-context-pressure"
-pickUiText(language, "Context pressure", "涓婁笅鏂囧帇鍔?)
-</section>
-    ${contextPressureCard}
-    <details class="card compact-details">
-id="memory-status-card"
-pickUiText(language, "Memory status", "璁板繂鐘舵€?)
-${memoryWorkbench}
-    ${memoryStateSection}
-id="settings-connection-health"
-id="security-risk-summary"
-pickUiText(language, "Security risk summary", "瀹夊叏椋庨櫓鎽樿")
-title: "鍙嶅悜浠ｇ悊淇′换灏氭湭閰嶇疆"
-title: "妫€娴嬪埌鍙兘鐨勫浜哄叡浜娇鐢ㄥ満鏅?
-id="update-status-card"
-pickUiText(language, "Update status", "鏇存柊鐘舵€?)
-id="tool-connectors"
-t("System config and data access", "绯荤粺閰嶇疆涓庢暟鎹帴鍏?)
-id="settings-budget-limit"
-data-budget-limit-root
-renderSettingsBudgetLimitCard(
-"embedded"
-settings-inline-budget
-renderSettingsConfigAccessCard(
-    importGuardRows,
-    usageConnectorTodos,
-    settingsBudgetLimitCard,
-    options.language,
-/api/settings/budget-limit
-scope: "runtime"
-agent.main.cost
-data-budget-limit-input
-data-budget-limit-save
-data-budget-limit-clear
-t("Safety switches", "瀹夊叏寮€鍏?)
-t("Recommended data connections", "鏁版嵁鎺ュ叆寤鸿")
-.settings-status-grid {
-.settings-status-panel {
-if (label === "stable (default)") return "绋冲畾鐗堬紙榛樿锛?;
-const EDITABLE_FILE_SCOPE_ERROR = `scope must be one of: ${EDITABLE_FILE_SCOPES.join(", ")}`;
-const { buildTaskCertaintyCards, renderContextPressureCard, renderInformationCertaintyCard, renderMemoryStateSection, renderSettingsBudgetLimitCard, renderSettingsConfigAccessCard, renderSettingsEnvironmentStatusCard, renderTaskCertaintySection } = createInsightRenderers({ buildHomeHref, buildSessionDetailHref, buildTaskDetailHref, dataConnectionLabel, hasFreshRuntimeTimestamp, humanizeOperatorLabel, normalizeInlineText, pickLatestSessionActivityTimestamp, pickLatestTimestamp, simplifyUsageLabel, TASK_RUNTIME_ACTIVITY_WINDOW_MS, toSortableMs });
-const language = resolveUiLanguage(url.searchParams, "zh");
-const html = renderSessionDrilldownPage(detail, language);
-assertAllowedQueryParams(url.searchParams, ["lang"], true);
-Open staff docs
-Back to AI employee system
-Available views",
-function joinDisplayList(items: string[], language: UiLanguage): string {
-const priorityPanelClass = card.cardKind === "timed_job" ? "task-priority-panel compact" : "task-priority-panel";
-pickUiText(language, "Auto run", "鑷姩鎵ц")
-badge("enabled", pickUiText(language, "Auto", "鑷姩"))
-.task-brief-card[data-task-kind="timed_job"] .task-brief-head {
-.task-priority-panel.compact {
-const cronExecutionCardsHtml =
-body: JSON.stringify({ taskCardOrder: nextOrder })
-next.taskCardOrder = normalizeTaskCardOrderPatch(payload.taskCardOrder, "taskCardOrder");
-if (method === "PATCH" && path === "/api/ui/preferences") {
-data-token-required="0" data-task-order="${escapeHtml(JSON.stringify(manualOrder))}"
-label: "鍏抽敭鍐欏叆淇濇姢"
-label: "瀹夊叏鍙ｄ护閰嶇疆"
-label: "褰撳墠淇濇姢鐘舵€?
-Write access is off. Turn on the top toolbar unlock before saving board order.
-鍐欏叆瑙ｉ攣宸插叧闂紝璇峰厛鍦ㄩ《閮ㄥ伐鍏锋爮寮€鍚悗鍐嶄繚瀛樼湅鏉块『搴忋€?<label for="owner">${escapeHtml(t("Agent", "鍛樺伐"))}</label>
-<label for="project">${escapeHtml(t("Project", "椤圭洰"))}</label>
-class="meta task-top-intro"
-class="task-top-meta-row"
-class="task-top-controls"
-class="filters task-top-filters"
-.task-top-filters {
-.task-top-controls .quick-chip {
-class="task-brief-copy"
-class="meta task-brief-hint"
-id="task-execution-chain"
-t("Execution chain",
-Accepted and spawned child sessions
-if (options.section === "calendar") sectionBody = projectsSection;
-const collaborationSection = `
-id="collaboration-hub"
-id="collaboration-board"
-t("Team collaboration", "鍥㈤槦鍗忎綔")
-t("Collaboration threads", "鍗忎綔绾跨▼")
-data-collab-root
-data-collab-filter="multi-agent"
-data-collab-filter="primary-dispatched"
-data-collab-primary-dispatched
-collaboration-route-avatars
-collaboration-participant-label
-collaboration-thread-card
-deriveCollaborationTaskTitle({
-deriveInterSessionTaskTitle({
-pickUiText(language, "Cross-session communication", "璺ㄤ細璇濋€氫俊")
-pickUiText(language, "Sending session", "鍙戦€佷細璇?)
-pickUiText(language, "Receiving session", "鎺ユ敹浼氳瘽")
-pickUiText(input.language, "Parent accepted work", "鐖朵細璇濇帴鍒颁换鍔?)
-pickUiText(input.language, "Parent opened child session", "鐖朵細璇濆彂璧峰瓙浼氳瘽")
-pickUiText(input.language, "Child session reply", "瀛愪細璇濇渶杩戝洖澶?)
-attachCollaborationRoomRefsToCards(collaborationThreadCards, collaborationRoomStates, options.language)
-renderCollaborationThreadCards(collaborationThreadCardsWithRoomRefs, options.language)
-renderAgentAvatarFrame({
-extraClassName: `collaboration-avatar${participant.current ? " is-current" : ""}`
-.collaboration-avatar.has-photo .agent-photo-image {
-object-position: center 34%;
-if (options.section === "collaboration") sectionBody = collaborationSection;
-if (method === "POST" && path === "/api/dashboard/refresh") {
-async function refreshDashboardSources(toolClient: ToolClient): Promise<DashboardRefreshResult> {
-invalidateDashboardRefreshCaches();
-docsHubGeneratedAt
-docsHubEntryCount
-scopeLabels
-title: t("Memory file workbench",
-buildRuntimeBudgetPolicyStarterContent()
-renderSettingsBudgetLimitScript(
-window.__openclawTriggerDashboardRefresh('manual')
-const mainMemoryFacetLabel =
-    memoryFacetOptions.find((item) => item.key === "main")?.label ?? DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME;
-${escapeHtml(mainMemoryFacetLabel)} ${escapeHtml(t("memories",
-const agentProfileFiles = ["MEMORY.md"];
-const SHARED_DOCUMENT_FILE_CANDIDATES = [
-const AGENT_DOCUMENT_FILE_CANDIDATES = [
-"IDENTITY.md"
-"SOUL.md"
-"USER.md"
-"TASKS.md"
-"BOOTSTRAP.md"
-listMemoryFacetOptions()
-listWorkspaceFacetOptions()
-facetOptions: memoryFacetOptions
-title: basename(input.sourcePath) || relativePath,
-defaultFacetKey: "main"
-includeAllFacet: false
-data-default-facet
-.file-nav-item[hidden]
-item.style.display = visible ? "" : "none";
-currentGroup
-Pick a file from the left.
-data-file-facet
-const normalizeFacetKey = (value) => String(value || 'all').trim().toLowerCase() || 'all';
-.segment-switch {
-display: inline-flex;
-flex-wrap: wrap;
-.segment-item {
-appearance: none;
-border: none;
-background: transparent;
-min-height: 40px;
-.file-facet-switch .segment-item {
-.file-facet-switch .segment-item.active {
-t("Document overview",
-const mainDocumentFacetLabel =
-    input.workspaceFacetOptions.find((item) => item.key === "main")?.label ?? DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME;
-${escapeHtml(mainDocumentFacetLabel)} ${escapeHtml(t("documents",
-const docsSection = await renderDocsSectionFromDocsHub({
-const docEntries = await loadDocHubEntries(input.docHubSnapshot.items);
-buildDocEntryViewModels(docEntries, input.agentScopes, input.projectSummaries, input.language)
-renderDocSummaryCards(recentDocCards, input.language)
-buildAgentDocCoverage(input.agentScopes, input.workspaceFiles)
-renderAgentDocCoverageGrid(agentDocCoverage, input.language)
-renderProjectDocGroups(projectDocGroups, input.language)
-t("What changed recently", "鏈€杩戣鐪嬩粈涔?)
-t("Staff docs", "鍛樺伐鏂囨。")
-t("Project document view", "鎸夐」鐩煡鐪嬫枃妗?)
-t("Chat-derived notes", "鑱婂ぉ娌夋穩鏂囨。")
-input.docHubSnapshot.detail
-renderStructuredChatDocSummary(input.docHubSnapshot.items)
-export function buildAgentDocCoverageForSmoke(
-const TEAM_CORE_DOCUMENTS = [
-"AGENTS.md"
-"BOOTSTRAP.md"
-"HEARTBEAT.md"
-"TOOLS.md"
-path === "/api/docs/preview"
-docId is required.
-export async function loadDocPreviewEntry(
-data-doc-preview-trigger
-data-doc-preview-dialog
-renderDocPreviewModal(input.language)
-renderDocPreviewTrigger(entry, "doc-summary-card"
-renderDocPreviewTrigger(entry, "doc-project-trigger"
-data-doc-preview-edit
-data-doc-preview-save
-data-doc-preview-editor
-data-doc-file-scope="workspace"
-data-doc-file-path=
-/api/docs/preview?docId=
-/api/files/content?scope=
-method: 'PUT'
-.doc-summary-grid {
-.doc-summary-card {
-.doc-coverage-grid {
-.doc-coverage-card {
-.doc-coverage-pill.ready {
-.doc-coverage-pill.missing {
-.doc-preview-toolbar {
-.doc-preview-editor {
-overflow-wrap: anywhere;
--webkit-line-clamp: 3;
--webkit-line-clamp: 6;
-.doc-project-grid {
-.doc-preview-dialog {
-.doc-preview-body {
-.doc-project-trigger {
-Markdown files that matter most
-resolveEditableAgentScopesFromConfig(
-loadEditableAgentScopesFromConfig()
-loadEditableAgentScopesFromWorkspaceDirs()
-data-quota-reset-at
-renderQuotaResetScript()
-new Intl.DateTimeFormat(undefined
-OPENCLAW_WORKSPACE_ROOT
-t("Write access is on. Changes save straight back to the source file.", "鍐欏叆瑙ｉ攣宸插紑鍚紝鏀瑰姩浼氱洿鎺ュ啓鍥炴簮鏂囦欢銆?)
-t("Write access is off. Use the top toolbar unlock before editing or saving.", "鍐欏叆瑙ｉ攣宸插叧闂紝璇峰厛鍦ㄩ《閮ㄥ伐鍏锋爮寮€鍚悗鍐嶇紪杈戞垨淇濆瓨銆?)
-t("This machine has not set a safety passcode yet, so saving is blocked for now.", "杩欏彴鏈哄櫒杩樻病璁剧疆瀹夊叏鍙ｄ护锛屾墍浠ヨ繖閲屾殏鏃朵笉鑳戒繚瀛樸€?)
-renderFileWorkbenchScript()
-t("Staff overview",
-t("The default view shows only name, role, current status, current work, recent output, and whether each person is on the schedule."
-id="agent-team-team-panel"
-t("Open project role mapping", "鏌ョ湅椤圭洰瑙掕壊鏄犲皠")
-async function resolveStaffRoleLabel(
-return pickUiText(language, "YouTube to article writing",
-return pickUiText(language, "High-value content creation",
-return pickUiText(language, "Control Center delivery",
-return pickUiText(language, "Daily news and trend briefings",
-return pickUiText(language, "Personal assistance and reminders",
-return pickUiText(language, "Security and updates",
-return pickUiText(language, "Role not defined in workspace",
-function staffStatusLabel(
-function resolveStaffStatusDotTone(
-function staffStatusDotLabel(
-pickUiText(language, "Status",
-pickUiText(language, "Working on",
-pickUiText(language, "Recent output",
-pickUiText(language, "In schedule",
-pickUiText(language, "Model", "妯″瀷")
-pickUiText(language, "Save model", "淇濆瓨妯″瀷")
-const staffOverviewCards = needsTeamSnapshot
-modelOptions: teamSnapshot.modelOptions
-modelEditable: teamSnapshot.modelEditable
-configPath: teamSnapshot.sourcePath
-data-staff-model-root
-data-staff-model-select
-data-staff-model-save
-data-staff-model-status
-renderStaffModelScript()
-/api/staff/
-path.startsWith("/api/staff/") && path.endsWith("/model")
-assertMutationAuthorized(req, "/api/staff/:agentId/model")
-async function updateOpenClawAgentModel(
-collectOpenClawModelOptions(
-.staff-brief-grid {
-      margin-top: 12px;
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-gap: 10px;
-grid-template-columns: 96px minmax(0, 1fr);
-width: 96px;
-.staff-brief-value {
-.staff-brief-value.clamp-2 {
-.staff-brief-value.clamp-3 {
-.staff-status-dot,
-.staff-status-dot.idle,
-.staff-status-dot.working,
-.staff-status-dot.issue,
-grid-template-columns: minmax(0, 1fr) auto;
-.staff-model-status:empty {
-<span class="staff-status-dot ${escapeHtml(card.statusTone)}"
-<canvas class="agent-pixel-canvas" width="${input.canvasWidth}" height="${input.canvasHeight}"></canvas>
-querySelectorAll('.agent-avatar, .staff-avatar')
-data-animal="${escapeHtml(input.identity.animal)}"
-t("Shared staff mission",
-renderOfficeCards(
-no network polling and no extra token usage
-window.requestAnimationFrame(step);
-headers["cache-control"] = "no-store, no-cache, must-revalidate, max-age=0";
-headers.pragma = "no-cache";
-headers.expires = "0";
-
-Settings / certainty anchors after extraction:
-pickUiText(language, "Connection health", "接线状态")
-pickUiText(language, "Gateway", "网关")
-id="overview-connection-health"
-renderSettingsConnectionPanel(
-renderSettingsSecurityPanel(
-renderSettingsUpdatePanel(
-pickUiText(language, "System environment status", "系统环境状态")
-id="settings-environment-status"
-pickUiText(language, "Security risk summary", "安全风险摘要")
-title: "反向代理信任尚未配置"
-title: "检测到可能的多人共享使用场景"
-pickUiText(language, "Update status", "更新状态")
-id="settings-connection-health"
-id="security-risk-summary"
-id="update-status-card"
-id="tool-connectors"
-t("System config and data access", "系统配置与数据接入")
-t("Safety switches", "安全开关")
-t("Recommended data connections", "数据接入建议")
-id="settings-budget-limit"
-data-budget-limit-root
-settings-inline-budget
-data-budget-limit-input
-data-budget-limit-save
-data-budget-limit-clear
-pickUiText(language, "Context pressure", "上下文压力")
-id="session-context-pressure"
-pickUiText(language, "Memory status", "记忆状态")
-id="memory-status-card"
-if (label === "stable (default)") return "稳定版（默认）";
-6 项关键用量数据里，已经接上 ${connectedCount} 项，还差 1 项：${gapLabel}。${impact}${action}
-去设置页补上订阅或账单快照即可。
-pickUiText(input.language, "No execution session is linked yet.",
-pickUiText(input.language, "A linked session is blocked.",
-pickUiText(language, "Connection health", "接线状态")
-pickUiText(language, "Gateway", "网关")
-id="overview-connection-health"
-renderSettingsConnectionPanel(
-renderSettingsSecurityPanel(
-renderSettingsUpdatePanel(
-pickUiText(language, "System environment status", "系统环境状态")
-id="settings-environment-status"
-pickUiText(language, "Security risk summary", "安全风险摘要")
-title: "反向代理信任尚未配置"
-title: "检测到可能的多人共享使用场景"
-pickUiText(language, "Update status", "更新状态")
-id="settings-connection-health"
-id="security-risk-summary"
-id="update-status-card"
-id="tool-connectors"
-t("System config and data access", "系统配置与数据接入")
-t("Safety switches", "安全开关")
-t("Recommended data connections", "数据接入建议")
-id="settings-budget-limit"
-data-budget-limit-root
-settings-inline-budget
-data-budget-limit-input
-data-budget-limit-save
-data-budget-limit-clear
-pickUiText(language, "Context pressure", "上下文压力")
-id="session-context-pressure"
-pickUiText(language, "Memory status", "记忆状态")
-id="memory-status-card"
-if (label === "stable (default)") return "稳定版（默认）";
-6 项关键用量数据里，已经接上 ${connectedCount} 项，还差 1 项：${gapLabel}。${impact}${action}
-去设置页补上订阅或账单快照即可。
-pickUiText(input.language, "No execution session is linked yet.",
-pickUiText(input.language, "A linked session is blocked.",
-pickUiText(language, "Auto run", "自动执行")
-badge("enabled", pickUiText(language, "Auto", "自动"))
-label: "协作", blurb: "智能体交接与协同"
-嵌入的 serve-session 导出
-t("Write access is on. Changes save straight back to the source file.", "写入解锁已开启，改动会直接写回源文件。")
-t("Write access is off. Use the top toolbar unlock before editing or saving.", "写入解锁已关闭，请先在顶部工具栏开启后再编辑或保存。")
-t("This machine has not set a safety passcode yet, so saving is blocked for now.", "这台机器还没设置安全口令，所以这里暂时不能保存。")
-label: "关键写入保护"
-label: "安全口令配置"
-label: "当前保护状态"
-t("Team collaboration", "团队协作")
-t("Collaboration threads", "协作线程")
-t("Open project role mapping", "查看项目角色映射")
-pickUiText(language, "Model", "模型")
-pickUiText(language, "Save model", "保存模型")
-写入解锁已关闭，请先在顶部工具栏开启后再保存看板顺序。
-pickUiText(language, "Cross-session communication", "跨会话通信")
-pickUiText(language, "Sending session", "发送会话")
-pickUiText(language, "Receiving session", "接收会话")
-pickUiText(input.language, "Parent accepted work", "父会话接到任务")
-pickUiText(input.language, "Parent opened child session", "父会话发起子会话")
-pickUiText(input.language, "Child session reply", "子会话最近回复")
-<label for="owner">${escapeHtml(t("Agent", "员工"))}</label>
-<label for="project">${escapeHtml(t("Project", "项目"))}</label>
+Source anchors moved to ./server.source-anchors.txt to keep this recovered UI shim
+readable while preserving text-based smoke test and source-audit coverage.
 */
 

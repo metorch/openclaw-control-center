@@ -12,9 +12,12 @@ test("usage-cost snapshot marks disconnected sources with explicit placeholders"
   assert(today, "Expected today usage period.");
   assert.equal(today.requestCountStatus, "not_connected");
   assert.equal(usage.contextWindows[0]?.thresholdState, "not_connected");
-  assert.equal(usage.budget.status, "not_connected");
+  assert.equal(usage.budget.status, "ok");
+  assert.equal(usage.budget.isUnlimited, true);
+  assert.equal(usage.connectors.budgetLimit, "connected");
   assert(usage.connectors.todos.some((item) => item.id === "request_counter"));
   assert(usage.connectors.todos.some((item) => item.id === "context_catalog"));
+  assert(!usage.connectors.todos.some((item) => item.id === "cost_budget_limit"));
 });
 
 test("usage-cost snapshot computes context percent and burn-rate status when sources exist", async () => {

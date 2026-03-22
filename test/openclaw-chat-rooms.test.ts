@@ -3,7 +3,11 @@ import test from "node:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { readOpenClawChatRoomHistory } from "../src/runtime/openclaw-chat-rooms";
+import {
+  deleteOpenClawChatRoom,
+  loadActiveOpenClawChatRoomId,
+  readOpenClawChatRoomHistory,
+} from "../src/runtime/openclaw-chat-rooms";
 import { normalizeSessionHistoryMessages } from "../src/runtime/session-conversations";
 
 test("openclaw room history can read transcript messages from a selected room", async () => {
@@ -190,4 +194,85 @@ test("normalizeSessionHistoryMessages hides assistant thinking and commentary-on
       .map((message) => message.content),
     ["HTML 已生成并附上。"],
   );
+});
+test("deleting the active openclaw room switches the active room to a surviving transcript", async () => {
+  const openclawHome = await mkdtemp(join(tmpdir(), "openclaw-room-delete-"));
+  try {
+    const workspaceRoot = join(openclawHome, "workspace");
+    const sessionsDir = join(openclawHome, "agents", "main", "sessions");
+    const deletedRoomId = "12345678-1234-4abc-8def-111111111111";
+    const fallbackRoomId = "12345678-1234-4abc-8def-222222222222";
+
+    const writeTranscript = async (roomId: string, text: string, timestamp: string) => {
+      await writeFile(
+        join(sessionsDir, `${roomId}.jsonl`),
+        [
+          JSON.stringify({
+            type: "session",
+            version: 3,
+            id: roomId,
+            timestamp,
+            cwd: workspaceRoot,
+          }),
+          JSON.stringify({
+            type: "message",
+            timestamp,
+            message: {
+              role: "user",
+              content: [{ type: "text", text }],
+              timestamp,
+            },
+          }),
+        ].join("\n"),
+        "utf8",
+      );
+    };
+
+    await mkdir(sessionsDir, { recursive: true });
+    await writeTranscript(deletedRoomId, "Delete me", "2026-03-19T10:00:00.000Z");
+    await writeTranscript(fallbackRoomId, "Keep me", "2026-03-19T10:05:00.000Z");
+    await writeFile(
+      join(sessionsDir, "sessions.json"),
+      `${JSON.stringify(
+        {
+          "agent:main:main": {
+            updatedAt: Date.now(),
+            sessionFile: join(sessionsDir, `${deletedRoomId}.jsonl`),
+            chatType: "direct",
+            lastChannel: "webchat",
+            origin: {
+              provider: "webchat",
+              surface: "webchat",
+              chatType: "direct",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const deleted = await deleteOpenClawChatRoom({
+      agentId: "main",
+      roomId: deletedRoomId,
+      workspaceRoot,
+      openclawHomeDir: openclawHome,
+    });
+
+    assert.deepEqual(deleted, {
+      deletedRoomId,
+      fallbackRoomId,
+    });
+    assert.equal(
+      await loadActiveOpenClawChatRoomId({
+        agentId: "main",
+        workspaceRoot,
+        openclawHomeDir: openclawHome,
+      }),
+      fallbackRoomId,
+    );
+  } finally {
+    await rm(openclawHome, { recursive: true, force: true });
+  }
 });

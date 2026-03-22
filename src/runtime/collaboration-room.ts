@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { isPrimaryOperatorAgentId } from "./operator-display";
 
-// OpenClaw transcript files are the canonical chat-room list. This runtime store
-// is only the supplemental collaboration layer for per-room events, attachments,
-// and non-primary agent session bindings.
+// Collaboration rooms are the canonical room store for control-center group chat.
+// OpenClaw transcripts remain optional sidecars for primary-agent compatibility
+// and transcript backfill.
 
 const RUNTIME_DIR = join(process.cwd(), "runtime");
 const COLLABORATION_ROOM_DIR = join(RUNTIME_DIR, "collaboration-room");
@@ -95,6 +95,7 @@ export interface CollaborationTaskReceipt {
   projectId: string;
   reviewState?: "awaiting_review" | "approved" | "rejected";
   lastResultState?: "in_progress" | "awaiting_review" | "blocked" | "failed";
+  waitingFor?: "jarvis_review" | "user_confirmation";
   lastReportedAt: string;
   lastReportedBy: string;
   taskTitle?: string;
@@ -131,8 +132,13 @@ export interface CollaborationRoomSummary {
   eventCount: number;
 }
 
+// Shared room content lives in per-room state. These view-state fields remain
+// only for legacy compatibility and should not drive current UI selection or
+// unread math.
 interface CollaborationRoomsIndexState {
   version: 2;
+  activeRoomId?: string;
+  roomReadCursors?: Record<string, number>;
   rooms: CollaborationRoomSummary[];
 }
 
@@ -190,6 +196,62 @@ export async function listCollaborationRooms(): Promise<CollaborationRoomSummary
   return [...index.rooms].sort(compareRoomSummaryRecency);
 }
 
+export async function loadActiveCollaborationRoomId(): Promise<string | undefined> {
+  const index = await loadCollaborationRoomsIndex();
+  return normalizeRoomId(index.activeRoomId);
+}
+
+export async function setActiveCollaborationRoomId(roomId: string): Promise<string> {
+  const normalizedRoomId = normalizeRoomId(roomId);
+  if (!normalizedRoomId) {
+    throw new Error("A valid roomId is required.");
+  }
+
+  return mutateCollaborationRoomStore(async () => {
+    const index = await loadCollaborationRoomsIndex();
+    await writeCollaborationRoomsIndex({
+      ...index,
+      activeRoomId: normalizedRoomId,
+    });
+    return normalizedRoomId;
+  });
+}
+
+export async function loadCollaborationRoomReadCursor(roomId: string): Promise<number> {
+  const normalizedRoomId = normalizeRoomId(roomId);
+  if (!normalizedRoomId) {
+    return 0;
+  }
+  const index = await loadCollaborationRoomsIndex();
+  const cursor = index.roomReadCursors?.[normalizedRoomId] ?? 0;
+  return Number.isInteger(cursor) && cursor >= 0 ? cursor : 0;
+}
+
+export async function setCollaborationRoomReadCursor(roomId: string, sequence: number): Promise<number> {
+  const normalizedRoomId = normalizeRoomId(roomId);
+  const normalizedSequence = Number.isInteger(sequence) && sequence >= 0 ? sequence : 0;
+  if (!normalizedRoomId) {
+    throw new Error("A valid roomId is required.");
+  }
+
+  return mutateCollaborationRoomStore(async () => {
+    const index = await loadCollaborationRoomsIndex();
+    const existingCursor = index.roomReadCursors?.[normalizedRoomId] ?? 0;
+    const nextSequence = Math.max(
+      normalizedSequence,
+      Number.isInteger(existingCursor) ? existingCursor : 0,
+    );
+    await writeCollaborationRoomsIndex({
+      ...index,
+      roomReadCursors: {
+        ...(index.roomReadCursors ?? {}),
+        [normalizedRoomId]: nextSequence,
+      },
+    });
+    return nextSequence;
+  });
+}
+
 export async function loadAllCollaborationRooms(): Promise<CollaborationRoomState[]> {
   const summaries = await listCollaborationRooms();
   const rooms = await Promise.all(summaries.map((summary) => loadCollaborationRoom(summary.roomId)));
@@ -197,13 +259,17 @@ export async function loadAllCollaborationRooms(): Promise<CollaborationRoomStat
 }
 
 export async function createCollaborationRoom(input?: {
+  roomId?: string;
   title?: string;
   titleMode?: CollaborationRoomTitleMode;
   projectId?: string;
 }): Promise<CollaborationRoomSummary> {
   return mutateCollaborationRoomStore(async () => {
     const index = await loadCollaborationRoomsIndex();
-    const roomId = buildGeneratedCollaborationRoomId();
+    const roomId = normalizeRoomId(input?.roomId) ?? buildGeneratedCollaborationRoomId();
+    if (index.rooms.some((item) => item.roomId === roomId)) {
+      throw new Error("Collaboration room already exists.");
+    }
     const title =
       normalizeRoomTitle(input?.title) ??
       (index.rooms.length === 0 ? DEFAULT_COLLABORATION_ROOM_TITLE : `Chat ${index.rooms.length + 1}`);
@@ -215,7 +281,14 @@ export async function createCollaborationRoom(input?: {
     });
     await writeCollaborationRoomState(state);
     const summary = buildCollaborationRoomSummary(state);
-    await writeCollaborationRoomsIndex(mergeCollaborationRoomSummary(index, summary));
+    await writeCollaborationRoomsIndex({
+      ...mergeCollaborationRoomSummary(index, summary),
+      activeRoomId: roomId,
+      roomReadCursors: {
+        ...(index.roomReadCursors ?? {}),
+        [roomId]: 0,
+      },
+    });
     return summary;
   });
 }
@@ -247,6 +320,10 @@ export async function deleteCollaborationRoom(roomId: string): Promise<{
       await writeCollaborationRoomState(fallbackState);
       await writeCollaborationRoomsIndex({
         version: 2,
+        activeRoomId: fallbackState.roomId,
+        roomReadCursors: {
+          [fallbackState.roomId]: 0,
+        },
         rooms: [buildCollaborationRoomSummary(fallbackState)],
       });
       return {
@@ -257,6 +334,13 @@ export async function deleteCollaborationRoom(roomId: string): Promise<{
 
     const nextIndex = {
       version: 2 as const,
+      activeRoomId:
+        normalizeRoomId(index.activeRoomId) === normalizedRoomId || !normalizeRoomId(index.activeRoomId)
+          ? resolveFallbackActiveRoomId(remaining)
+          : normalizeRoomId(index.activeRoomId),
+      roomReadCursors: Object.fromEntries(
+        Object.entries(index.roomReadCursors ?? {}).filter(([key]) => key !== normalizedRoomId),
+      ),
       rooms: [...remaining].sort(compareRoomSummaryRecency),
     };
     await writeCollaborationRoomsIndex(nextIndex);
@@ -282,7 +366,14 @@ export async function loadExistingCollaborationRoom(
   const normalizedRoomId = normalizeRoomId(roomId) ?? DEFAULT_COLLABORATION_ROOM_ID;
   const index = await loadCollaborationRoomsIndex();
   const summary = index.rooms.find((item) => item.roomId === normalizedRoomId);
-  if (!summary) return undefined;
+  if (!summary) {
+    const recovered = await readCollaborationRoomStateFromDisk(normalizedRoomId);
+    if (!recovered) return undefined;
+    await writeCollaborationRoomsIndex(
+      mergeCollaborationRoomSummary(index, buildCollaborationRoomSummary(recovered)),
+    );
+    return recovered;
+  }
   return readPersistedCollaborationRoom(normalizedRoomId, summary);
 }
 
@@ -290,23 +381,16 @@ async function readPersistedCollaborationRoom(
   roomId: string,
   summary: CollaborationRoomSummary,
 ): Promise<CollaborationRoomState> {
-  try {
-    const raw = await readFile(resolveCollaborationRoomStatePath(roomId), "utf8");
-    return normalizeCollaborationRoom(JSON.parse(raw) as unknown, {
-      roomId,
-      title: summary.title,
-      createdAt: summary.createdAt,
-    });
-  } catch {
-    const fallback = defaultCollaborationRoomState({
-      roomId,
-      title: summary.title,
-      now: summary.createdAt,
-    });
-    fallback.updatedAt = summary.updatedAt;
-    fallback.lastSequence = summary.lastSequence;
-    return fallback;
-  }
+  const persisted = await readCollaborationRoomStateFromDisk(roomId, summary);
+  if (persisted) return persisted;
+  const fallback = defaultCollaborationRoomState({
+    roomId,
+    title: summary.title,
+    now: summary.createdAt,
+  });
+  fallback.updatedAt = summary.updatedAt;
+  fallback.lastSequence = summary.lastSequence;
+  return fallback;
 }
 
 export async function saveCollaborationRoom(state: CollaborationRoomState): Promise<string> {
@@ -320,9 +404,19 @@ export async function saveCollaborationRoom(state: CollaborationRoomState): Prom
   await ensureCollaborationRoomsReady();
   await writeCollaborationRoomState(normalized);
   const index = await loadCollaborationRoomsIndex();
-  await writeCollaborationRoomsIndex(
-    mergeCollaborationRoomSummary(index, buildCollaborationRoomSummary(normalized)),
-  );
+  const nextIndex = mergeCollaborationRoomSummary(index, buildCollaborationRoomSummary(normalized));
+  const existingCursor = nextIndex.roomReadCursors?.[normalized.roomId] ?? 0;
+  await writeCollaborationRoomsIndex({
+    ...nextIndex,
+    activeRoomId: normalizeRoomId(nextIndex.activeRoomId) ?? normalized.roomId,
+    roomReadCursors: {
+      ...(nextIndex.roomReadCursors ?? {}),
+      [normalized.roomId]:
+        Number.isInteger(existingCursor) && existingCursor >= 0
+          ? existingCursor
+          : 0,
+    },
+  });
   return resolveCollaborationRoomStatePath(normalized.roomId);
 }
 
@@ -666,10 +760,29 @@ export function resolveCollaborationDispatchTargets(input: {
   participants: CollaborationParticipantMention[];
   primaryAgentId: string;
 }): string[] {
-  const primaryAgentId = input.primaryAgentId.trim();
   const mentioned = parseMentionedAgentIds(input.message, input.participants);
   if (mentioned.length === 0) {
-    return primaryAgentId ? [primaryAgentId] : [];
+    const preferredPrimary = input.participants.find((participant) => {
+      const agentId = participant.agentId?.trim();
+      if (!agentId) {
+        return false;
+      }
+      if (agentId.toLowerCase() === String(input.primaryAgentId || "").trim().toLowerCase()) {
+        return true;
+      }
+      return isPrimaryOperatorAgentId(agentId) && isPrimaryOperatorAgentId(input.primaryAgentId);
+    })?.agentId?.trim();
+    if (preferredPrimary) {
+      return [preferredPrimary];
+    }
+    const fallbackPrimary = String(input.primaryAgentId || "").trim();
+    if (fallbackPrimary) {
+      return [fallbackPrimary];
+    }
+    const firstParticipant = input.participants
+      .map((participant) => participant.agentId?.trim())
+      .find((agentId): agentId is string => Boolean(agentId));
+    return firstParticipant ? [firstParticipant] : [];
   }
   return mentioned;
 }
@@ -689,6 +802,7 @@ export function normalizeMentionAlias(input: string): string {
     .trim()
     .toLowerCase()
     .replace(/^@+/, "")
+    .replace(/[.,!?;:，。！？；：、》」』】）]+$/gu, "")
     .replace(/[^\p{L}\p{N}._:-]+/gu, "");
 }
 
@@ -886,12 +1000,17 @@ function normalizeTaskReceipt(input: unknown): CollaborationTaskReceipt | null {
     obj.lastResultState === "failed"
       ? obj.lastResultState
       : undefined;
+  const waitingFor =
+    obj.waitingFor === "jarvis_review" || obj.waitingFor === "user_confirmation"
+      ? obj.waitingFor
+      : undefined;
 
   return {
     taskId,
     projectId,
     reviewState,
     lastResultState,
+    waitingFor,
     lastReportedAt,
     lastReportedBy,
     taskTitle: trimText(asString(obj.taskTitle), 240),
@@ -1051,6 +1170,10 @@ function normalizeRoomId(input: string | undefined): string | undefined {
   return value ? value.slice(0, 120) : undefined;
 }
 
+export function normalizeCollaborationRoomId(input: string | undefined): string | undefined {
+  return normalizeRoomId(input);
+}
+
 function normalizeRoomTitle(input: string | undefined): string | undefined {
   const value = String(input || "")
     .replace(/[\u0000-\u001F\u007F]/g, " ")
@@ -1126,6 +1249,10 @@ function compareRoomSummaryRecency(a: CollaborationRoomSummary, b: Collaboration
   return a.title.localeCompare(b.title);
 }
 
+function resolveFallbackActiveRoomId(rooms: CollaborationRoomSummary[]): string {
+  return rooms[0]?.roomId ?? DEFAULT_COLLABORATION_ROOM_ID;
+}
+
 function buildCollaborationRoomSummary(state: CollaborationRoomState): CollaborationRoomSummary {
   return {
     roomId: state.roomId,
@@ -1145,11 +1272,23 @@ function normalizeCollaborationRoomsIndex(input: unknown): CollaborationRoomsInd
     .map((item) => normalizeCollaborationRoomSummary(item))
     .filter((item): item is CollaborationRoomSummary => Boolean(item))
     .sort(compareRoomSummaryRecency);
+  const activeRoomId = normalizeRoomId(asString(obj?.activeRoomId));
+  const roomReadCursors = normalizeCollaborationRoomReadCursors(obj?.roomReadCursors);
 
   return {
     version: 2,
+    activeRoomId,
+    roomReadCursors,
     rooms,
   };
+}
+
+function collaborationRoomsIndexEquals(
+  left: CollaborationRoomsIndexState | undefined,
+  right: CollaborationRoomsIndexState | undefined,
+): boolean {
+  return JSON.stringify(normalizeCollaborationRoomsIndex(left ?? { version: 2, rooms: [] })) ===
+    JSON.stringify(normalizeCollaborationRoomsIndex(right ?? { version: 2, rooms: [] }));
 }
 
 function normalizeCollaborationRoomSummary(input: unknown): CollaborationRoomSummary | null {
@@ -1185,8 +1324,27 @@ function mergeCollaborationRoomSummary(
   nextRooms.sort(compareRoomSummaryRecency);
   return {
     version: 2,
+    activeRoomId: normalizeRoomId(index.activeRoomId),
+    roomReadCursors: normalizeCollaborationRoomReadCursors(index.roomReadCursors),
     rooms: nextRooms,
   };
+}
+
+function normalizeCollaborationRoomReadCursors(input: unknown): Record<string, number> {
+  const obj = asObject(input);
+  if (!obj) {
+    return {};
+  }
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    const roomId = normalizeRoomId(key);
+    const cursor = asInteger(value);
+    if (!roomId || cursor === undefined || cursor < 0) {
+      continue;
+    }
+    out[roomId] = cursor;
+  }
+  return out;
 }
 
 async function ensureCollaborationRoomsReady(): Promise<void> {
@@ -1200,15 +1358,13 @@ async function initializeCollaborationRooms(): Promise<void> {
   await mkdir(COLLABORATION_ROOM_DIR, { recursive: true });
   await mkdir(COLLABORATION_ROOMS_DIR, { recursive: true });
 
-  try {
-    const raw = await readFile(COLLABORATION_ROOMS_INDEX_PATH, "utf8");
-    const index = normalizeCollaborationRoomsIndex(JSON.parse(raw) as unknown);
-    if (index.rooms.length > 0) {
-      await writeCollaborationRoomsIndex(index);
-      return;
+  const persistedIndex = await readCollaborationRoomsIndexFile();
+  const recoveredIndex = await recoverCollaborationRoomsIndex(persistedIndex);
+  if (recoveredIndex.rooms.length > 0) {
+    if (!collaborationRoomsIndexEquals(persistedIndex, recoveredIndex)) {
+      await writeCollaborationRoomsIndex(recoveredIndex);
     }
-  } catch {
-    // Continue into bootstrap or legacy migration.
+    return;
   }
 
   const legacy = await loadLegacyCollaborationRoom();
@@ -1219,6 +1375,7 @@ async function initializeCollaborationRooms(): Promise<void> {
   await writeCollaborationRoomState(bootstrapped);
   await writeCollaborationRoomsIndex({
     version: 2,
+    roomReadCursors: {},
     rooms: [buildCollaborationRoomSummary(bootstrapped)],
   });
 }
@@ -1237,12 +1394,13 @@ async function loadLegacyCollaborationRoom(): Promise<CollaborationRoomState | u
 
 async function loadCollaborationRoomsIndex(): Promise<CollaborationRoomsIndexState> {
   await ensureCollaborationRoomsReady();
-  try {
-    const raw = await readFile(COLLABORATION_ROOMS_INDEX_PATH, "utf8");
-    const index = normalizeCollaborationRoomsIndex(JSON.parse(raw) as unknown);
-    if (index.rooms.length > 0) return index;
-  } catch {
-    // Continue into synthesized default room.
+  const persistedIndex = await readCollaborationRoomsIndexFile();
+  const recoveredIndex = await recoverCollaborationRoomsIndex(persistedIndex);
+  if (recoveredIndex.rooms.length > 0) {
+    if (!collaborationRoomsIndexEquals(persistedIndex, recoveredIndex)) {
+      await writeCollaborationRoomsIndex(recoveredIndex);
+    }
+    return recoveredIndex;
   }
 
   const fallbackState = defaultCollaborationRoomState({
@@ -1252,6 +1410,7 @@ async function loadCollaborationRoomsIndex(): Promise<CollaborationRoomsIndexSta
   await writeCollaborationRoomState(fallbackState);
   const fallbackIndex = {
     version: 2 as const,
+    roomReadCursors: {},
     rooms: [buildCollaborationRoomSummary(fallbackState)],
   };
   await writeCollaborationRoomsIndex(fallbackIndex);
@@ -1262,6 +1421,13 @@ async function ensureCollaborationRoomSummary(roomId: string): Promise<Collabora
   const index = await loadCollaborationRoomsIndex();
   const existing = index.rooms.find((item) => item.roomId === roomId);
   if (existing) return existing;
+
+  const recovered = await readCollaborationRoomStateFromDisk(roomId);
+  if (recovered) {
+    const nextIndex = mergeCollaborationRoomSummary(index, buildCollaborationRoomSummary(recovered));
+    await writeCollaborationRoomsIndex(nextIndex);
+    return nextIndex.rooms.find((item) => item.roomId === roomId) ?? buildCollaborationRoomSummary(recovered);
+  }
 
   const fallbackState = defaultCollaborationRoomState({
     roomId,
@@ -1290,6 +1456,65 @@ async function writeCollaborationRoomState(state: CollaborationRoomState): Promi
   });
   await mkdir(resolveCollaborationRoomDir(normalized.roomId), { recursive: true });
   await writeFile(resolveCollaborationRoomStatePath(normalized.roomId), `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
+}
+
+async function readCollaborationRoomsIndexFile(): Promise<CollaborationRoomsIndexState | undefined> {
+  try {
+    const raw = await readFile(COLLABORATION_ROOMS_INDEX_PATH, "utf8");
+    return normalizeCollaborationRoomsIndex(JSON.parse(raw) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
+async function recoverCollaborationRoomsIndex(
+  seed: CollaborationRoomsIndexState | undefined,
+): Promise<CollaborationRoomsIndexState> {
+  let recovered = normalizeCollaborationRoomsIndex(seed ?? { version: 2, rooms: [] });
+  const discovered = await discoverCollaborationRoomSummariesFromDisk();
+  for (const summary of discovered) {
+    recovered = mergeCollaborationRoomSummary(recovered, summary);
+  }
+  return recovered;
+}
+
+async function discoverCollaborationRoomSummariesFromDisk(): Promise<CollaborationRoomSummary[]> {
+  try {
+    const entries = await readdir(COLLABORATION_ROOMS_DIR, { withFileTypes: true });
+    const states = await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => readCollaborationRoomStateFromDisk(entry.name)),
+    );
+    return states
+      .filter((state): state is CollaborationRoomState => Boolean(state))
+      .map((state) => buildCollaborationRoomSummary(state))
+      .sort(compareRoomSummaryRecency);
+  } catch {
+    return [];
+  }
+}
+
+async function readCollaborationRoomStateFromDisk(
+  roomId: string,
+  summary?: Pick<CollaborationRoomSummary, "title" | "titleMode" | "projectId" | "createdAt">,
+): Promise<CollaborationRoomState | undefined> {
+  const normalizedRoomId = normalizeRoomId(roomId);
+  if (!normalizedRoomId) return undefined;
+  try {
+    const raw = await readFile(resolveCollaborationRoomStatePath(normalizedRoomId), "utf8");
+    return normalizeCollaborationRoom(JSON.parse(raw) as unknown, {
+      roomId: normalizedRoomId,
+      title:
+        summary?.title ??
+        (normalizedRoomId === DEFAULT_COLLABORATION_ROOM_ID ? DEFAULT_COLLABORATION_ROOM_TITLE : "New chat"),
+      titleMode: summary?.titleMode,
+      projectId: summary?.projectId,
+      createdAt: summary?.createdAt,
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 async function readCollaborationAttachmentFromRoom(

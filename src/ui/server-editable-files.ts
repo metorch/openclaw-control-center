@@ -67,7 +67,7 @@ function createEditableFileHelpers(deps) {
 
   function buildRuntimeBudgetPolicyStarterContent() {
     return `${JSON.stringify(
-      { defaults: { warnRatio: 0.8 }, agent: { main: { cost: 20 } }, project: {}, task: {} },
+      { defaults: { warnRatio: 0.8 }, agent: {}, project: {}, task: {} },
       null,
       2,
     )}\n`;

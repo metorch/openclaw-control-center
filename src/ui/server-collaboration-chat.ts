@@ -8,9 +8,17 @@ const import_collaboration_project_memory = require("../runtime/collaboration-pr
 const import_collaboration_stage_results = require("../runtime/collaboration-stage-results");
 const import_openclaw_chat_rooms = require("../runtime/openclaw-chat-rooms");
 const import_collaboration_agent_artifacts = require("../runtime/collaboration-agent-artifacts");
+const import_collaboration_live_drafts = require("../runtime/collaboration-live-drafts");
 const import_chat_markdown = require("../runtime/chat-markdown");
 const import_project_store = require("../runtime/project-store");
 const import_task_store = require("../runtime/task-store");
+
+const COLLABORATION_RECENT_SUMMARY_MAX_ITEMS = 6;
+const COLLABORATION_RECENT_SUMMARY_MAX_TOTAL_CHARS = 1200;
+const COLLABORATION_RECENT_SUMMARY_ITEM_MAX_CHARS = 220;
+const COLLABORATION_RECENT_SUMMARY_LOOKBACK_EVENTS = 40;
+
+let collaborationTaskStoreWriteChain = Promise.resolve();
 
 function createCollaborationChatHelpers(deps) {
   const {
@@ -29,17 +37,19 @@ function createCollaborationChatHelpers(deps) {
     optionalBoundedString,
     pickUiText,
     resolveCollaborationParticipantName,
+    sanitizeCollaborationDisplayText,
     safeTruncate,
     toCollaborationApiAttachment,
   } = deps;
 
   async function createCollaborationRoomMessage(payload, toolClient, directory, defaultLanguage) {
     const roomId = await normalizeCollaborationRoomIdPayload(payload.roomId, directory);
-    await import_openclaw_chat_rooms.activateOpenClawChatRoom({
-      agentId: directory.primaryAgentId,
+    const roomState = await import_collaboration_room.loadExistingCollaborationRoom(roomId).catch(() => void 0);
+    await ensurePrimaryAgentTranscriptSidecar({
       roomId,
-      openclawHomeDir: getOpenClawHomeDir(),
-    });
+      directory,
+      roomTitle: roomState?.title,
+    }).catch(() => void 0);
     const messageText = optionalBoundedString(payload.text ?? payload.message, "text", 12e3) ?? "";
     const languageInput = optionalBoundedString(payload.lang ?? payload.language, "lang", 8);
     const language =
@@ -73,14 +83,6 @@ function createCollaborationChatHelpers(deps) {
       throw createRequestValidationError("No collaboration target could be resolved for this message.", 400);
     }
     const sourceEventId = randomUUID();
-    const sessionBindings = new Map(
-      await Promise.all(
-        targets.map(async (agentId) => [
-          normalizeLookupKey(agentId),
-          await import_collaboration_room.getCollaborationSessionBinding(roomId, agentId),
-        ]),
-      ),
-    );
     const appended = await import_collaboration_room.appendCollaborationRoomEvents(roomId, [
       {
         eventId: sourceEventId,
@@ -100,28 +102,6 @@ function createCollaborationChatHelpers(deps) {
         message: attachment.fileName,
         detail: buildCollaborationAttachmentSummary(attachment),
       })),
-      ...targets.map((agentId) => {
-        const binding = resolveCollaborationAgentSessionBinding(
-          roomId,
-          agentId,
-          sessionBindings.get(normalizeLookupKey(agentId)),
-        );
-        return {
-          eventId: randomUUID(),
-          type: "dispatch_started",
-          authorRole: "system",
-          agentId,
-          sourceEventId,
-          targetAgentIds: [agentId],
-          relatedSessionId: binding?.sessionId,
-          relatedSessionKey: binding?.sessionKey,
-          detail: pickUiText(
-            language,
-            `Queued for ${resolveCollaborationParticipantName(directory, agentId)}.`,
-            `已排队给 ${resolveCollaborationParticipantName(directory, agentId)}。`,
-          ),
-        };
-      }),
     ]);
     const sourceEvent = appended.find((event) => event.eventId === sourceEventId);
     if (!sourceEvent) {
@@ -132,6 +112,17 @@ function createCollaborationChatHelpers(deps) {
       attachmentIds,
       sourceEvent.createdAt,
     );
+    await closePendingUserConfirmationTasksForRoom({
+      roomId,
+      continuedAt: sourceEvent.createdAt,
+    });
+    await appendCollaborationDispatchStartedEvents({
+      roomId,
+      sourceEventId,
+      targetAgentIds: targets,
+      directory,
+      language,
+    });
     void dispatchCollaborationRoomMessage({
       roomId,
       sourceEvent,
@@ -166,6 +157,8 @@ function createCollaborationChatHelpers(deps) {
             toolClient: input.toolClient,
             directory: input.directory,
             language: input.language,
+            requestMessageOverride: input.requestMessageOverride,
+            requestTitleOverride: input.requestTitleOverride,
           }),
         ),
       );
@@ -184,6 +177,264 @@ function createCollaborationChatHelpers(deps) {
         ])
         .catch(() => void 0);
     }
+  }
+
+  async function appendCollaborationDispatchStartedEvents(input) {
+    const sessionBindings = new Map(
+      await Promise.all(
+        input.targetAgentIds.map(async (agentId) => [
+          normalizeLookupKey(agentId),
+          await import_collaboration_room.getCollaborationSessionBinding(input.roomId, agentId),
+        ]),
+      ),
+    );
+    return import_collaboration_room.appendCollaborationRoomEvents(
+      input.roomId,
+      input.targetAgentIds.map((agentId) => {
+        const binding = resolveCollaborationAgentSessionBinding(
+          input.roomId,
+          agentId,
+          sessionBindings.get(normalizeLookupKey(agentId)),
+        );
+        const participantName = resolveCollaborationParticipantName(input.directory, agentId);
+        const routedByName =
+          input.sourceAgentId &&
+          normalizeLookupKey(input.sourceAgentId) !== normalizeLookupKey(agentId)
+            ? resolveCollaborationParticipantName(input.directory, input.sourceAgentId)
+            : "";
+        return {
+          eventId: randomUUID(),
+          type: "dispatch_started",
+          authorRole: "system",
+          agentId,
+          sourceEventId: input.sourceEventId,
+          targetAgentIds: [agentId],
+          relatedSessionId: binding?.sessionId,
+          relatedSessionKey: binding?.sessionKey,
+          detail: input.fromReplyMention && routedByName
+            ? pickUiText(
+                input.language,
+                `Queued for ${participantName} from ${routedByName}'s coordination reply.`,
+                `已根据 ${routedByName} 的协同安排，把任务排队给 ${participantName}。`,
+              )
+            : pickUiText(
+                input.language,
+                `Queued for ${participantName}.`,
+                `已排队给 ${participantName}。`,
+              ),
+        };
+      }),
+    );
+  }
+
+  function resolveCollaborationReplyMentionDispatchTargets(input) {
+    const primaryKey = normalizeLookupKey(input.directory.primaryAgentId);
+    const actorKey = normalizeLookupKey(input.actorAgentId);
+    if (!primaryKey || actorKey !== primaryKey) {
+      return [];
+    }
+    const currentRouteKeys = new Set((input.currentRouteAgentIds || []).map((value) => normalizeLookupKey(value)));
+    return import_collaboration_room
+      .parseMentionedAgentIds(input.replyText, input.directory.entries)
+      .filter((agentId) => {
+        const normalizedAgentId = normalizeLookupKey(agentId);
+        return normalizedAgentId && normalizedAgentId !== primaryKey && !currentRouteKeys.has(normalizedAgentId);
+      });
+  }
+
+  function buildCollaborationFollowUpRequestMessage(input) {
+    const originalRequest = String(input.originalRequestText || "").trim();
+    const coordinatorInstruction = String(input.coordinatorReplyText || "").trim();
+    if (originalRequest && coordinatorInstruction) {
+      return [
+        pickUiText(input.language, "Original user request:", "原始用户请求："),
+        originalRequest,
+        "",
+        pickUiText(
+          input.language,
+          `${input.coordinatorName} coordination instruction:`,
+          `${input.coordinatorName} 协调指令：`,
+        ),
+        coordinatorInstruction,
+      ].join("\n");
+    }
+    return coordinatorInstruction || originalRequest;
+  }
+
+  async function maybeDispatchCollaborationReplyMentions(input) {
+    const replyText = String(input.replyText || "").trim();
+    if (!replyText) {
+      return [];
+    }
+    const targets = resolveCollaborationReplyMentionDispatchTargets({
+      replyText,
+      directory: input.directory,
+      actorAgentId: input.replyEvent.agentId,
+      currentRouteAgentIds: input.currentRouteAgentIds,
+    });
+    if (targets.length === 0) {
+      return [];
+    }
+    const originalRequestText = summarizeCollaborationUiText(
+      input.parentRequestText,
+      input.sourceEvent?.message || "",
+      4000,
+    );
+    const requestMessageOverride = buildCollaborationFollowUpRequestMessage({
+      originalRequestText,
+      coordinatorReplyText: replyText,
+      coordinatorName: resolveCollaborationParticipantName(input.directory, input.replyEvent.agentId),
+      language: input.language,
+    });
+    const requestTitleOverride =
+      summarizeCollaborationUiText(originalRequestText, replyText, 160) ||
+      summarizeCollaborationUiText(replyText, originalRequestText, 160);
+    const attachmentRecords = mergeCollaborationAttachmentRecords(
+      input.attachmentRecords,
+      input.replyAttachments,
+    );
+    await appendCollaborationDispatchStartedEvents({
+      roomId: input.roomId,
+      sourceEventId: input.replyEvent.eventId,
+      targetAgentIds: targets,
+      directory: input.directory,
+      language: input.language,
+      sourceAgentId: input.replyEvent.agentId,
+      fromReplyMention: true,
+    });
+    void dispatchCollaborationRoomMessage({
+      roomId: input.roomId,
+      sourceEvent: input.replyEvent,
+      attachmentRecords,
+      targetAgentIds: targets,
+      toolClient: input.toolClient,
+      directory: input.directory,
+      language: input.language,
+      requestMessageOverride,
+      requestTitleOverride,
+    });
+    return targets;
+  }
+
+  function buildCollaborationWorkerOutcomeSummaryLines(input) {
+    const workerKeys = new Set((input.workerAgentIds || []).map((agentId) => normalizeLookupKey(agentId)).filter(Boolean));
+    const latestByAgent = new Map();
+    for (const event of input.roomState?.events || []) {
+      if (event?.sourceEventId !== input.sourceEventId) {
+        continue;
+      }
+      const agentKey = normalizeLookupKey(event.agentId);
+      if (!agentKey || !workerKeys.has(agentKey)) {
+        continue;
+      }
+      if (
+        event.type !== "agent_reply" &&
+        event.type !== "dispatch_failed" &&
+        event.type !== "system_note"
+      ) {
+        continue;
+      }
+      latestByAgent.set(agentKey, event);
+    }
+    return (input.workerAgentIds || []).map((agentId) => {
+      const key = normalizeLookupKey(agentId);
+      const event = latestByAgent.get(key);
+      if (!event) {
+        return null;
+      }
+      const participantName = resolveCollaborationParticipantName(input.directory, agentId);
+      const summary =
+        summarizeCollaborationUiText(
+          event.message,
+          event.failureReason || event.detail || "",
+          180,
+        ) ||
+        summarizeCollaborationUiText(event.detail, "", 180) ||
+        pickUiText(input.language, "updated", "已更新");
+      return {
+        agentId,
+        line: `- ${participantName}: ${summary}`,
+      };
+    });
+  }
+
+  async function maybeDispatchCollaborationCoordinatorReviewAfterWorkerReply(input) {
+    const primaryKey = normalizeLookupKey(input.directory?.primaryAgentId);
+    const actorKey = normalizeLookupKey(input.replyEvent?.agentId);
+    if (!primaryKey || !actorKey || actorKey === primaryKey) {
+      return [];
+    }
+    const workerAgentIds = uniqueCompactStrings(input.currentRouteAgentIds || []).filter(
+      (agentId) => normalizeLookupKey(agentId) !== primaryKey,
+    );
+    if (workerAgentIds.length === 0) {
+      return [];
+    }
+    const roomState = await import_collaboration_room.loadCollaborationRoom(input.roomId);
+    if (
+      roomState.events.some(
+        (event) =>
+          event.type === "dispatch_started" &&
+          event.sourceEventId === input.sourceEvent.eventId &&
+          normalizeLookupKey(event.agentId) === primaryKey,
+      )
+    ) {
+      return [];
+    }
+    const workerOutcomes = buildCollaborationWorkerOutcomeSummaryLines({
+      roomState,
+      sourceEventId: input.sourceEvent.eventId,
+      workerAgentIds,
+      directory: input.directory,
+      language: input.language,
+    }).filter(Boolean);
+    if (workerOutcomes.length !== workerAgentIds.length) {
+      return [];
+    }
+    const baseRequest = String(input.requestMessageOverride || input.sourceEvent?.message || "").trim();
+    const requestMessageOverride = [
+      baseRequest,
+      "",
+      pickUiText(input.language, "Latest worker updates:", "最新员工更新："),
+      ...workerOutcomes.map((item) => item.line),
+      "",
+      pickUiText(
+        input.language,
+        `Continue as ${input.directory.primaryDisplayName} in this same room. If all requested workers have reported, summarize for the user now. Otherwise state exactly who is still pending instead of claiming completion.`,
+        `继续以 ${input.directory.primaryDisplayName} 的身份在这个房间内推进。如果所有指定员工都已反馈，现在就向用户汇总；否则明确说明还缺谁，不要提前宣称已完成。`,
+      ),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const requestTitleOverride =
+      summarizeCollaborationUiText(
+        workerOutcomes.map((item) => item.line).join("\n"),
+        baseRequest,
+        160,
+      ) || summarizeCollaborationUiText(baseRequest, "", 160);
+    const attachmentRecords = mergeCollaborationAttachmentRecords(
+      input.attachmentRecords,
+      input.replyAttachments,
+    );
+    await appendCollaborationDispatchStartedEvents({
+      roomId: input.roomId,
+      sourceEventId: input.sourceEvent.eventId,
+      targetAgentIds: [input.directory.primaryAgentId],
+      directory: input.directory,
+      language: input.language,
+    });
+    void dispatchCollaborationRoomMessage({
+      roomId: input.roomId,
+      sourceEvent: input.sourceEvent,
+      attachmentRecords,
+      targetAgentIds: [input.directory.primaryAgentId],
+      toolClient: input.toolClient,
+      directory: input.directory,
+      language: input.language,
+      requestMessageOverride,
+      requestTitleOverride,
+    });
+    return [input.directory.primaryAgentId];
   }
 
   async function dispatchCollaborationTurnToAgent(input) {
@@ -221,7 +472,10 @@ function createCollaborationChatHelpers(deps) {
       );
     }
     if (response.ok) {
-      const replyText = response.replyText.trim() || safeTruncate(response.rawText.trim(), 2e3);
+      const replyText = describeCollaborationAgentTurnOutput(response, void 0).replyText;
+      if (!replyText) {
+        return;
+      }
       await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
         {
           eventId: randomUUID(),
@@ -326,12 +580,7 @@ function createCollaborationChatHelpers(deps) {
       input.attachmentRecords.length === 0
         ? "- none"
         : input.attachmentRecords
-            .map((attachment) => {
-              const preview = attachment.previewText
-                ? ` | preview=${safeTruncate(attachment.previewText, 240)}`
-                : "";
-              return `- ${attachment.fileName} | kind=${attachment.kind} | size=${formatBytesCompact(attachment.sizeBytes)} | type=${attachment.contentType} | path=${attachment.storedPath}${preview}`;
-            })
+            .map((attachment) => buildCollaborationAttachmentPromptLines(attachment))
             .join("\n");
     const routedNames = input.targetAgentIds.map((agentId) =>
       resolveCollaborationParticipantName(input.directory, agentId),
@@ -361,6 +610,8 @@ function createCollaborationChatHelpers(deps) {
       "",
       buildCollaborationVisibleReplyLanguageRequirement(input.language),
       buildCollaborationShellRequirement(getOpenClawWorkspaceRoot(), input.language),
+      "For HTML, Markdown, JSON, code, and other text attachments, use the inline excerpt above as content context first, then open the local file path only if you need more detail.",
+      "If the user attached a file asking for analysis or changes, work from the file content instead of replying with only the file path.",
       "Reply to the user as this agent. If the file paths are relevant, read them directly from the provided local paths. Keep the answer concrete and execution-oriented.",
     ].join("\n");
   }
@@ -374,7 +625,7 @@ function createCollaborationChatHelpers(deps) {
     return String(value || "")
       .trim()
       .toLowerCase()
-      .replace(/[^a-z0-9._:-]+/g, "-")
+      .replace(/[^a-z0-9._-]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 100);
   }
@@ -455,6 +706,28 @@ function createCollaborationChatHelpers(deps) {
     );
   }
 
+  function isLikelyCollaborationPromptEcho(value) {
+    const normalized = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    return (
+      (normalized.includes("user request:") &&
+        (normalized.includes("<openclaw_coordination>") ||
+          normalized.includes("contextrefs:") ||
+          normalized.includes("recentcollaborationsummary:"))) ||
+      (normalized.includes("projectsummary:") &&
+        normalized.includes("contextrefs:") &&
+        normalized.includes("projectroot:")) ||
+      (normalized.includes("projectartifactsdir:") &&
+        normalized.includes("projectroot:") &&
+        normalized.includes("sessionbinding:"))
+    );
+  }
+
   function stripCollaborationMachinePrompt(value) {
     let text = String(value || "").replace(/\r/g, "").trim();
     if (!text) {
@@ -474,6 +747,22 @@ function createCollaborationChatHelpers(deps) {
     return text.trim();
   }
 
+  function extractVisibleCollaborationTurnReplyText(response, maxLength = 2e3) {
+    const primary = String(response?.replyText || "").trim();
+    if (primary && !import_collaboration_agent_artifacts.isMachineOnlyCollaborationText(primary)) {
+      return safeTruncate(primary, maxLength);
+    }
+    const fallback = String(response?.rawText || "").trim();
+    if (
+      fallback &&
+      !import_collaboration_agent_artifacts.isMachineOnlyCollaborationText(fallback) &&
+      !isLikelyCollaborationPromptEcho(fallback)
+    ) {
+      return safeTruncate(fallback, maxLength);
+    }
+    return "";
+  }
+
   function summarizeCollaborationUiText(value, fallback, maxLength = 260) {
     const primary = stripCollaborationMachinePrompt(value);
     const fallbackText = stripCollaborationMachinePrompt(fallback);
@@ -485,6 +774,330 @@ function createCollaborationChatHelpers(deps) {
       .replace(/\s+/g, " ")
       .trim();
     return compact ? safeTruncate(compact, maxLength) : "";
+  }
+
+  function sanitizeVisibleCollaborationText(value, language, fallback = "", maxLength = 240) {
+    if (typeof sanitizeCollaborationDisplayText === "function") {
+      return sanitizeCollaborationDisplayText(value, language, fallback, maxLength);
+    }
+    return summarizeCollaborationUiText(value, fallback, maxLength);
+  }
+
+  function isJarvisWaitingForUserConfirmation(input) {
+    const primaryKey = normalizeLookupKey(input.directory?.primaryAgentId);
+    const actorKey = normalizeLookupKey(input.targetAgentId);
+    if (!primaryKey || actorKey !== primaryKey) {
+      return false;
+    }
+    if (input.envelope?.resultState === "blocked" || input.envelope?.resultState === "failed") {
+      return false;
+    }
+    const visibleReplyText = sanitizeVisibleCollaborationText(input.replyText, input.language, "", 2_000);
+    if (!visibleReplyText) {
+      return false;
+    }
+    const searchableText = [
+      visibleReplyText,
+      summarizeCollaborationUiText(input.envelope?.summary, "", 400),
+      summarizeCollaborationUiText(input.envelope?.nextSuggestion, "", 400),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (
+      resolveCollaborationReplyMentionDispatchTargets({
+        replyText: visibleReplyText,
+        directory: input.directory,
+        actorAgentId: input.targetAgentId,
+        currentRouteAgentIds: input.currentRouteAgentIds,
+      }).length > 0
+    ) {
+      return false;
+    }
+    if (
+      /(?:wait(?:ing)? for your (?:confirmation|approval|decision)|once you (?:confirm|approve|choose|pick|decide)|after you (?:confirm|approve|choose|pick|decide)|please (?:confirm|approve|choose|pick|select|decide)|review and confirm|let me know which|tell me which option|which option|pick one|choose one|green light|go-ahead|go ahead)/i.test(
+        searchableText,
+      )
+    ) {
+      return true;
+    }
+    if (
+      /(?:\u8bf7\u786e\u8ba4|\u7b49\u5f85\u4f60\u7684\u786e\u8ba4|\u7b49\u4f60\u786e\u8ba4|\u4f60\u786e\u8ba4\u540e\u6211\u7ee7\u7eed|\u786e\u8ba4\u540e\u6211\u7ee7\u7eed|\u8bf7\u62cd\u677f|\u7b49\u4f60\u62cd\u677f|\u4f60\u62cd\u677f\u540e\u6211\u7ee7\u7eed|\u8bf7\u9009\u62e9|\u9009\u4e00\u4e2a|\u4f60\u9009\u5b9a\u540e\u6211\u7ee7\u7eed|\u8bf7\u51b3\u5b9a|\u7b49\u4f60\u51b3\u5b9a|\u8bf7\u5b9a\u593a|\u544a\u8bc9\u6211\u9009\u54ea\u4e2a|\u4f60\u70b9\u5934\u540e\u6211\u518d\u7ee7\u7eed)/.test(
+        searchableText,
+      )
+    ) {
+      return true;
+    }
+    const asksForDecision =
+      /(?:confirm|approval|approve|choose|pick|select|decide|decision|preference|which option|option [a-z0-9]|reply with|respond with|send back|blend both|either one|go-ahead|go ahead)/i.test(
+        searchableText,
+      ) ||
+      /(?:\u786e\u8ba4|\u62cd\u677f|\u9009\u62e9|\u9009\u9879|\u51b3\u5b9a|\u5b9a\u593a|\u504f\u597d|\u65b9\u6848[abAB])/.test(
+        searchableText,
+      );
+    const gatesContinuation =
+      /(?:continue|proceed|move forward|next step|i(?:'| wi)?ll continue|continue from there|then continue|before i continue|before proceeding)/i.test(
+        searchableText,
+      ) ||
+      /(?:\u7ee7\u7eed|\u518d\u5f80\u4e0b|\u4e0b\u4e00\u6b65|\u540e\u7eed|\u6211\u518d\u7ee7\u7eed|\u6211\u518d\u63a8\u8fdb)/.test(
+        searchableText,
+      );
+    return asksForDecision && gatesContinuation;
+  }
+
+  function resolveMaybeCollaborationParticipantName(directory, agentId) {
+    const normalizedAgentId = String(agentId || "").trim();
+    if (!normalizedAgentId) {
+      return "";
+    }
+    if (directory?.entries) {
+      return resolveCollaborationParticipantName(directory, normalizedAgentId);
+    }
+    return normalizedAgentId;
+  }
+
+  function redactCollaborationSummaryPaths(value) {
+    return String(value || "")
+      .replace(/\b[a-z]:[\\/][^\s`"'<>|]+/gi, "[path omitted]")
+      .replace(/\b(?:workspace|projects|runtime|artifacts)[\\/][^\s`"'<>|]+/gi, "[path omitted]")
+      .replace(/\b\/(?:users|home|tmp|var|workspace|projects|runtime|artifacts)[^\s`"'<>|]+/gi, "[path omitted]");
+  }
+
+  function sanitizeCollaborationSummaryText(value, language, maxLength = 320) {
+    const visibleText = sanitizeVisibleCollaborationText(value, language, "", maxLength * 4);
+    let text =
+      summarizeCollaborationUiText(visibleText, "", maxLength * 4) ||
+      summarizeCollaborationUiText(value, "", maxLength * 4);
+    if (!text) {
+      return "";
+    }
+    text = text
+      .replace(/\bsession(?:id|key)\b\s*[=:]\s*[^\s,;]+/gi, " ")
+      .replace(/\bsessionbinding\b\s*[=:]\s*[^\s,;]+/gi, " ")
+      .replace(/\[\[(?:reply_to_current|openclaw-files)[^\]]*\]\]/gi, " ");
+    text = redactCollaborationSummaryPaths(text)
+      .replace(/\s+/g, " ")
+      .trim();
+    return text ? safeTruncate(text, maxLength) : "";
+  }
+
+  function isMeaningfulCollaborationSystemNote(text) {
+    return /(blocked?|blocker|failed?|error|fallback|interrupted|stuck|locked|retry|rejected|timeout|not found|阻塞|失败|错误|回退|中断|卡住|锁定|重试|未通过|超时)/i.test(
+      String(text || ""),
+    );
+  }
+
+  function isMeaningfulReplyMentionDispatch(detailText) {
+    return /(coordination reply|coordination instruction|协同安排|协调指令)/i.test(String(detailText || ""));
+  }
+
+  function isMeaningfulCollaborationReplySummary(text) {
+    const normalized = normalizeLookupKey(text || "");
+    if (!normalized || normalized.length < 12) {
+      return false;
+    }
+    return !/(accepted the task|accepted the follow-up|working on it|starting now|收到|开始处理|处理中)/i.test(
+      normalized,
+    );
+  }
+
+  function resolveRecentCollaborationSummaryLabel(input) {
+    const describedLabel = String(input.describedLabel || "").trim();
+    if (describedLabel) {
+      return describedLabel;
+    }
+    if (input.event.authorRole === "agent" && input.event.agentId) {
+      return resolveMaybeCollaborationParticipantName(input.directory, input.event.agentId);
+    }
+    if (input.event.authorRole === "user") {
+      return pickUiText(input.language, "User", "用户");
+    }
+    if (
+      (input.event.type === "dispatch_started" ||
+        input.event.type === "dispatch_failed" ||
+        input.event.type === "dispatch_fallback") &&
+      input.event.agentId
+    ) {
+      return resolveMaybeCollaborationParticipantName(input.directory, input.event.agentId);
+    }
+    return pickUiText(input.language, "System", "系统");
+  }
+
+  function buildRecentCollaborationSummaryCandidate(input) {
+    const described = input.directory?.entries
+      ? describeCollaborationRoomEvent(
+          input.event,
+          input.language,
+          input.directory,
+          input.attachmentsById,
+        )
+      : {
+          label: "",
+          detail: input.event.detail || "",
+        };
+    const label = resolveRecentCollaborationSummaryLabel({
+      event: input.event,
+      describedLabel: described?.label,
+      language: input.language,
+      directory: input.directory,
+    });
+    const messageText = sanitizeCollaborationSummaryText(input.event.message, input.language, 420);
+    const detailText = sanitizeCollaborationSummaryText(
+      described?.detail || input.event.detail || "",
+      input.language,
+      420,
+    );
+    const failureText = sanitizeCollaborationSummaryText(input.event.failureReason, input.language, 260);
+
+    let summaryText = "";
+    let priority = 0;
+    switch (input.event.type) {
+      case "dispatch_failed":
+        summaryText = failureText || detailText || messageText;
+        priority = summaryText ? 500 : 0;
+        break;
+      case "dispatch_fallback":
+        summaryText = detailText || messageText;
+        priority = summaryText ? 450 : 0;
+        break;
+      case "system_note": {
+        const systemNoteText = messageText || detailText;
+        if (!isMeaningfulCollaborationSystemNote(`${messageText} ${detailText}`)) {
+          return null;
+        }
+        summaryText = systemNoteText;
+        priority = summaryText ? 400 : 0;
+        break;
+      }
+      case "agent_reply":
+        summaryText = messageText || detailText;
+        priority = isMeaningfulCollaborationReplySummary(summaryText) ? 300 : 0;
+        break;
+      case "user_message":
+        summaryText = messageText;
+        priority = summaryText ? 200 : 0;
+        break;
+      case "dispatch_started":
+        summaryText = detailText || messageText;
+        priority = isMeaningfulReplyMentionDispatch(summaryText) ? 100 : 0;
+        break;
+      default:
+        return null;
+    }
+
+    if (!summaryText || priority <= 0) {
+      return null;
+    }
+    const prefix = `- [${input.event.sequence}] ${label}: `;
+    const availableTextLength = Math.max(
+      40,
+      COLLABORATION_RECENT_SUMMARY_ITEM_MAX_CHARS - prefix.length,
+    );
+    const compactSummary = safeTruncate(summaryText, availableTextLength);
+    return {
+      sequence: input.event.sequence,
+      priority,
+      line: `${prefix}${compactSummary}`,
+      dedupeKey: normalizeLookupKey(`${input.event.type}|${label}|${compactSummary}`),
+    };
+  }
+
+  async function ensurePrimaryAgentTranscriptSidecar(input) {
+    const transcriptRoomId = import_openclaw_chat_rooms.normalizeTranscriptRoomId(input.roomId);
+    if (!transcriptRoomId) {
+      return void 0;
+    }
+    return import_openclaw_chat_rooms.createOpenClawChatRoom({
+      agentId: input.directory.primaryAgentId,
+      roomId: transcriptRoomId,
+      workspaceRoot: getOpenClawWorkspaceRoot(),
+      openclawHomeDir: getOpenClawHomeDir(),
+      title: input.roomTitle,
+    });
+  }
+
+  function buildRecentCollaborationSummaryLines(input) {
+    const sourceSequence = Number.isInteger(input.sourceEvent?.sequence)
+      ? input.sourceEvent.sequence
+      : Number.MAX_SAFE_INTEGER;
+    const candidateEvents = (input.roomState?.events || [])
+      .filter((event) => event.sequence < sourceSequence)
+      .filter((event) => event.type !== "attachment")
+      .slice(-COLLABORATION_RECENT_SUMMARY_LOOKBACK_EVENTS);
+    if (candidateEvents.length === 0) {
+      return [];
+    }
+
+    const candidates = candidateEvents
+      .map((event) =>
+        buildRecentCollaborationSummaryCandidate({
+          event,
+          language: input.language,
+          directory: input.directory,
+          attachmentsById: input.attachmentsById || new Map(),
+        }),
+      )
+      .filter((item) => Boolean(item))
+      .sort((left, right) => right.priority - left.priority || right.sequence - left.sequence);
+
+    const selected = [];
+    const seen = new Set();
+    let totalChars = 0;
+    for (const candidate of candidates) {
+      if (selected.length >= COLLABORATION_RECENT_SUMMARY_MAX_ITEMS) {
+        break;
+      }
+      if (candidate.dedupeKey && seen.has(candidate.dedupeKey)) {
+        continue;
+      }
+      if (selected.length > 0 && totalChars + candidate.line.length > COLLABORATION_RECENT_SUMMARY_MAX_TOTAL_CHARS) {
+        continue;
+      }
+      selected.push(candidate);
+      totalChars += candidate.line.length;
+      if (candidate.dedupeKey) {
+        seen.add(candidate.dedupeKey);
+      }
+    }
+
+    return selected
+      .sort((left, right) => left.sequence - right.sequence)
+      .map((candidate) => candidate.line);
+  }
+
+  function resolveCollaborationDispatchRequestText(input) {
+    const override = String(input.requestMessageOverride || "").trim();
+    if (override) {
+      return override;
+    }
+    const sourceText = String(input.sourceEvent?.message || "").trim();
+    if (sourceText) {
+      return sourceText;
+    }
+    return pickUiText(
+      input.language,
+      "Please handle this request based on the attachments.",
+      "请根据附件处理这条请求。",
+    );
+  }
+
+  function mergeCollaborationAttachmentRecords(...recordSets) {
+    const merged = new Map();
+    for (const recordSet of recordSets) {
+      for (const record of recordSet || []) {
+        if (!record) {
+          continue;
+        }
+        const key =
+          String(record.attachmentId || "").trim().toLowerCase() ||
+          String(record.storedPath || "").trim().toLowerCase() ||
+          `${String(record.fileName || "").trim().toLowerCase()}|${String(record.sizeBytes || 0)}`;
+        if (!key || merged.has(key)) {
+          continue;
+        }
+        merged.set(key, record);
+      }
+    }
+    return [...merged.values()];
   }
 
   function isRetryableUpstreamProviderFailureText(input) {
@@ -501,7 +1114,8 @@ function createCollaborationChatHelpers(deps) {
   }
 
   function summarizeCollaborationFailure(input) {
-    const combined = [input.failureReason, input.rawText]
+    const safeRawText = isLikelyCollaborationPromptEcho(input.rawText) ? "" : input.rawText;
+    const combined = [input.failureReason, safeRawText]
       .filter((value) => typeof value === "string" && value.trim() !== "")
       .join("\n");
     const normalized = stripCollaborationMachinePrompt(combined);
@@ -563,6 +1177,11 @@ function createCollaborationChatHelpers(deps) {
       .filter((line) => !/^file \"/i.test(line))
       .filter((line) => !/^raise systemexit/i.test(line))
       .filter((line) => !/^at /i.test(line))
+      .filter((line) => !/^user request:\s*$/i.test(line))
+      .filter((line) => !/^current user message:\s*$/i.test(line))
+      .filter((line) => !/^recent collaboration summary:\s*$/i.test(line))
+      .filter((line) => !/^projectsummary:\s*$/i.test(line))
+      .filter((line) => !/^contextrefs:\s*$/i.test(line))
       .find((line) => !isLikelyRelayPromptText(line));
     return summarizeCollaborationUiText(
       signalLine || normalized,
@@ -627,8 +1246,7 @@ function createCollaborationChatHelpers(deps) {
   }
 
   function describeCollaborationAgentTurnOutput(response, stageResultFallback) {
-    const fallbackReplyText =
-      String(response.replyText || "").trim() || safeTruncate(String(response.rawText || "").trim(), 2e3);
+    const fallbackReplyText = extractVisibleCollaborationTurnReplyText(response);
     const parsedArtifacts = import_collaboration_agent_artifacts.parseCollaborationAgentArtifacts(fallbackReplyText);
     const parsedStageResult = stageResultFallback
       ? import_collaboration_stage_results.parseStageResultEnvelopeFromReply(
@@ -645,15 +1263,25 @@ function createCollaborationChatHelpers(deps) {
     const stageResultArtifactPaths = uniqueCompactStrings(
       (parsedStageResult.envelope?.artifacts || []).map((artifact) => artifact.location),
     );
+    const stageResultCleanReplyText = parsedStageResult.cleanReplyText.trim();
+    const artifactCleanReplyText =
+      parsedStageResult.envelope && !stageResultCleanReplyText
+        ? ""
+        : parsedArtifacts.cleanReplyText.trim();
+    const stageResultSummaryReplyText = summarizeCollaborationUiText(
+      parsedStageResult.envelope?.summary,
+      "",
+      2e3,
+    );
     return {
       parsedArtifacts,
       parsedStageResult,
       rawJsonArtifactPaths,
       replyText:
-        parsedStageResult.cleanReplyText.trim() ||
-        parsedArtifacts.cleanReplyText.trim() ||
-        String(response.replyText || "").trim() ||
-        safeTruncate(String(response.rawText || "").trim(), 2e3),
+        stageResultCleanReplyText ||
+        stageResultSummaryReplyText ||
+        artifactCleanReplyText ||
+        extractVisibleCollaborationTurnReplyText(response),
       rawPaths: uniqueCompactStrings([
         ...parsedArtifacts.declaredPaths,
         ...parsedArtifacts.hintedPaths,
@@ -663,8 +1291,8 @@ function createCollaborationChatHelpers(deps) {
     };
   }
 
-  function buildTaskTitleFromSourceEvent(sourceEvent, attachmentRecords) {
-    const text = String(sourceEvent?.message || "").trim();
+  function buildTaskTitleFromSourceEvent(sourceEvent, attachmentRecords, overrideText) {
+    const text = String(overrideText || sourceEvent?.message || "").trim();
     if (text) {
       return safeTruncate(text.replace(/\s+/g, " "), 160);
     }
@@ -727,62 +1355,90 @@ function createCollaborationChatHelpers(deps) {
     };
   }
 
-  async function upsertCollaborationTaskRecord(input) {
-    const store = await import_task_store.loadTaskStore();
-    const existing = store.tasks.find(
-      (task) => task.projectId === input.projectId && task.taskId === input.taskId,
+  function mutateCollaborationTaskStore(mutator) {
+    const run = async () => {
+      const store = await import_task_store.loadTaskStore();
+      const result = await mutator(store);
+      if (result?.changed) {
+        await import_task_store.saveTaskStore(store);
+      }
+      return result?.value;
+    };
+    const next = collaborationTaskStoreWriteChain.then(run, run);
+    collaborationTaskStoreWriteChain = next.then(
+      () => void 0,
+      () => void 0,
     );
-    const now = new Date().toISOString();
-    if (existing) {
-      existing.title = input.title;
-      existing.owner = input.owner;
-      existing.status = input.status ?? existing.status;
-      existing.definitionOfDone = [...input.definitionOfDone];
-      existing.sessionKeys = uniqueCompactStrings([...(existing.sessionKeys || []), ...(input.sessionKeys || [])]);
-      existing.updatedAt = now;
-      store.updatedAt = now;
-      await import_task_store.saveTaskStore(store);
-      return existing;
-    }
+    return next;
+  }
 
-    store.tasks.push({
-      projectId: input.projectId,
-      taskId: input.taskId,
-      title: input.title,
-      status: input.status ?? "in_progress",
-      owner: input.owner,
-      dueAt: void 0,
-      definitionOfDone: [...input.definitionOfDone],
-      artifacts: [],
-      rollback: {
-        strategy: "manual-rollback",
-        steps: [],
-      },
-      sessionKeys: uniqueCompactStrings(input.sessionKeys || []),
-      budget: {
-        warnRatio: 0.8,
-      },
-      updatedAt: now,
+  async function upsertCollaborationTaskRecord(input) {
+    return mutateCollaborationTaskStore((store) => {
+      const existing = store.tasks.find(
+        (task) => task.projectId === input.projectId && task.taskId === input.taskId,
+      );
+      const now = new Date().toISOString();
+      if (existing) {
+        existing.title = input.title;
+        existing.owner = input.owner;
+        existing.status = input.status ?? existing.status;
+        existing.definitionOfDone = [...input.definitionOfDone];
+        existing.sessionKeys = uniqueCompactStrings([...(existing.sessionKeys || []), ...(input.sessionKeys || [])]);
+        existing.updatedAt = now;
+        store.updatedAt = now;
+        return {
+          changed: true,
+          value: existing,
+        };
+      }
+
+      store.tasks.push({
+        projectId: input.projectId,
+        taskId: input.taskId,
+        title: input.title,
+        status: input.status ?? "in_progress",
+        owner: input.owner,
+        dueAt: void 0,
+        definitionOfDone: [...input.definitionOfDone],
+        artifacts: [],
+        rollback: {
+          strategy: "manual-rollback",
+          steps: [],
+        },
+        sessionKeys: uniqueCompactStrings(input.sessionKeys || []),
+        budget: {
+          warnRatio: 0.8,
+        },
+        updatedAt: now,
+      });
+      store.updatedAt = now;
+      return {
+        changed: true,
+        value: store.tasks.at(-1),
+      };
     });
-    store.updatedAt = now;
-    await import_task_store.saveTaskStore(store);
-    return store.tasks.at(-1);
   }
 
   async function updateCollaborationTaskStatusDirect(input) {
-    const store = await import_task_store.loadTaskStore();
-    const existing = store.tasks.find(
-      (task) => task.projectId === input.projectId && task.taskId === input.taskId,
-    );
-    if (!existing) {
-      return void 0;
-    }
-    const now = new Date().toISOString();
-    existing.status = input.status;
-    existing.updatedAt = now;
-    store.updatedAt = now;
-    await import_task_store.saveTaskStore(store);
-    return existing;
+    return mutateCollaborationTaskStore((store) => {
+      const existing = store.tasks.find(
+        (task) => task.projectId === input.projectId && task.taskId === input.taskId,
+      );
+      if (!existing) {
+        return {
+          changed: false,
+          value: void 0,
+        };
+      }
+      const now = new Date().toISOString();
+      existing.status = input.status;
+      existing.updatedAt = now;
+      store.updatedAt = now;
+      return {
+        changed: true,
+        value: existing,
+      };
+    });
   }
 
   function uniqueCompactStrings(values) {
@@ -797,6 +1453,133 @@ function createCollaborationChatHelpers(deps) {
       out.push(trimmed);
     }
     return out;
+  }
+
+  function getCollaborationAttachmentExtension(fileName) {
+    const match = /\.([a-z0-9]{1,12})$/i.exec(String(fileName || "").trim());
+    return match?.[1] ? String(match[1]).toLowerCase() : "";
+  }
+
+  function getCollaborationAttachmentPreviewMode(attachment) {
+    const contentType = String(attachment?.contentType || "").toLowerCase();
+    const extension = getCollaborationAttachmentExtension(attachment?.fileName);
+    if (contentType.includes("html") || extension === "html" || extension === "htm") {
+      return "html";
+    }
+    if (contentType.includes("markdown") || extension === "md" || extension === "markdown" || extension === "mdx") {
+      return "markdown";
+    }
+    if (
+      contentType.includes("json") ||
+      [
+        "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "rs", "java", "kt", "swift",
+        "php", "c", "cc", "cpp", "h", "hpp", "cs", "sh", "bash", "ps1", "sql", "css", "scss",
+        "less", "xml", "yml", "yaml", "toml", "ini", "env", "gradle",
+      ].includes(extension)
+    ) {
+      return "code";
+    }
+    return "text";
+  }
+
+  function normalizeCollaborationAttachmentPreviewText(value) {
+    return String(value || "").replace(/\r/g, "").trim();
+  }
+
+  function stripHtmlPreviewText(value) {
+    return String(value || "")
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/gi, "'")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function extractHtmlPreviewTitle(value) {
+    const raw = String(value || "");
+    const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(raw);
+    if (titleMatch?.[1]) {
+      return titleMatch[1].replace(/\s+/g, " ").trim();
+    }
+    const headingMatch = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(raw);
+    if (headingMatch?.[1]) {
+      return headingMatch[1].replace(/\s+/g, " ").trim();
+    }
+    return "";
+  }
+
+  function summarizeMarkdownPreviewText(value) {
+    const lines = normalizeCollaborationAttachmentPreviewText(value)
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const heading = lines.find((line) => /^#{1,6}\s+/.test(line))?.replace(/^#{1,6}\s+/, "").trim() || "";
+    const summary = lines
+      .filter((line) => !/^#{1,6}\s+/.test(line))
+      .filter((line) => !/^```/.test(line))
+      .filter((line) => !/^[-*_]{3,}$/.test(line))
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return {
+      heading,
+      summary,
+    };
+  }
+
+  function indentCollaborationPromptBlock(text, prefix = "    ") {
+    return String(text || "")
+      .split("\n")
+      .map((line) => `${prefix}${line}`)
+      .join("\n");
+  }
+
+  function buildCollaborationAttachmentPromptLines(attachment) {
+    const mode = getCollaborationAttachmentPreviewMode(attachment);
+    const previewText = normalizeCollaborationAttachmentPreviewText(attachment.previewText);
+    const header = `- ${attachment.fileName} | kind=${mode} | size=${formatBytesCompact(attachment.sizeBytes)} | type=${attachment.contentType} | path=${attachment.storedPath}`;
+    if (!previewText) {
+      return header;
+    }
+    if (mode === "html") {
+      const title = extractHtmlPreviewTitle(previewText);
+      const visibleText = stripHtmlPreviewText(previewText);
+      return [
+        header,
+        title ? `  html_title=${safeTruncate(title, 140)}` : "",
+        visibleText ? `  visible_text=${safeTruncate(visibleText, 480)}` : "",
+        "  source_excerpt:",
+        indentCollaborationPromptBlock(safeTruncate(previewText, 1400)),
+      ].filter(Boolean).join("\n");
+    }
+    if (mode === "markdown") {
+      const markdown = summarizeMarkdownPreviewText(previewText);
+      return [
+        header,
+        markdown.heading ? `  heading=${safeTruncate(markdown.heading, 140)}` : "",
+        markdown.summary ? `  summary=${safeTruncate(markdown.summary, 480)}` : "",
+        "  markdown_excerpt:",
+        indentCollaborationPromptBlock(safeTruncate(previewText, 1400)),
+      ].filter(Boolean).join("\n");
+    }
+    if (mode === "code") {
+      return [
+        header,
+        "  code_excerpt:",
+        indentCollaborationPromptBlock(safeTruncate(previewText, 1400)),
+      ].join("\n");
+    }
+    return [
+      header,
+      `  text_excerpt=${safeTruncate(previewText, 520)}`,
+    ].join("\n");
   }
 
   function buildCollaborationVisibleReplyLanguageRequirement(language) {
@@ -829,6 +1612,21 @@ function createCollaborationChatHelpers(deps) {
     return safeTruncate(lines[0] || normalized, 220);
   }
 
+  function buildCollaborationProjectScopeRequirementLines(projectFiles) {
+    const projectRoot = String(projectFiles?.projectDir || "").trim();
+    const projectArtifactsDir = String(projectFiles?.artifactsDir || "").trim();
+    if (!projectRoot) {
+      return [];
+    }
+    return [
+      `- Treat ${projectRoot} as the current collaboration project root for this task.`,
+      projectArtifactsDir
+        ? `- Prefer saving new deliverables under ${projectArtifactsDir} unless the user explicitly asks for another path inside the same project root.`
+        : "",
+      "- Do not create or update deliverables outside this project root, and do not use the global workspace root as the output location.",
+    ].filter(Boolean);
+  }
+
   async function resolveAgentLongTermMemoryPaths(agentWorkspaceRoot) {
     const candidates = [
       join(agentWorkspaceRoot, "MEMORY.md"),
@@ -850,9 +1648,18 @@ function createCollaborationChatHelpers(deps) {
 
   function buildDispatchRecord(input) {
     const taskId = buildDispatchTaskId(input.sourceEvent.eventId, input.targetAgentId);
-    const title = buildTaskTitleFromSourceEvent(input.sourceEvent, input.attachmentRecords);
+    const requestText = resolveCollaborationDispatchRequestText({
+      sourceEvent: input.sourceEvent,
+      requestMessageOverride: input.requestMessageOverride,
+      language: input.language,
+    });
+    const title = buildTaskTitleFromSourceEvent(
+      input.sourceEvent,
+      input.attachmentRecords,
+      input.requestTitleOverride || requestText,
+    );
     const expectedArtifacts = shouldHintCollaborationArtifactReply(
-      input.sourceEvent.message,
+      requestText,
       input.attachmentRecords,
     )
       ? ["Provide a file path or attach the generated artifact when applicable."]
@@ -863,9 +1670,7 @@ function createCollaborationChatHelpers(deps) {
       stage: "delivery",
       ownerAgentId: input.targetAgentId,
       title,
-      goal:
-        String(input.sourceEvent.message || "").trim() ||
-        pickUiText(input.language, "Handle the attachment-only request.", "处理附件请求。"),
+      goal: requestText || pickUiText(input.language, "Handle the attachment-only request.", "处理附件请求。"),
       definitionOfDone: [
         pickUiText(input.language, "Provide a concrete user-facing update.", "给出面向用户的明确反馈。"),
         pickUiText(
@@ -895,12 +1700,187 @@ function createCollaborationChatHelpers(deps) {
     });
   }
 
+  async function closePendingUserConfirmationTasksForRoom(input) {
+    const roomState = await import_collaboration_room.loadCollaborationRoom(input.roomId).catch(() => void 0);
+    const pendingReceipts = (roomState?.taskReceipts || []).filter(
+      (receipt) =>
+        receipt.reviewState === "awaiting_review" &&
+        receipt.waitingFor === "user_confirmation",
+    );
+    if (pendingReceipts.length === 0) {
+      return;
+    }
+    const projectStore = await import_project_store.loadProjectStore().catch(() => ({ projects: [] }));
+    const projectTitleById = new Map(
+      (projectStore?.projects || []).map((project) => [project.projectId, project.title || project.projectId]),
+    );
+    await Promise.allSettled(
+      pendingReceipts.map(async (receipt) => {
+        await updateCollaborationTaskStatusDirect({
+          projectId: receipt.projectId,
+          taskId: receipt.taskId,
+          status: "done",
+        }).catch(() => void 0);
+        await import_collaboration_room.upsertCollaborationTaskReceipt(input.roomId, {
+          ...receipt,
+          reviewState: "approved",
+          waitingFor: void 0,
+          lastReportedAt: input.continuedAt,
+        });
+      }),
+    );
+    const nextState = await import_collaboration_room.loadCollaborationRoom(input.roomId);
+    const closedProjectIds = uniqueCompactStrings(pendingReceipts.map((receipt) => receipt.projectId));
+    for (const projectId of closedProjectIds) {
+      await syncProjectOpenTasksForRoom(
+        projectId,
+        projectTitleById.get(projectId) || projectId,
+        nextState,
+      );
+    }
+  }
+
+  function isImplicitCollaborationDefinitionOfDoneItem(item) {
+    const normalized = normalizeLookupKey(item || "");
+    if (!normalized) {
+      return false;
+    }
+    return (
+      normalized.includes("user-facing update") ||
+      normalized.includes("面向用户") ||
+      normalized.includes("stage_result") ||
+      normalized.includes("结果包")
+    );
+  }
+
+  function shouldAutoPromoteCollaborationStageResult(input) {
+    if (!input.envelope || input.envelope.resultState !== "in_progress") {
+      return false;
+    }
+    if ((input.envelope.blockers ?? []).length > 0) {
+      return false;
+    }
+    if (
+      (input.replyAttachments?.length ?? 0) > 0 ||
+      (input.envelope.artifacts?.length ?? 0) > 0
+    ) {
+      return true;
+    }
+    return (
+      isVerificationOnlyCollaborationGoal(input.dispatchRecord?.goal || input.dispatchRecord?.title || "") &&
+      !replyDelegatesFurtherCollaborationWork(input) &&
+      !replyLooksLikeIncompleteCollaborationArtifactWork(input.replyText) &&
+      replyLooksLikeCompletedCollaborationVerificationVerdict(input.replyText)
+    );
+  }
+
+  function replyLooksLikeIncompleteCollaborationArtifactWork(replyText) {
+    const normalized = String(stripCollaborationMachinePrompt(replyText || ""))
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    return /(?:working on|in progress|not ready|draft|partial|unfinished|todo|pending|still working|continue working|need more work|needs more work|follow-up needed|blocker|blocked|failed|failure|unable|cannot|can't|missing|review first|verify first|进行中|未完成|草稿|部分完成|待继续|还在处理|仍在处理|还没好|未就绪|待办|阻塞|失败|无法|缺少|先审核|先验证)/i.test(
+      normalized,
+    );
+  }
+
+  function isVerificationOnlyCollaborationGoal(message) {
+    const text = extractCollaborationArtifactHintText(message).toLowerCase();
+    if (!text) {
+      return false;
+    }
+    const normalizedText = text
+      .replace(/\b(?:do not|don't|dont|no need to|need not)\b[^.!?\n]{0,160}/gi, " ")
+      .replace(/\bwithout\b[^.!?\n]{0,80}/gi, " ");
+    const hasReadOnlyIntent =
+      /(?:\bverify\b|\breview\b|\binspect\b|\baudit\b|\bcheck\b|\bvalidate\b|\banaly[sz]e\b|\bassess\b|\bexamine\b|\bconfirm\b|\btest\b|\bpass\s*\/\s*fail\b|\bpass-or-fail\b|\bpass or fail\b|\bread-only\b|\breply with\b.*\bpass\b.*\bfail\b|\b(?:reply|respond)\b.*\bonly\b)/i.test(
+        text,
+      );
+    const hasArtifactActionIntent =
+      /(?:\bcreate\b|\bgenerate\b|\bbuild\b|\bmake\b|\bwrite\b|\bdraft\b|\bprepare\b|\bproduce\b|\bexport\b|\battach\b|\bupload\b|\bsend\b|\bshare\b|\bdeliver\b|\breturn\b|\bfix\b|\bupdate\b|\bedit\b|\bmodify\b|\brewrite\b|\brevise\b|\bpatch\b|\bimplement\b|\brender\b|\bsave\b.{0,20}\bas\b)/i.test(
+        normalizedText,
+      );
+    return hasReadOnlyIntent && !hasArtifactActionIntent;
+  }
+
+  function replyLooksLikeCompletedCollaborationVerificationVerdict(replyText) {
+    const normalized = String(stripCollaborationMachinePrompt(replyText || ""))
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    return /(?:\bpass\b|\bfail\b|\bpassed\b|\bfailed\b|\breviewable\b|\bnot reviewable\b|\bverified\b|\bapproved\b|\blooks good\b|\bneeds changes\b|\bcaution\b|\bverdict\b)/i.test(
+      normalized,
+    );
+  }
+
+  function replyDelegatesFurtherCollaborationWork(input) {
+    if (!input.directory?.entries || !input.replyText) {
+      return false;
+    }
+    return import_collaboration_room
+      .parseMentionedAgentIds(input.replyText, input.directory.entries)
+      .some((agentId) => normalizeLookupKey(agentId) !== normalizeLookupKey(input.targetAgentId));
+  }
+
+  function buildSyntheticCollaborationArtifactStageResult(input) {
+    if (input.envelope) {
+      return void 0;
+    }
+    if ((input.dispatchRecord?.expectedArtifacts?.length ?? 0) === 0) {
+      return void 0;
+    }
+    if (!(input.dispatchRecord?.definitionOfDone || []).every((item) => isImplicitCollaborationDefinitionOfDoneItem(item))) {
+      return void 0;
+    }
+    if (replyDelegatesFurtherCollaborationWork(input)) {
+      return void 0;
+    }
+    if (replyLooksLikeIncompleteCollaborationArtifactWork(input.replyText)) {
+      return void 0;
+    }
+    const artifactLocations = uniqueCompactStrings(
+      (input.replyAttachments || [])
+        .map((attachment) => attachment.sourceLocalPath || attachment.localPath || attachment.storedPath)
+        .filter(Boolean),
+    );
+    if (artifactLocations.length === 0) {
+      return void 0;
+    }
+    const summary =
+      summarizeCollaborationUiText(input.replyText, input.dispatchRecord.goal, 400) ||
+      pickUiText(
+        input.language,
+        "Generated the requested artifact in the current collaboration project.",
+        "已在当前协作项目中生成所需产物。",
+      );
+    return {
+      taskId: input.dispatchRecord.taskId,
+      projectId: input.project.projectId,
+      agentId: input.targetAgentId,
+      resultState: "awaiting_review",
+      summary,
+      artifacts: artifactLocations.map((location) => ({ location })),
+      completionChecklist: [],
+      blockers: [],
+      nextSuggestion: "",
+      reportedAt: input.reportedAt ?? new Date().toISOString(),
+    };
+  }
+
   async function reviewCollaborationStageResult(input) {
     const checklist = uniqueCompactStrings(input.envelope.completionChecklist || []);
-    const missingDefinitionOfDone = (input.dispatchRecord.definitionOfDone || []).filter((item) => {
-      const normalizedItem = normalizeLookupKey(item);
-      return !checklist.some((entry) => normalizeLookupKey(entry).includes(normalizedItem));
-    });
+    const missingDefinitionOfDone = (input.dispatchRecord.definitionOfDone || [])
+      .filter((item) => !isImplicitCollaborationDefinitionOfDoneItem(item))
+      .filter((item) => {
+        const normalizedItem = normalizeLookupKey(item);
+        return !checklist.some((entry) => normalizeLookupKey(entry).includes(normalizedItem));
+      });
     const declaredArtifactPaths = uniqueCompactStrings(
       (input.envelope.artifacts || []).map((artifact) => artifact.location),
     );
@@ -912,14 +1892,16 @@ function createCollaborationChatHelpers(deps) {
     const resolvedArtifactPaths = resolveCollaborationArtifactPaths({
       rawPaths: [...declaredArtifactPaths, ...replyArtifactPaths],
       workspaceRoot: input.workspaceRoot,
+      projectFiles: input.projectFiles,
     });
     const declaredResolvedArtifactPaths = resolveCollaborationArtifactPaths({
       rawPaths: declaredArtifactPaths,
       workspaceRoot: input.workspaceRoot,
+      projectFiles: input.projectFiles,
     });
     const existingArtifactPaths = [];
     for (const artifactPath of resolvedArtifactPaths) {
-      if (await isReadableCollaborationArtifactPath(artifactPath, input.workspaceRoot)) {
+      if (await isReadableCollaborationArtifactPath(artifactPath, input.workspaceRoot, input.projectFiles)) {
         existingArtifactPaths.push(artifactPath);
       }
     }
@@ -953,11 +1935,24 @@ function createCollaborationChatHelpers(deps) {
       summary: summarizedReplyText,
       recentOutput: summarizedReplyText,
     };
-    const summarizedEnvelopeText = input.envelope
-      ? summarizeCollaborationUiText(input.envelope.summary, summarizedReplyText, 260) || summarizedReplyText
+    const synthesizedEnvelope = buildSyntheticCollaborationArtifactStageResult(input);
+    const effectiveEnvelope =
+      input.envelope && shouldAutoPromoteCollaborationStageResult(input)
+        ? { ...input.envelope, resultState: "awaiting_review" }
+        : input.envelope || synthesizedEnvelope;
+    const summarizedEnvelopeText = effectiveEnvelope
+      ? summarizeCollaborationUiText(effectiveEnvelope.summary, summarizedReplyText, 260) || summarizedReplyText
       : summarizedReplyText;
+    const waitsForUserConfirmation = isJarvisWaitingForUserConfirmation({
+      replyText: input.replyText,
+      envelope: effectiveEnvelope,
+      directory: input.directory,
+      targetAgentId: input.targetAgentId,
+      currentRouteAgentIds: input.currentRouteAgentIds,
+      language: input.language,
+    });
 
-    if (!input.envelope) {
+    if (!effectiveEnvelope && !waitsForUserConfirmation) {
       await import_collaboration_room.upsertCollaborationTaskReceipt(input.roomId, {
         ...baseReceipt,
         lastResultState: "in_progress",
@@ -967,13 +1962,33 @@ function createCollaborationChatHelpers(deps) {
       return;
     }
 
-    if (input.envelope.resultState === "blocked") {
+    if (waitsForUserConfirmation) {
+      await import_collaboration_room.upsertCollaborationTaskReceipt(input.roomId, {
+        ...baseReceipt,
+        reviewState: "awaiting_review",
+        lastResultState: "awaiting_review",
+        waitingFor: "user_confirmation",
+        summary: summarizedEnvelopeText,
+        recentOutput: summarizedEnvelopeText,
+        blockers: effectiveEnvelope?.blockers,
+      });
+      await updateCollaborationTaskStatusDirect({
+        projectId: input.project.projectId,
+        taskId: input.dispatchRecord.taskId,
+        status: "in_progress",
+      });
+      const nextState = await import_collaboration_room.loadCollaborationRoom(input.roomId);
+      await syncProjectOpenTasksForRoom(input.project.projectId, input.project.title, nextState);
+      return;
+    }
+
+    if (effectiveEnvelope.resultState === "blocked") {
       await import_collaboration_room.upsertCollaborationTaskReceipt(input.roomId, {
         ...baseReceipt,
         lastResultState: "blocked",
         summary: summarizedEnvelopeText,
         recentOutput: summarizedEnvelopeText,
-        blockers: input.envelope.blockers,
+        blockers: effectiveEnvelope.blockers,
       });
       await updateCollaborationTaskStatusDirect({
         projectId: input.project.projectId,
@@ -987,7 +2002,7 @@ function createCollaborationChatHelpers(deps) {
           authorRole: "system",
           agentId: input.targetAgentId,
           sourceEventId: input.sourceEvent.eventId,
-          message: input.envelope.blockers?.join("; ") || input.envelope.summary,
+          message: effectiveEnvelope.blockers?.join("; ") || effectiveEnvelope.summary,
           detail: pickUiText(
             input.language,
             `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} reported a blocker.`,
@@ -1000,13 +2015,13 @@ function createCollaborationChatHelpers(deps) {
       return;
     }
 
-    if (input.envelope.resultState === "failed") {
+    if (effectiveEnvelope.resultState === "failed") {
       await import_collaboration_room.upsertCollaborationTaskReceipt(input.roomId, {
         ...baseReceipt,
         lastResultState: "failed",
         summary: summarizedEnvelopeText,
         recentOutput: summarizedEnvelopeText,
-        blockers: input.envelope.blockers,
+        blockers: effectiveEnvelope.blockers,
       });
       await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
         {
@@ -1015,7 +2030,7 @@ function createCollaborationChatHelpers(deps) {
           authorRole: "system",
           agentId: input.targetAgentId,
           sourceEventId: input.sourceEvent.eventId,
-          message: input.envelope.summary,
+          message: effectiveEnvelope.summary,
           detail: pickUiText(
             input.language,
             `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} marked the stage as failed.`,
@@ -1028,13 +2043,13 @@ function createCollaborationChatHelpers(deps) {
       return;
     }
 
-    if (input.envelope.resultState === "in_progress") {
+    if (effectiveEnvelope.resultState === "in_progress") {
       await import_collaboration_room.upsertCollaborationTaskReceipt(input.roomId, {
         ...baseReceipt,
         lastResultState: "in_progress",
         summary: summarizedEnvelopeText,
         recentOutput: summarizedEnvelopeText,
-        blockers: input.envelope.blockers,
+        blockers: effectiveEnvelope.blockers,
       });
       const nextState = await import_collaboration_room.loadCollaborationRoom(input.roomId);
       await syncProjectOpenTasksForRoom(input.project.projectId, input.project.title, nextState);
@@ -1045,15 +2060,17 @@ function createCollaborationChatHelpers(deps) {
       ...baseReceipt,
       reviewState: "awaiting_review",
       lastResultState: "awaiting_review",
+      waitingFor: "jarvis_review",
       summary: summarizedEnvelopeText,
       recentOutput: summarizedEnvelopeText,
-      blockers: input.envelope.blockers,
+      blockers: effectiveEnvelope.blockers,
     });
     const review = await reviewCollaborationStageResult({
-      envelope: input.envelope,
+      envelope: effectiveEnvelope,
       dispatchRecord: input.dispatchRecord,
       replyAttachments: input.replyAttachments,
       workspaceRoot: input.workspaceRoot,
+      projectFiles: input.projectFiles,
     });
     if (review.approved) {
       await updateCollaborationTaskStatusDirect({
@@ -1065,9 +2082,10 @@ function createCollaborationChatHelpers(deps) {
         ...baseReceipt,
         reviewState: "approved",
         lastResultState: "awaiting_review",
+        waitingFor: void 0,
         summary: summarizedEnvelopeText,
         recentOutput: summarizedEnvelopeText,
-        blockers: input.envelope.blockers,
+        blockers: effectiveEnvelope.blockers,
       });
       const artifacts = review.existingArtifactPaths.map((location) => ({ location }));
       await import_collaboration_project_memory.appendCollaborationProjectStageLog({
@@ -1079,27 +2097,27 @@ function createCollaborationChatHelpers(deps) {
           projectId: input.project.projectId,
           stage: input.dispatchRecord.stage,
           agentId: input.targetAgentId,
-          summary: input.envelope.summary,
-          resultState: input.envelope.resultState,
+          summary: effectiveEnvelope.summary,
+          resultState: effectiveEnvelope.resultState,
           reviewState: "approved",
-          reportedAt: input.envelope.reportedAt,
+          reportedAt: effectiveEnvelope.reportedAt,
           approvedAt: new Date().toISOString(),
           artifacts,
-          blockers: input.envelope.blockers,
-          completionChecklist: input.envelope.completionChecklist,
-          nextSuggestion: input.envelope.nextSuggestion,
+          blockers: effectiveEnvelope.blockers,
+          completionChecklist: effectiveEnvelope.completionChecklist,
+          nextSuggestion: effectiveEnvelope.nextSuggestion,
         },
       });
       await import_collaboration_project_memory.updateCollaborationProjectSummary({
         workspaceRoot: getOpenClawWorkspaceRoot(),
         projectId: input.project.projectId,
         projectTitle: input.project.title,
-        summary: input.envelope.summary,
+        summary: effectiveEnvelope.summary,
         stage: input.dispatchRecord.stage,
         taskTitle: input.dispatchRecord.title,
         ownerAgentId: input.targetAgentId,
         artifacts,
-        nextSuggestion: input.envelope.nextSuggestion,
+        nextSuggestion: effectiveEnvelope.nextSuggestion,
         updatedAt: new Date().toISOString(),
       });
       await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
@@ -1109,7 +2127,7 @@ function createCollaborationChatHelpers(deps) {
           authorRole: "system",
           agentId: input.directory.primaryAgentId,
           sourceEventId: input.sourceEvent.eventId,
-          message: input.envelope.summary,
+          message: effectiveEnvelope.summary,
           detail: pickUiText(
             input.language,
             `Jarvis approved ${input.dispatchRecord.title}.`,
@@ -1131,10 +2149,11 @@ function createCollaborationChatHelpers(deps) {
       ...baseReceipt,
       reviewState: "rejected",
       lastResultState: "awaiting_review",
+      waitingFor: void 0,
       summary: summarizedEnvelopeText,
       recentOutput: summarizedEnvelopeText,
       blockers: [
-        ...uniqueCompactStrings(input.envelope.blockers || []),
+        ...uniqueCompactStrings(effectiveEnvelope.blockers || []),
         ...uniqueCompactStrings(review.missingDefinitionOfDone || []),
         ...uniqueCompactStrings(review.missingArtifacts || []),
       ],
@@ -1162,8 +2181,6 @@ function createCollaborationChatHelpers(deps) {
   }
 
   async function dispatchCollaborationTurnToAgentV2(input) {
-    const isPrimaryTarget =
-      normalizeLookupKey(input.targetAgentId) === normalizeLookupKey(input.directory.primaryAgentId);
     const binding = resolveCollaborationAgentSessionBinding(
       input.roomId,
       input.targetAgentId,
@@ -1181,6 +2198,32 @@ function createCollaborationChatHelpers(deps) {
       directory: input.directory,
       language: input.language,
     });
+    const liveDraftSessionKey =
+      binding?.sessionKey || buildCollaborationBackgroundSessionKey(input.targetAgentId, input.roomId);
+    const clearLiveDraft = () =>
+      import_collaboration_live_drafts.clearCollaborationLiveDraft({
+        roomId: input.roomId,
+        sourceEventId: input.sourceEvent.eventId,
+        agentId: input.targetAgentId,
+      });
+    const handleLiveStreamEvent = (event) => {
+      const now = new Date().toISOString();
+      const visibleText = sanitizeVisibleCollaborationText(event?.text, input.language, "", 12_000);
+      import_collaboration_live_drafts.upsertCollaborationLiveDraft({
+        roomId: input.roomId,
+        sourceEventId: input.sourceEvent.eventId,
+        agentId: input.targetAgentId,
+        agentDisplayName: resolveCollaborationParticipantName(input.directory, input.targetAgentId),
+        runId: event?.runId,
+        sessionKey: event?.sessionKey || liveDraftSessionKey,
+        createdAt: now,
+        updatedAt: now,
+        text: visibleText || void 0,
+        state: event?.state || "delta",
+        errorMessage: event?.errorMessage || void 0,
+      });
+    };
+    try {
     const dispatchRecord = buildDispatchRecord({
       sourceEvent: input.sourceEvent,
       targetAgentId: input.targetAgentId,
@@ -1188,6 +2231,8 @@ function createCollaborationChatHelpers(deps) {
       project: projectContext.project,
       projectMemory: projectContext.memory,
       language: input.language,
+      requestMessageOverride: input.requestMessageOverride,
+      requestTitleOverride: input.requestTitleOverride,
     });
     await upsertCollaborationTaskRecord({
       projectId: projectContext.project.projectId,
@@ -1219,6 +2264,7 @@ function createCollaborationChatHelpers(deps) {
       sessionBinding: binding?.sessionKey
         ? { sessionId: binding.sessionId, sessionKey: binding.sessionKey }
         : void 0,
+      requestMessageOverride: input.requestMessageOverride,
     });
     const nextResponse = await input.toolClient.agentTurn({
       agentId: input.targetAgentId,
@@ -1226,6 +2272,8 @@ function createCollaborationChatHelpers(deps) {
       sessionKey: binding?.sessionKey,
       message: nextPrompt,
       timeoutSeconds: 90,
+      preferGatewayStream: true,
+      onStreamEvent: handleLiveStreamEvent,
     });
     if (nextResponse.sessionId) {
       await import_collaboration_room.setCollaborationSessionBinding(
@@ -1265,6 +2313,8 @@ function createCollaborationChatHelpers(deps) {
             targetAgentId: input.targetAgentId,
           }),
           timeoutSeconds: 60,
+          preferGatewayStream: true,
+          onStreamEvent: handleLiveStreamEvent,
         });
         interruptedDurationMs += resumedResponse.durationMs;
         interruptedOutputs.push(describeCollaborationAgentTurnOutput(resumedResponse, stageResultFallback));
@@ -1307,6 +2357,7 @@ function createCollaborationChatHelpers(deps) {
       const interruptedReplyAttachments = await collectCollaborationAgentReplyAttachments({
         roomId: input.roomId,
         workspaceRoot,
+        projectFiles: projectContext.memory.files,
         targetAgentId: input.targetAgentId,
         rawPaths: interruptedRawPaths,
       });
@@ -1315,7 +2366,7 @@ function createCollaborationChatHelpers(deps) {
           interruptedCurrentOutput.replyText ||
           interruptedReplyText ||
           safeTruncate(resumedResponse.rawText.trim(), 2e3);
-        await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
+        const finalizedReplyEvents = await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
           {
             eventId: randomUUID(),
             type: "agent_reply",
@@ -1335,6 +2386,7 @@ function createCollaborationChatHelpers(deps) {
             }),
           },
         ]);
+        const finalizedReplyEvent = finalizedReplyEvents.at(-1);
         await persistCollaborationStageResult({
           roomId: input.roomId,
           sourceEvent: input.sourceEvent,
@@ -1347,8 +2399,38 @@ function createCollaborationChatHelpers(deps) {
           replyAttachments: interruptedReplyAttachments,
           replyText: finalizedReplyText,
           workspaceRoot,
+          projectFiles: projectContext.memory.files,
+          currentRouteAgentIds: input.targetAgentIds,
           reportedAt: interruptedStageResult?.reportedAt ?? new Date().toISOString(),
         });
+        if (finalizedReplyEvent) {
+          await maybeDispatchCollaborationReplyMentions({
+            roomId: input.roomId,
+            sourceEvent: input.sourceEvent,
+            replyEvent: finalizedReplyEvent,
+            replyText: finalizedReplyText,
+            attachmentRecords: input.attachmentRecords,
+            replyAttachments: interruptedReplyAttachments,
+            currentRouteAgentIds: input.targetAgentIds,
+            parentRequestText: input.requestMessageOverride || input.sourceEvent.message,
+            toolClient: input.toolClient,
+            directory: input.directory,
+            language: input.language,
+          });
+          await maybeDispatchCollaborationCoordinatorReviewAfterWorkerReply({
+            roomId: input.roomId,
+            sourceEvent: input.sourceEvent,
+            replyEvent: finalizedReplyEvent,
+            replyText: finalizedReplyText,
+            attachmentRecords: input.attachmentRecords,
+            replyAttachments: interruptedReplyAttachments,
+            currentRouteAgentIds: input.targetAgentIds,
+            requestMessageOverride: input.requestMessageOverride,
+            toolClient: input.toolClient,
+            directory: input.directory,
+            language: input.language,
+          });
+        }
         return;
       }
       const interruptedFailureSummary = summarizeInterruptedCollaborationTurn({
@@ -1417,30 +2499,35 @@ function createCollaborationChatHelpers(deps) {
       const nextReplyAttachments = await collectCollaborationAgentReplyAttachments({
         roomId: input.roomId,
         workspaceRoot,
+        projectFiles: projectContext.memory.files,
         targetAgentId: input.targetAgentId,
         rawPaths: nextResponseOutput.rawPaths,
       });
       const nextReplyText = nextResponseOutput.replyText;
-      await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
-        {
-          eventId: randomUUID(),
-          type: "agent_reply",
-          authorRole: "agent",
-          agentId: input.targetAgentId,
-          sourceEventId: input.sourceEvent.eventId,
-          message: nextReplyText || void 0,
-          attachmentIds: nextReplyAttachments.map((attachment) => attachment.attachmentId),
-          relatedSessionId: nextResponse.sessionId ?? binding?.sessionId,
-          relatedSessionKey: nextResponse.sessionKey ?? binding?.sessionKey,
-          detail: buildCollaborationAgentReplyDetail({
-            language: input.language,
-            directory: input.directory,
-            agentId: input.targetAgentId,
-            durationMs: nextResponse.durationMs,
-            attachments: nextReplyAttachments,
-          }),
-        },
-      ]);
+      const nextReplyEvents =
+        nextReplyText || nextReplyAttachments.length > 0
+          ? await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
+              {
+                eventId: randomUUID(),
+                type: "agent_reply",
+                authorRole: "agent",
+                agentId: input.targetAgentId,
+                sourceEventId: input.sourceEvent.eventId,
+                message: nextReplyText || void 0,
+                attachmentIds: nextReplyAttachments.map((attachment) => attachment.attachmentId),
+                relatedSessionId: nextResponse.sessionId ?? binding?.sessionId,
+                relatedSessionKey: nextResponse.sessionKey ?? binding?.sessionKey,
+                detail: buildCollaborationAgentReplyDetail({
+                  language: input.language,
+                  directory: input.directory,
+                  agentId: input.targetAgentId,
+                  durationMs: nextResponse.durationMs,
+                  attachments: nextReplyAttachments,
+                }),
+              },
+            ])
+          : [];
+      const nextReplyEvent = nextReplyEvents.at(-1);
       await persistCollaborationStageResult({
         roomId: input.roomId,
         sourceEvent: input.sourceEvent,
@@ -1453,13 +2540,44 @@ function createCollaborationChatHelpers(deps) {
           replyAttachments: nextReplyAttachments,
           replyText: nextReplyText,
           workspaceRoot,
+          projectFiles: projectContext.memory.files,
+          currentRouteAgentIds: input.targetAgentIds,
           reportedAt: nextResponseOutput.parsedStageResult.envelope?.reportedAt ?? new Date().toISOString(),
         });
+      if (nextReplyEvent) {
+        await maybeDispatchCollaborationReplyMentions({
+          roomId: input.roomId,
+          sourceEvent: input.sourceEvent,
+          replyEvent: nextReplyEvent,
+          replyText: nextReplyText,
+          attachmentRecords: input.attachmentRecords,
+          replyAttachments: nextReplyAttachments,
+          currentRouteAgentIds: input.targetAgentIds,
+          parentRequestText: input.requestMessageOverride || input.sourceEvent.message,
+          toolClient: input.toolClient,
+          directory: input.directory,
+          language: input.language,
+        });
+        await maybeDispatchCollaborationCoordinatorReviewAfterWorkerReply({
+          roomId: input.roomId,
+          sourceEvent: input.sourceEvent,
+          replyEvent: nextReplyEvent,
+          replyText: nextReplyText,
+          attachmentRecords: input.attachmentRecords,
+          replyAttachments: nextReplyAttachments,
+          currentRouteAgentIds: input.targetAgentIds,
+          requestMessageOverride: input.requestMessageOverride,
+          toolClient: input.toolClient,
+          directory: input.directory,
+          language: input.language,
+        });
+      }
       return;
     }
     const nextFailedReplyAttachments = await collectCollaborationAgentReplyAttachments({
       roomId: input.roomId,
       workspaceRoot,
+      projectFiles: projectContext.memory.files,
       targetAgentId: input.targetAgentId,
       rawPaths: nextResponseOutput.rawPaths,
     });
@@ -1557,73 +2675,6 @@ function createCollaborationChatHelpers(deps) {
       targetAgentIds: [...input.targetAgentIds, input.directory.primaryAgentId],
     });
     return;
-
-    const prompt = await buildCollaborationAgentPromptV2({
-      roomId: input.roomId,
-      sourceEvent: input.sourceEvent,
-      targetAgentId: input.targetAgentId,
-      targetAgentIds: input.targetAgentIds,
-      attachmentRecords: input.attachmentRecords,
-      directory: input.directory,
-      language: input.language,
-      agentWorkspaceRoot: workspaceRoot,
-      sessionBinding: binding ? { sessionId: binding.sessionId, sessionKey: binding.sessionKey } : void 0,
-    });
-    const response = await input.toolClient.agentTurn({
-      agentId: input.targetAgentId,
-      sessionId: isPrimaryTarget ? void 0 : binding?.sessionId,
-      message: prompt,
-      timeoutSeconds: 90,
-    });
-    if (!isPrimaryTarget && response.sessionId) {
-      await import_collaboration_room.setCollaborationSessionBinding(
-        input.roomId,
-        input.targetAgentId,
-        response.sessionId,
-        response.sessionKey,
-      );
-    }
-    if (response.ok) {
-      const parsedArtifacts = import_collaboration_agent_artifacts.parseCollaborationAgentArtifacts(
-        response.replyText.trim() || safeTruncate(response.rawText.trim(), 2e3),
-      );
-      const rawJsonArtifactPaths =
-        import_collaboration_agent_artifacts.extractCollaborationAgentArtifactPathsFromRawJson(
-          response.rawJson,
-        );
-      const replyAttachments = await collectCollaborationAgentReplyAttachments({
-        roomId: input.roomId,
-        workspaceRoot,
-        targetAgentId: input.targetAgentId,
-        rawPaths: [...parsedArtifacts.declaredPaths, ...parsedArtifacts.hintedPaths, ...rawJsonArtifactPaths],
-      });
-      const replyText =
-        parsedArtifacts.cleanReplyText.trim() || safeTruncate(response.rawText.trim(), 2e3);
-      await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
-        {
-          eventId: randomUUID(),
-          type: "agent_reply",
-          authorRole: "agent",
-          agentId: input.targetAgentId,
-          sourceEventId: input.sourceEvent.eventId,
-          message: replyText || void 0,
-          attachmentIds: replyAttachments.map((attachment) => attachment.attachmentId),
-          relatedSessionId: response.sessionId ?? binding?.sessionId,
-          relatedSessionKey: response.sessionKey ?? binding?.sessionKey,
-          detail: buildCollaborationAgentReplyDetail({
-            language: input.language,
-            directory: input.directory,
-            agentId: input.targetAgentId,
-            durationMs: response.durationMs,
-            attachments: replyAttachments,
-          }),
-        },
-      ]);
-      return;
-    }
-    const failedParsedArtifacts = import_collaboration_agent_artifacts.parseCollaborationAgentArtifacts(
-      response.replyText.trim() || safeTruncate(response.rawText.trim(), 2e3),
-    );
     const failedRawJsonArtifactPaths =
       import_collaboration_agent_artifacts.extractCollaborationAgentArtifactPathsFromRawJson(
         response.rawJson,
@@ -1631,6 +2682,7 @@ function createCollaborationChatHelpers(deps) {
     const failedReplyAttachments = await collectCollaborationAgentReplyAttachments({
       roomId: input.roomId,
       workspaceRoot,
+      projectFiles: projectContext.memory.files,
       targetAgentId: input.targetAgentId,
       rawPaths: [
         ...failedParsedArtifacts.declaredPaths,
@@ -1715,23 +2767,56 @@ function createCollaborationChatHelpers(deps) {
       targetAgentId: input.directory.primaryAgentId,
       targetAgentIds: [...input.targetAgentIds, input.directory.primaryAgentId],
     });
+    } finally {
+      clearLiveDraft();
+    }
   }
 
   async function buildCollaborationAgentPromptV2(input) {
-    const directUserMessage =
-      input.sourceEvent.message?.trim() ||
-      pickUiText(
-        input.language,
-        "Please handle this request based on the attachments.",
-        "请根据附件处理这条请求。",
-      );
+    const directUserMessage = resolveCollaborationDispatchRequestText({
+      sourceEvent: input.sourceEvent,
+      requestMessageOverride: input.requestMessageOverride,
+      language: input.language,
+    });
     const longTermMemoryPaths = await resolveAgentLongTermMemoryPaths(input.agentWorkspaceRoot);
+    const roomState =
+      input.roomStateOverride ||
+      await import_collaboration_room.loadCollaborationRoom(input.roomId);
+    const attachmentsById = new Map((roomState.attachments || []).map((item) => [item.attachmentId, item]));
+    const recentCollaborationSummaryLines = buildRecentCollaborationSummaryLines({
+      roomState,
+      sourceEvent: input.sourceEvent,
+      language: input.language,
+      directory: input.directory,
+      attachmentsById,
+    });
+    const projectRoot = String(input.projectMemory?.files?.projectDir || "").trim();
+    const projectArtifactsDir = String(input.projectMemory?.files?.artifactsDir || "").trim();
     const summaryPreview = extractProjectSummaryPreview(input.projectMemory.summaryText);
+    const teammateHandleLines =
+      input.directory &&
+      normalizeLookupKey(input.targetAgentId) === normalizeLookupKey(input.directory.primaryAgentId)
+        ? input.directory.entries
+            .filter((entry) => normalizeLookupKey(entry.agentId) !== normalizeLookupKey(input.targetAgentId))
+            .map((entry) => {
+              const handleCandidate =
+                uniqueCompactStrings([
+                  ...(Array.isArray(entry.aliases) ? entry.aliases : []),
+                  entry.agentId,
+                ])
+                  .map((value) => normalizeLookupKey(value))
+                  .find(Boolean) || normalizeLookupKey(entry.agentId);
+              return handleCandidate ? `- @${handleCandidate} => ${entry.displayName}` : "";
+            })
+            .filter(Boolean)
+        : [];
     const coordinationLines = [
       "<openclaw_coordination>",
       `roomId: ${input.roomId}`,
       `projectId: ${input.project.projectId}`,
       `projectTitle: ${input.project.title}`,
+      ...(projectRoot ? [`projectRoot: ${projectRoot}`] : []),
+      ...(projectArtifactsDir ? [`projectArtifactsDir: ${projectArtifactsDir}`] : []),
       `taskId: ${input.dispatchRecord.taskId}`,
       `stage: ${input.dispatchRecord.stage}`,
       `ownerAgentId: ${input.targetAgentId}`,
@@ -1740,6 +2825,9 @@ function createCollaborationChatHelpers(deps) {
         ? `sessionBinding: ${input.sessionBinding.sessionKey}${input.sessionBinding.sessionId ? ` sessionId=${input.sessionBinding.sessionId}` : ""}`
         : "sessionBinding: none",
       summaryPreview ? `projectSummary: ${summaryPreview}` : "projectSummary: none",
+      ...(teammateHandleLines.length > 0 ? ["teamHandles:", ...teammateHandleLines] : []),
+      "recentCollaborationSummary:",
+      ...(recentCollaborationSummaryLines.length > 0 ? recentCollaborationSummaryLines : ["- none"]),
       "contextRefs:",
       ...uniqueCompactStrings([
         input.projectMemory.files.projectSummaryPath,
@@ -1757,15 +2845,22 @@ function createCollaborationChatHelpers(deps) {
         : ["- none"]),
       "attachments:",
       ...(input.attachmentRecords.length > 0
-        ? input.attachmentRecords.map((attachment) => {
-            const preview = attachment.previewText
-              ? ` | preview=${safeTruncate(attachment.previewText, 160)}`
-              : "";
-            return `- ${attachment.fileName} | ${attachment.contentType} | ${attachment.storedPath}${preview}`;
-          })
+        ? input.attachmentRecords.map((attachment) => buildCollaborationAttachmentPromptLines(attachment))
         : ["- none"]),
       "requirements:",
+      ...buildCollaborationProjectScopeRequirementLines(input.projectMemory?.files),
       "- Read only the listed files that are relevant to this task.",
+      "- For HTML, Markdown, JSON, code, and other text attachments, treat the inline excerpt above as file-content context before you fall back to opening the local path.",
+      "- If the user attached a file asking for analysis, fixes, or optimization, operate on the attachment content instead of replying with only the file path.",
+      ...(
+        input.directory &&
+        normalizeLookupKey(input.targetAgentId) === normalizeLookupKey(input.directory.primaryAgentId) &&
+        (input.targetAgentIds?.length ?? 0) > 1
+          ? [
+              "- Even as the primary coordinator, you are directly assigned on this user turn. Send your own visible user-facing reply in addition to any coordination or review notes.",
+            ]
+          : []
+      ),
       "- Do not repeat or expose this coordination block in the visible reply.",
       "- If you create a file, write it to disk before mentioning it.",
       `- ${buildCollaborationVisibleReplyLanguageRequirement(input.language)}`,
@@ -1775,10 +2870,20 @@ function createCollaborationChatHelpers(deps) {
           : []
       ),
       "artifactReplyContract:",
-      ...import_collaboration_agent_artifacts.buildCollaborationAgentArtifactInstruction(input.agentWorkspaceRoot).split(
-        "\n",
-      ),
+      ...import_collaboration_agent_artifacts
+        .buildCollaborationAgentArtifactInstruction(projectRoot || input.agentWorkspaceRoot, projectArtifactsDir)
+        .split("\n"),
       "- When the stage reaches a reviewable checkpoint, append exactly one <stage_result>...</stage_result> block.",
+      ...(
+        input.directory &&
+        normalizeLookupKey(input.targetAgentId) === normalizeLookupKey(input.directory.primaryAgentId)
+          ? [
+              "- If you need another employee to act, explicitly mention them in your visible reply with their room handle such as @qa or @architect. Those visible @mentions are what queue follow-up work.",
+              "- Do not claim another employee has confirmed, completed, or replied unless that employee has already replied in this room and you can see that result in the current room timeline or recent collaboration summary.",
+              '- If you need the user\'s confirmation, decision, or option selection before continuing, use resultState="awaiting_review" for that checkpoint and wait for the user\'s next room message before continuing.',
+            ]
+          : []
+      ),
       `- Use this JSON template inside the stage_result block: ${import_collaboration_stage_results.buildStageResultEnvelopeTemplate({
         taskId: input.dispatchRecord.taskId,
         projectId: input.project.projectId,
@@ -1787,53 +2892,6 @@ function createCollaborationChatHelpers(deps) {
       "</openclaw_coordination>",
     ];
     return [coordinationLines.join("\n"), "", "User request:", directUserMessage].join("\n");
-
-    const roomState = await import_collaboration_room.loadCollaborationRoom(input.roomId);
-    const attachmentsById = new Map(roomState.attachments.map((item) => [item.attachmentId, item]));
-    const recentEvents = buildCollaborationPromptContextLines({
-      roomState,
-      sourceEvent: input.sourceEvent,
-      targetAgentId: input.targetAgentId,
-      language: input.language,
-      directory: input.directory,
-      attachmentsById,
-      hasBoundSession: Boolean(input.sessionBinding?.sessionId),
-    }).join("\n");
-    const userMessage =
-      input.sourceEvent.message?.trim() ||
-      pickUiText(
-        input.language,
-        "Please handle this request based on the attachments.",
-        "请根据附件处理这条请求。",
-      );
-    const machineNotes = [];
-    if (recentEvents.trim()) {
-      machineNotes.push(pickUiText(input.language, "Reference context:", "参考上下文:"), recentEvents);
-    }
-    if (input.attachmentRecords.length > 0) {
-      machineNotes.push(
-        pickUiText(input.language, "Attachment paths:", "附件路径:"),
-        ...input.attachmentRecords.map((attachment) => {
-          const preview = attachment.previewText
-            ? ` | ${pickUiText(input.language, "preview", "预览")}=${safeTruncate(attachment.previewText, 160)}`
-            : "";
-          return `- ${attachment.fileName} | ${attachment.contentType} | ${attachment.storedPath}${preview}`;
-        }),
-      );
-    }
-    if (shouldHintCollaborationArtifactReply(input.sourceEvent.message, input.attachmentRecords)) {
-      machineNotes.push(
-        pickUiText(
-          input.language,
-          "If you create or update a file for the user, write it in your workspace first, then append the hidden [[openclaw-files]] footer with each file path. Do not expose raw file paths in the visible reply.",
-          "如果你为用户生成或更新了文件，请先实际写入工作区，再在回复末尾追加隐藏的 [[openclaw-files]] 文件尾注。不要在可见回复里暴露原始文件路径。",
-        ),
-      );
-    }
-    if (machineNotes.length === 0) {
-      return userMessage;
-    }
-    return [userMessage, "", "---", ...machineNotes].join("\n");
   }
 
   function resolveCollaborationParticipantWorkspaceRoot(directory, agentId) {
@@ -1877,27 +2935,81 @@ function createCollaborationChatHelpers(deps) {
       });
   }
 
-  function shouldHintCollaborationArtifactReply(message, attachments) {
-    if (attachments.length > 0) {
-      return true;
+  function extractCollaborationArtifactHintText(message) {
+    const text = String(message || "").trim();
+    if (!text) {
+      return "";
     }
-    const text = String(message || "").trim().toLowerCase();
+    const markers = [/coordination instruction:\s*/gi, /\u534f\u8c03\u6307\u4ee4[:：]\s*/g];
+    let instructionStart = -1;
+    for (const pattern of markers) {
+      for (const match of text.matchAll(pattern)) {
+        const start = (match.index ?? -1) + match[0].length;
+        if (start > instructionStart) {
+          instructionStart = start;
+        }
+      }
+    }
+    return instructionStart >= 0 ? text.slice(instructionStart).trim() : text;
+  }
+
+  function shouldHintCollaborationArtifactReply(message, attachments) {
+    const text = extractCollaborationArtifactHintText(message).toLowerCase();
     if (!text) {
       return false;
     }
-    return /(?:\bhtml\b|\bpdf\b|\bdocx?\b|\bmarkdown\b|\bmd\b|\bjson\b|\bcsv\b|鏂囦欢|鏂囨。|闄勪欢|瀵煎嚭|鐢熸垚|鍋氭垚|鍙戠粰鎴憒涓嬭浇|淇濆瓨|report|export|download|save)/i.test(
-      text,
-    );
+    const normalizedText = text
+      .replace(
+        /\b(?:do not|don't|dont|no need to|need not)\b[^.!?\n]{0,160}/gi,
+        " ",
+      )
+      .replace(
+        /\bwithout\b[^.!?\n]{0,80}/gi,
+        " ",
+      )
+      .replace(
+        /(?:不需要|无需|不用|不要|别)[^。！？\n]{0,80}/g,
+        " ",
+      );
+    const hasReadOnlyIntent =
+      /(?:\bverify\b|\breview\b|\binspect\b|\baudit\b|\bcheck\b|\bvalidate\b|\banaly[sz]e\b|\bassess\b|\bexamine\b|\bconfirm\b|\btest\b|\bpass\s*\/\s*fail\b|\bpass-or-fail\b|\bpass or fail\b|\bread-only\b|\breply with\b.*\bpass\b.*\bfail\b|\b(?:reply|respond)\b.*\bonly\b)/i.test(
+        text,
+      ) ||
+      /(?:验证|核对|检查|审核|评审|走查|确认|分析|只需回复|仅需回复|仅回复|只回复|通过\/不通过|通过或不通过|不要修改|无需修改|不需要修改|不用修改|只给结论|仅给结论|只看结论)/.test(
+        text,
+      );
+    const hasArtifactActionIntent =
+      /(?:\bcreate\b|\bgenerate\b|\bbuild\b|\bmake\b|\bwrite\b|\bdraft\b|\bprepare\b|\bproduce\b|\bexport\b|\battach\b|\bupload\b|\bsend\b|\bshare\b|\bdeliver\b|\breturn\b|\bfix\b|\bupdate\b|\bedit\b|\bmodify\b|\brewrite\b|\brevise\b|\bpatch\b|\bimplement\b|\brender\b|\bsave\b.{0,20}\bas\b)/i.test(
+        normalizedText,
+      ) ||
+      /(?:生成|制作|做成|导出|发给|发送|附上|上传|交付|产出|写成|整理成|输出|修复|修改|更新|改写|重写|补齐|实现|保存成|保存为)/.test(
+        normalizedText,
+      );
+    const hasArtifactTarget =
+      /(?:\bhtml\b|\bpdf\b|\bdocx?\b|\bmarkdown\b|\bmd\b|\bjson\b|\bcsv\b|\btxt\b|\breport\b|\bfile\b|\bartifact\b|\battachment\b|\bpage\b|\bwebpage\b|\bwebsite\b|\bdocument\b)/i.test(
+        text,
+      ) || /(?:文件|文档|附件|报告|产物|页面|网页)/.test(text);
+    if (hasReadOnlyIntent && !hasArtifactActionIntent) {
+      return false;
+    }
+    if (hasArtifactActionIntent && (hasArtifactTarget || attachments.length > 0)) {
+      return true;
+    }
+    if (hasReadOnlyIntent) {
+      return false;
+    }
+    return hasArtifactActionIntent;
   }
 
   async function collectCollaborationAgentReplyAttachments(input) {
     const candidatePaths = resolveCollaborationArtifactPaths({
       rawPaths: input.rawPaths,
       workspaceRoot: input.workspaceRoot,
+      projectFiles: input.projectFiles,
     });
     const attachments = [];
     for (const path of candidatePaths) {
-      if (!(await isReadableCollaborationArtifactPath(path, input.workspaceRoot))) {
+      if (!(await isReadableCollaborationArtifactPath(path, input.workspaceRoot, input.projectFiles))) {
         continue;
       }
       attachments.push(
@@ -1912,7 +3024,8 @@ function createCollaborationChatHelpers(deps) {
   }
 
   function resolveCollaborationArtifactPaths(input) {
-    const allowedRoots = [resolve(input.workspaceRoot), resolve(getOpenClawWorkspaceRoot())];
+    const allowedRoots = resolveCollaborationArtifactAllowedRoots(input);
+    const attemptRoots = resolveCollaborationArtifactAttemptRoots(input);
     const out = [];
     const seen = new Set();
     for (const rawPath of input.rawPaths) {
@@ -1925,8 +3038,9 @@ function createCollaborationChatHelpers(deps) {
       if (isAbsoluteLikePath(normalized)) {
         attempts.add(resolve(normalized));
       } else {
-        attempts.add(resolve(input.workspaceRoot, normalized));
-        attempts.add(resolve(getOpenClawWorkspaceRoot(), normalized));
+        for (const root of attemptRoots) {
+          attempts.add(resolve(root, normalized));
+        }
       }
       for (const absolutePath of attempts) {
         if (!isPathInsideAnyRoot(absolutePath, allowedRoots)) {
@@ -1946,8 +3060,34 @@ function createCollaborationChatHelpers(deps) {
     return out.slice(0, import_collaboration_room.COLLABORATION_ATTACHMENTS_PER_MESSAGE_MAX);
   }
 
-  async function isReadableCollaborationArtifactPath(path, workspaceRoot) {
-    if (!isPathInsideAnyRoot(path, [resolve(workspaceRoot), resolve(getOpenClawWorkspaceRoot())])) {
+  function resolveCollaborationArtifactAllowedRoots(input) {
+    const projectRoots = uniqueCompactStrings([
+      input.projectFiles?.projectDir,
+      input.projectFiles?.artifactsDir,
+    ]).map((item) => resolve(item));
+    if (projectRoots.length > 0) {
+      return projectRoots;
+    }
+    return uniqueCompactStrings([input.workspaceRoot, getOpenClawWorkspaceRoot()]).map((item) => resolve(item));
+  }
+
+  function resolveCollaborationArtifactAttemptRoots(input) {
+    const preferredProjectRoots = uniqueCompactStrings([
+      input.projectFiles?.artifactsDir,
+      input.projectFiles?.projectDir,
+    ]);
+    if (preferredProjectRoots.length > 0) {
+      return uniqueCompactStrings([
+        ...preferredProjectRoots,
+        input.workspaceRoot,
+        getOpenClawWorkspaceRoot(),
+      ]).map((item) => resolve(item));
+    }
+    return uniqueCompactStrings([input.workspaceRoot, getOpenClawWorkspaceRoot()]).map((item) => resolve(item));
+  }
+
+  async function isReadableCollaborationArtifactPath(path, workspaceRoot, projectFiles) {
+    if (!isPathInsideAnyRoot(path, resolveCollaborationArtifactAllowedRoots({ workspaceRoot, projectFiles }))) {
       return false;
     }
     if (!isSupportedCollaborationArtifactPath(path)) {
@@ -2026,6 +3166,7 @@ function createCollaborationChatHelpers(deps) {
 
   function buildCollaborationRoomApiEvent(event, directory, attachmentsById, language, roomId) {
     const described = describeCollaborationRoomEvent(event, language, directory, attachmentsById);
+    const visibleMessage = sanitizeVisibleCollaborationText(event.message, language, "", 12000) || void 0;
     const attachments =
       event.attachmentIds
         ?.map((attachmentId) => attachmentsById.get(attachmentId))
@@ -2041,8 +3182,8 @@ function createCollaborationChatHelpers(deps) {
       agentId: event.agentId,
       agentDisplayName: event.agentId ? resolveCollaborationParticipantName(directory, event.agentId) : void 0,
       label: described.label,
-      message: event.message,
-      messageHtml: event.message ? import_chat_markdown.renderChatMarkdownToHtml(event.message) : void 0,
+      message: visibleMessage,
+      messageHtml: visibleMessage ? import_chat_markdown.renderChatMarkdownToHtml(visibleMessage) : void 0,
       detail: described.detail,
       detailHtml: described.detail ? import_chat_markdown.renderChatMarkdownToHtml(described.detail) : void 0,
       failureReason: event.failureReason,
@@ -2105,13 +3246,16 @@ function createCollaborationChatHelpers(deps) {
     buildCollaborationBackgroundSessionKey,
     buildCollaborationAgentReplyDetail,
     describeCollaborationAgentTurnOutput,
+    extractVisibleCollaborationTurnReplyText,
     buildCollaborationPromptContextLines,
+    buildRecentCollaborationSummaryLines,
     buildCollaborationRoomApiEvent,
     collectCollaborationAgentReplyAttachments,
     createCollaborationRoomMessage,
     dispatchCollaborationRoomMessage,
     dispatchCollaborationTurnToAgent,
     dispatchCollaborationTurnToAgentV2,
+    buildSyntheticCollaborationArtifactStageResult,
     isAbsoluteLikePath,
     isInterruptedCollaborationAgentTurn,
     isPathInsideAnyRoot,
@@ -2122,6 +3266,8 @@ function createCollaborationChatHelpers(deps) {
     resolveCollaborationArtifactPaths,
     resolveCollaborationAgentSessionBinding,
     resolveCollaborationParticipantWorkspaceRoot,
+    shouldAutoPromoteCollaborationStageResult,
+    isJarvisWaitingForUserConfirmation,
     summarizeCollaborationFailure,
     summarizeCollaborationUiText,
     shouldHintCollaborationArtifactReply,

@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   maybeClearStaleSessionLockForSmoke,
   parseSessionLockFailureDetailsForSmoke,
+  shouldFailOverToFallbackModelForSmoke,
   shouldRetryTemporary502AgentTurnForSmoke,
   shouldRetryTransientAgentTurnForSmoke,
 } from "../src/clients/openclaw-live-client";
@@ -36,6 +37,17 @@ test("agent turn retry matcher keeps retrying temporary 502 failures", () => {
   assert.equal(
     shouldRetryTemporary502AgentTurnForSmoke({
       ok: false,
+      failureReason: "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
+      replyText: "",
+      rawText: "",
+      rawJson: undefined,
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldRetryTemporary502AgentTurnForSmoke({
+      ok: false,
       failureReason:
         "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 64091f30-4f91-4cc9-a080-9651dc23d0f7 in your message.",
       replyText: "",
@@ -43,6 +55,30 @@ test("agent turn retry matcher keeps retrying temporary 502 failures", () => {
       rawJson: undefined,
     }),
     true,
+  );
+});
+
+test("fallback failover matcher catches visible upstream-unavailable replies", () => {
+  assert.equal(
+    shouldFailOverToFallbackModelForSmoke({
+      ok: true,
+      failureReason: undefined,
+      replyText: "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
+      rawText: "",
+      rawJson: undefined,
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldFailOverToFallbackModelForSmoke({
+      ok: true,
+      failureReason: undefined,
+      replyText: "HTTP 521 usually means the upstream origin is unavailable behind Cloudflare.",
+      rawText: "",
+      rawJson: undefined,
+    }),
+    false,
   );
 });
 

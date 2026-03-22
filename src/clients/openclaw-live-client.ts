@@ -15,7 +15,12 @@ import type {
 } from "../contracts/openclaw-tools";
 import { APPROVAL_ACTIONS_ENABLED } from "../config";
 import { loadCurrentAgentCatalog, resolveOpenClawHomePath } from "../runtime/current-agent-catalog";
-import { probeOpenClawGatewayHealth, runOpenClawCommand } from "../runtime/openclaw-cli";
+import { swapOpenClawAgentToFallbackModel } from "../runtime/openclaw-agent-models";
+import { runOpenClawCommand } from "../runtime/openclaw-cli";
+import {
+  GatewayStreamStartError,
+  streamOpenClawGatewayAgentTurn,
+} from "./openclaw-gateway-stream";
 import type { ToolClient } from "./tool-client";
 
 interface SessionCacheItem {
@@ -61,11 +66,11 @@ const SESSION_HISTORY_TAIL_MIN_LINES = 80;
 const SESSION_HISTORY_TAIL_LINE_MULTIPLIER = 8;
 const SESSION_HISTORY_TAIL_CHUNK_BYTES = 64 * 1024;
 const SESSION_HISTORY_RECOVERY_TIMEOUT_MS = 1_500;
+const AGENT_TURN_SESSION_HISTORY_LOOKBACK_LIMIT = 80;
 const AGENT_TURN_RETRY_BATCH_SIZE = 3;
 const AGENT_TURN_RETRY_DELAY_MS = 400;
 const AGENT_TURN_TRANSIENT_RETRY_LIMIT = 3;
 const AGENT_TURN_TRANSIENT_RETRY_DELAY_MS = 1_200;
-const AGENT_TURN_PRECHECK_TIMEOUT_MS = 2_500;
 const AGENT_TURN_STALE_LOCK_MIN_AGE_MS = 30 * 60 * 1000;
 const AGENT_TURN_STALE_LOCK_FORCE_AGE_MS = 30 * 60 * 1000;
 const AGENT_TURN_STALE_LOCK_RETRY_DELAY_MS = 250;
@@ -87,11 +92,14 @@ interface AgentTurnAttemptInput {
   sessionId?: string;
   sessionKey?: string;
   timeoutSeconds: number;
+  preferGatewayStream?: boolean;
+  onStreamEvent?: AgentTurnRequest["onStreamEvent"];
 }
 
 interface ResolvedAgentTurnSessionBinding {
   sessionId?: string;
   sessionKey?: string;
+  sessionFile?: string;
 }
 
 /**
@@ -135,8 +143,8 @@ export class OpenClawLiveClient implements ToolClient {
     );
 
     return (data.sessions ?? []).map((item) => ({
-      key: asString(item.key),
-      sessionKey: asString(item.key),
+      key: asString(item.key) ?? asString(item.sessionKey),
+      sessionKey: asString(item.sessionKey) ?? asString(item.key),
       sessionId: asString(item.sessionId),
       agentId: asString(item.agentId),
       updatedAtMs: asNumber(item.updatedAt),
@@ -282,30 +290,20 @@ export class OpenClawLiveClient implements ToolClient {
     }
 
     const startedAt = Date.now();
-    const preflight = await probeOpenClawGatewayHealth({
-      timeoutMs: AGENT_TURN_PRECHECK_TIMEOUT_MS,
-    });
-    if (!preflight.ok) {
-      return {
-        ok: false,
-        agentId,
-        replyText: "",
-        durationMs: Date.now() - startedAt,
-        rawText: preflight.rawText,
-        rawJson: preflight.rawJson,
-        failureReason: preflight.failureReason ?? "OpenClaw gateway precheck failed.",
-      };
-    }
-
-    const beforeSessions = await this.sessionsList();
+    // `openclaw health` has produced false negatives on some local setups while
+    // the actual `openclaw agent` command still succeeds. Use the real turn as
+    // the source of truth so collaboration dispatch is not blocked by a flaky
+    // precheck.
+    let beforeSessions = await this.sessionsList();
     const timeoutSeconds = normalizeAgentTurnTimeout(request.timeoutSeconds);
-    const requestedSession = resolveRequestedAgentTurnSessionBinding(
+    let requestedSession = resolveRequestedAgentTurnSessionBinding(
       agentId,
       beforeSessions,
       request.sessionId?.trim(),
       request.sessionKey?.trim(),
     );
     let response: AgentTurnResponse | undefined;
+    let fallbackEvaluated = false;
     for (let attempt = 1; ; attempt += 1) {
       response = await this.runAgentTurnAttempt({
         agentId,
@@ -313,9 +311,24 @@ export class OpenClawLiveClient implements ToolClient {
         sessionId: requestedSession.sessionId,
         sessionKey: requestedSession.sessionKey,
         timeoutSeconds,
+        preferGatewayStream: request.preferGatewayStream,
+        onStreamEvent: request.onStreamEvent,
         beforeSessions,
         startedAt,
       });
+      if (!fallbackEvaluated && shouldFailOverToFallbackModel(response)) {
+        fallbackEvaluated = true;
+        const swapped = await maybeSwapAgentTurnToFallbackModel(agentId);
+        if (swapped) {
+          requestedSession = {};
+          beforeSessions = await this.sessionsList().catch(() => beforeSessions);
+          console.warn(
+            `[openclaw] upstream model failure for ${agentId}; switched ${swapped.previousModel} -> ${swapped.model} and retrying with a fresh session.`,
+          );
+          await sleep(AGENT_TURN_RETRY_DELAY_MS * attempt);
+          continue;
+        }
+      }
       const retry502 = shouldRetryTemporary502AgentTurn(response);
       const retryTransient = shouldRetryTransientAgentTurn(response);
       const transientRecovery = retryTransient ? await maybeRecoverTransientAgentTurnFailure(response) : undefined;
@@ -364,6 +377,19 @@ export class OpenClawLiveClient implements ToolClient {
     beforeSessions: SessionsListResponse;
     startedAt: number;
   }): Promise<AgentTurnResponse> {
+    if (
+      (input.preferGatewayStream || input.onStreamEvent) &&
+      input.sessionKey?.trim()
+    ) {
+      try {
+        return await this.runGatewayAgentTurnAttempt(input);
+      } catch (error) {
+        if (!(error instanceof GatewayStreamStartError)) {
+          throw error;
+        }
+      }
+    }
+
     const args = buildAgentTurnCliArgs(input);
 
     try {
@@ -381,21 +407,35 @@ export class OpenClawLiveClient implements ToolClient {
         input.sessionId,
         input.sessionKey,
       );
-      return {
+      const rawReplyText = extractAgentReplyText(rawJson);
+      const recoveredReply = await this.maybeRecoverFinalAssistantReplyFromSessionHistory({
+        sessionId: resolvedSession?.sessionId,
+        sessionKey: resolvedSession?.sessionKey ?? input.sessionKey,
+        sessionFile: resolvedSession?.sessionFile,
+        startedAtMs: input.startedAt,
+        waitForFinal: !looksLikeFinalAgentTurnReply(rawReplyText, completion),
+      });
+      const applied = applyRecoveredAssistantReply({
         ok: true,
+        replyText: rawReplyText,
+        completion,
+        recoveredReply,
+      });
+      return {
+        ok: applied.ok,
         agentId: input.agentId,
-        replyText: extractAgentReplyText(rawJson),
+        replyText: applied.replyText,
         durationMs: Date.now() - input.startedAt,
         sessionId: resolvedSession?.sessionId,
         sessionKey: resolvedSession?.sessionKey,
         rawText,
         rawJson: asObject(rawJson),
-        stopReason: completion.stopReason,
-        errorMessage: completion.errorMessage,
-        incomplete: completion.incomplete,
+        stopReason: applied.stopReason,
+        errorMessage: applied.errorMessage,
+        incomplete: applied.incomplete,
       };
     } catch (error) {
-      const rawText = typeof asObject(error)?.stdout === "string" ? String(asObject(error)?.stdout ?? "") : "";
+      const rawText = extractOpenClawCommandErrorText(error);
       const rawJson = parseEmbeddedJson(rawText);
       const completion = inspectAgentTurnCompletion(rawJson);
       const afterSessions = await this.sessionsList().catch(() => input.beforeSessions);
@@ -406,22 +446,144 @@ export class OpenClawLiveClient implements ToolClient {
         input.sessionId,
         input.sessionKey,
       );
-      return {
+      const rawReplyText = extractAgentReplyText(rawJson);
+      const recoveredReply = await this.maybeRecoverFinalAssistantReplyFromSessionHistory({
+        sessionId: resolvedSession?.sessionId,
+        sessionKey: resolvedSession?.sessionKey ?? input.sessionKey,
+        sessionFile: resolvedSession?.sessionFile,
+        startedAtMs: input.startedAt,
+        waitForFinal: true,
+      });
+      const applied = applyRecoveredAssistantReply({
         ok: false,
+        replyText: rawReplyText,
+        completion,
+        recoveredReply,
+      });
+      return {
+        ok: applied.ok,
         agentId: input.agentId,
-        replyText: extractAgentReplyText(rawJson),
+        replyText: applied.replyText,
         durationMs: Date.now() - input.startedAt,
         sessionId: resolvedSession?.sessionId,
         sessionKey: resolvedSession?.sessionKey,
         rawText,
         rawJson: asObject(rawJson),
-        failureReason:
-          completion.errorMessage?.trim() ||
-          (error instanceof Error ? error.message : "Agent turn failed."),
-        stopReason: completion.stopReason,
-        errorMessage: completion.errorMessage,
-        incomplete: completion.incomplete,
+        failureReason: applied.ok
+          ? undefined
+          : completion.errorMessage?.trim() ||
+            firstNonEmptyLine(rawText) ||
+            (error instanceof Error ? error.message : "Agent turn failed."),
+        stopReason: applied.stopReason,
+        errorMessage: applied.errorMessage,
+        incomplete: applied.incomplete,
       };
+    }
+  }
+
+  private async runGatewayAgentTurnAttempt(input: AgentTurnAttemptInput & {
+    beforeSessions: SessionsListResponse;
+    startedAt: number;
+  }): Promise<AgentTurnResponse> {
+    const streamed = await streamOpenClawGatewayAgentTurn({
+      agentId: input.agentId,
+      message: input.message,
+      sessionKey: input.sessionKey || "",
+      timeoutSeconds: input.timeoutSeconds,
+      onStreamEvent: input.onStreamEvent,
+    });
+    const afterSessions = await this.sessionsList().catch(() => input.beforeSessions);
+    const resolvedSession = this.resolveLatestAgentSession(
+      input.agentId,
+      input.beforeSessions,
+      afterSessions,
+      input.sessionId,
+      input.sessionKey,
+    );
+    const rawText =
+      streamed.rawPayload
+        ? JSON.stringify(streamed.rawPayload)
+        : streamed.errorMessage?.trim() || streamed.replyText;
+    const completion = inspectAgentTurnCompletion({
+      stopReason: streamed.stopReason,
+      errorMessage: streamed.errorMessage,
+      payloads: streamed.replyText ? [{ text: streamed.replyText }] : [],
+      message: streamed.replyText || undefined,
+    });
+    const recoveredReply = await this.maybeRecoverFinalAssistantReplyFromSessionHistory({
+      sessionId: resolvedSession?.sessionId,
+      sessionKey: resolvedSession?.sessionKey ?? input.sessionKey,
+      sessionFile: resolvedSession?.sessionFile,
+      startedAtMs: input.startedAt,
+      waitForFinal: !looksLikeFinalAgentTurnReply(streamed.replyText, completion),
+    });
+    const applied = applyRecoveredAssistantReply({
+      ok: !streamed.errorMessage,
+      replyText: streamed.replyText,
+      completion,
+      recoveredReply,
+    });
+
+    return {
+      ok: applied.ok,
+      agentId: input.agentId,
+      runId: streamed.runId,
+      replyText: applied.replyText,
+      durationMs: Date.now() - input.startedAt,
+      sessionId: resolvedSession?.sessionId,
+      sessionKey: resolvedSession?.sessionKey,
+      rawText,
+      rawJson: streamed.rawPayload,
+      failureReason: applied.ok
+        ? undefined
+        : streamed.errorMessage?.trim() ||
+          firstNonEmptyLine(rawText) ||
+          "Agent turn failed.",
+      stopReason: applied.stopReason,
+      errorMessage: applied.errorMessage,
+      incomplete: applied.incomplete,
+    };
+  }
+
+  private async maybeRecoverFinalAssistantReplyFromSessionHistory(input: {
+    sessionId?: string;
+    sessionKey?: string;
+    sessionFile?: string;
+    startedAtMs: number;
+    waitForFinal: boolean;
+  }): Promise<RecoveredAssistantReply | undefined> {
+    const sessionKey = input.sessionKey?.trim();
+    const sessionFile =
+      input.sessionFile?.trim() ||
+      (sessionKey ? this.sessionCache.get(sessionKey)?.sessionFile : undefined) ||
+      (sessionKey ? await this.lookupSessionFile(sessionKey) : undefined);
+    if (!sessionKey && !sessionFile) {
+      return undefined;
+    }
+
+    const deadline = Date.now() + SESSION_HISTORY_RECOVERY_TIMEOUT_MS;
+    while (true) {
+      const history =
+        (sessionFile
+          ? await readSessionHistoryFile(
+            sessionFile,
+            AGENT_TURN_SESSION_HISTORY_LOOKBACK_LIMIT,
+          )
+          : undefined) ??
+        (sessionKey
+          ? await this.sessionsHistory({
+            sessionKey,
+            limit: AGENT_TURN_SESSION_HISTORY_LOOKBACK_LIMIT,
+          })
+          : undefined);
+      const candidate = selectLatestFinalAssistantReplyFromHistory(history, input.startedAtMs);
+      if (candidate) {
+        return candidate;
+      }
+      if (!input.waitForFinal || Date.now() >= deadline) {
+        return undefined;
+      }
+      await sleep(200);
     }
   }
 
@@ -520,6 +682,20 @@ export class OpenClawLiveClient implements ToolClient {
       }
     }
 
+    const discovered = this.sessionFileCache.get(sessionKey);
+    if (discovered) {
+      return discovered;
+    }
+
+    try {
+      const cliSessions = await this.loadSessionsFromCli(openclawHome, configuredAgentKeys, {
+        timeoutMs: SESSION_HISTORY_RECOVERY_TIMEOUT_MS,
+      });
+      this.rememberSessions(cliSessions);
+    } catch {
+      // Ignore transient CLI lookup failures and fall back to the local cache only.
+    }
+
     return this.sessionFileCache.get(sessionKey);
   }
 
@@ -551,45 +727,71 @@ export class OpenClawLiveClient implements ToolClient {
     afterSessions: SessionsListResponse,
     preferredSessionId?: string,
     preferredSessionKey?: string,
-  ): { sessionId?: string; sessionKey?: string } | undefined {
+  ): { sessionId?: string; sessionKey?: string; sessionFile?: string } | undefined {
     const normalizedAgentId = normalizeAgentKey(agentId);
+    const beforeItems = (beforeSessions.sessions ?? []).filter(
+      (item) => normalizeAgentKey(item.agentId ?? extractAgentIdFromSessionKey(item.sessionKey)) === normalizedAgentId,
+    );
     const afterItems = (afterSessions.sessions ?? []).filter(
       (item) => normalizeAgentKey(item.agentId ?? extractAgentIdFromSessionKey(item.sessionKey)) === normalizedAgentId,
     );
+    const preferredItems = afterItems.length > 0 ? afterItems : beforeItems;
     if (preferredSessionKey?.trim()) {
-      const preferred = afterItems.find(
+      const preferred = preferredItems.find(
         (item) => normalizeSessionKey(item.sessionKey ?? item.key) === normalizeSessionKey(preferredSessionKey),
       );
       if (preferred) {
         return {
           sessionId: preferred.sessionId,
           sessionKey: preferred.sessionKey ?? preferred.key,
+          sessionFile: preferred.sessionFile,
         };
       }
     }
     if (preferredSessionId?.trim()) {
-      const preferred = afterItems.find((item) => (item.sessionId ?? "").trim() === preferredSessionId.trim());
+      const preferred = preferredItems.find((item) => (item.sessionId ?? "").trim() === preferredSessionId.trim());
       if (preferred) {
         return {
           sessionId: preferred.sessionId,
           sessionKey: preferred.sessionKey ?? preferred.key,
+          sessionFile: preferred.sessionFile,
         };
       }
     }
 
+    const requestedSessionId = preferredSessionId?.trim() || undefined;
+    const requestedSessionKey = preferredSessionKey?.trim() || undefined;
+    if (requestedSessionId || requestedSessionKey) {
+      const unionItems = [...afterItems, ...beforeItems];
+      const requested = unionItems.find((item) => {
+        if (requestedSessionId && (item.sessionId ?? "").trim() === requestedSessionId) {
+          return true;
+        }
+        const candidateKey = item.sessionKey ?? item.key;
+        return Boolean(
+          requestedSessionKey &&
+          normalizeSessionKey(candidateKey) === normalizeSessionKey(requestedSessionKey),
+        );
+      });
+      return {
+        sessionId: requested?.sessionId ?? requestedSessionId,
+        sessionKey: requested?.sessionKey ?? requested?.key ?? requestedSessionKey,
+        sessionFile: requested?.sessionFile,
+      };
+    }
+
     const beforeBySessionId = new Map(
-      (beforeSessions.sessions ?? [])
-        .filter((item) => normalizeAgentKey(item.agentId ?? extractAgentIdFromSessionKey(item.sessionKey)) === normalizedAgentId)
-        .map((item) => [item.sessionId ?? item.sessionKey ?? item.key ?? "", item]),
+      beforeItems.map((item) => [item.sessionId ?? item.sessionKey ?? item.key ?? "", item]),
     );
 
     const newest =
       afterItems.find((item) => !beforeBySessionId.has(item.sessionId ?? item.sessionKey ?? item.key ?? "")) ??
-      [...afterItems].sort((a, b) => (b.updatedAtMs ?? 0) - (a.updatedAtMs ?? 0))[0];
+      [...(afterItems.length > 0 ? afterItems : beforeItems)].sort((a, b) => (b.updatedAtMs ?? 0) - (a.updatedAtMs ?? 0))[0];
     if (!newest) return undefined;
     return {
       sessionId: newest.sessionId,
       sessionKey: newest.sessionKey ?? newest.key,
+      sessionFile: newest.sessionFile,
     };
   }
 }
@@ -655,6 +857,29 @@ async function runText(
     maxBuffer: options?.maxBuffer ?? 2 * 1024 * 1024,
   });
   return stdout;
+}
+
+function extractOpenClawCommandErrorText(error: unknown): string {
+  const object = asObject(error);
+  return joinNonEmptyText(
+    asString(object?.stdout),
+    asString(object?.stderr),
+    error instanceof Error ? error.message : undefined,
+  );
+}
+
+function joinNonEmptyText(...parts: Array<string | undefined>): string {
+  return parts
+    .map((part) => part?.trim())
+    .filter((part): part is string => typeof part === "string" && part !== "")
+    .join("\n");
+}
+
+function firstNonEmptyLine(input: string): string | undefined {
+  return input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line !== "");
 }
 
 async function readSessionHistoryFromCli(
@@ -832,31 +1057,294 @@ function normalizeSessionHistoryChunk(raw: string, limit: number): SessionsHisto
   };
 }
 
-function extractAgentReplyText(input: unknown): string {
-  const root = asObject(input);
-  const payloads = Array.isArray(root?.payloads) ? root?.payloads : [];
+function applyRecoveredAssistantReply(input: {
+  ok: boolean;
+  replyText: string;
+  completion: AgentTurnCompletion;
+  recoveredReply?: RecoveredAssistantReply;
+}): {
+  ok: boolean;
+  replyText: string;
+  stopReason?: string;
+  errorMessage?: string;
+  incomplete: boolean;
+} {
+  if (!input.recoveredReply?.replyText.trim()) {
+    return {
+      ok: input.ok,
+      replyText: input.replyText,
+      stopReason: input.completion.stopReason,
+      errorMessage: input.completion.errorMessage,
+      incomplete: input.completion.incomplete,
+    };
+  }
+  return {
+    ok: true,
+    replyText: input.recoveredReply.replyText,
+    stopReason: input.recoveredReply.stopReason ?? input.completion.stopReason ?? "stop",
+    errorMessage: undefined,
+    incomplete: false,
+  };
+}
+
+function looksLikeFinalAgentTurnReply(replyText: string, completion: AgentTurnCompletion): boolean {
+  if (!replyText.trim() || completion.incomplete) {
+    return false;
+  }
+  const normalizedStopReason = normalizeAgentTurnStopReason(completion.stopReason);
+  return isFinalAgentTurnStopReason(normalizedStopReason) || /<stage_result\b/i.test(replyText);
+}
+
+function selectLatestFinalAssistantReplyFromHistory(
+  history: SessionsHistoryResponse | undefined,
+  startedAtMs: number,
+): RecoveredAssistantReply | undefined {
+  const records = extractSessionHistoryRecords(history);
+  let latest: RecoveredAssistantReply | undefined;
+  for (const record of records) {
+    const candidate = extractFinalAssistantReplyFromHistoryRecord(record, startedAtMs);
+    if (!candidate) {
+      continue;
+    }
+    if (!latest || candidate.timestampMs >= latest.timestampMs) {
+      latest = candidate;
+    }
+  }
+  return latest;
+}
+
+function extractSessionHistoryRecords(history: SessionsHistoryResponse | undefined): Record<string, unknown>[] {
+  if (!history) {
+    return [];
+  }
+  const jsonHistory = asObject(history.json)?.history;
+  if (Array.isArray(jsonHistory)) {
+    return jsonHistory.flatMap((item) => {
+      const parsed = parseSessionHistoryRecord(item);
+      return parsed ? [parsed] : [];
+    });
+  }
+  return String(history.rawText || "")
+    .split(/\r?\n/)
+    .map((line) => parseSessionHistoryRecord(line))
+    .filter((item): item is Record<string, unknown> => Boolean(item));
+}
+
+function parseSessionHistoryRecord(input: unknown): Record<string, unknown> | undefined {
+  const object = asObject(input);
+  if (object) return object;
+  if (typeof input !== "string") return undefined;
+  try {
+    return asObject(JSON.parse(input));
+  } catch {
+    return undefined;
+  }
+}
+
+function extractFinalAssistantReplyFromHistoryRecord(
+  record: Record<string, unknown>,
+  startedAtMs: number,
+): RecoveredAssistantReply | undefined {
+  if (normalizeSessionHistoryRecordType(record) !== "message") {
+    return undefined;
+  }
+  const message = asObject(record.message);
+  if (normalizeSessionHistoryMessageRole(message) !== "assistant") {
+    return undefined;
+  }
+  const timestampMs = parseSessionHistoryTimestampMs(record, message);
+  if (!Number.isFinite(timestampMs) || timestampMs + 1_000 < startedAtMs) {
+    return undefined;
+  }
+  const replyText = extractVisibleAssistantTextFromHistoryMessage(message);
+  if (!replyText) {
+    return undefined;
+  }
+  const stopReason =
+    asString(message?.stopReason) ??
+    asString(message?.stop_reason) ??
+    asString(record.stopReason) ??
+    asString(record.stop_reason);
+  const normalizedStopReason = normalizeAgentTurnStopReason(stopReason);
+  const looksFinal =
+    historyMessageHasFinalAnswerSignature(message) ||
+    isFinalAgentTurnStopReason(normalizedStopReason) ||
+    /<stage_result\b/i.test(replyText);
+  if (!looksFinal) {
+    return undefined;
+  }
+  return {
+    replyText,
+    stopReason: stopReason?.trim() || undefined,
+    timestampMs,
+  };
+}
+
+function normalizeSessionHistoryRecordType(record: Record<string, unknown>): string {
+  return String(record.type || "").trim().toLowerCase();
+}
+
+function normalizeSessionHistoryMessageRole(message: Record<string, unknown> | undefined): string {
+  return String(message?.role || "").trim().toLowerCase();
+}
+
+function parseSessionHistoryTimestampMs(
+  record: Record<string, unknown>,
+  message: Record<string, unknown> | undefined,
+): number {
+  const candidates = [
+    record.timestamp,
+    record.createdAt,
+    message?.timestamp,
+    message?.createdAt,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return normalizeEpochMs(candidate);
+    }
+    if (typeof candidate === "string" && candidate.trim()) {
+      const parsed = Date.parse(candidate.trim());
+      if (!Number.isNaN(parsed)) {
+        return parsed;
+      }
+      if (/^\d+(\.\d+)?$/.test(candidate.trim())) {
+        const numeric = Number(candidate.trim());
+        if (Number.isFinite(numeric)) {
+          return normalizeEpochMs(numeric);
+        }
+      }
+    }
+  }
+  return Number.NaN;
+}
+
+function extractVisibleAssistantTextFromHistoryMessage(message: Record<string, unknown> | undefined): string {
+  if (!message) {
+    return "";
+  }
   const collected: string[] = [];
-  for (const payload of payloads) {
-    const obj = asObject(payload);
-    const directText = asString(obj?.text);
-    if (directText?.trim()) {
-      collected.push(directText.trim());
-      continue;
+  if (message.content !== undefined) {
+    collectAgentReplyTextFragments(message.content, collected);
+  }
+  if (collected.length > 0) {
+    return collected.join("\n\n").trim();
+  }
+  return (
+    asString(message.replyText) ??
+    asString(message.text) ??
+    asString(message.message) ??
+    asString(message.content) ??
+    ""
+  ).trim();
+}
+
+function historyMessageHasFinalAnswerSignature(message: Record<string, unknown> | undefined): boolean {
+  return valueContainsFinalAnswerSignature(message?.content);
+}
+
+function valueContainsFinalAnswerSignature(input: unknown): boolean {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  if (Array.isArray(input)) {
+    return input.some((item) => valueContainsFinalAnswerSignature(item));
+  }
+  const obj = input as Record<string, unknown>;
+  const signature = asString(obj.textSignature) ?? asString(obj.signature);
+  if (signature && /"phase"\s*:\s*"final_answer"/i.test(signature)) {
+    return true;
+  }
+  return Object.values(obj).some((value) => valueContainsFinalAnswerSignature(value));
+}
+
+function isFinalAgentTurnStopReason(input: string | undefined): boolean {
+  return input === "stop" || input === "endturn" || input === "done" || input === "completed" || input === "complete";
+}
+
+function resolveAgentTurnResultObjects(input: unknown): Record<string, unknown>[] {
+  const output: Record<string, unknown>[] = [];
+  const seen = new Set<Record<string, unknown>>();
+
+  const visit = (value: unknown): void => {
+    const obj = asObject(value);
+    if (!obj || seen.has(obj)) return;
+    seen.add(obj);
+    output.push(obj);
+    visit(obj.result);
+    visit(obj.response);
+    visit(asObject(obj.response)?.result);
+  };
+
+  visit(input);
+  return output;
+}
+
+function extractAgentTurnPayloads(input: Record<string, unknown>): unknown[] {
+  return Array.isArray(input.payloads) ? input.payloads : [];
+}
+
+function collectAgentReplyTextFragments(input: unknown, output: string[]): void {
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    if (trimmed) output.push(trimmed);
+    return;
+  }
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      collectAgentReplyTextFragments(item, output);
     }
-    const content = asString(obj?.content);
-    if (content?.trim()) {
-      collected.push(content.trim());
-      continue;
-    }
-    const message = asString(obj?.message);
-    if (message?.trim()) {
-      collected.push(message.trim());
+    return;
+  }
+
+  const obj = asObject(input);
+  if (!obj) return;
+
+  const type = normalizeAgentTurnStopReason(asString(obj.type));
+  if (type?.startsWith("tool")) {
+    return;
+  }
+
+  const directText = asString(obj.text)?.trim();
+  if (directText) output.push(directText);
+
+  const directContent = asString(obj.content)?.trim();
+  if (directContent) output.push(directContent);
+
+  const directMessage = asString(obj.message)?.trim();
+  if (directMessage) output.push(directMessage);
+
+  if (!directContent && obj.content !== undefined) {
+    collectAgentReplyTextFragments(obj.content, output);
+  }
+  if (!directMessage && obj.message !== undefined) {
+    collectAgentReplyTextFragments(obj.message, output);
+  }
+  if (obj.parts !== undefined) {
+    collectAgentReplyTextFragments(obj.parts, output);
+  }
+}
+
+function extractAgentReplyText(input: unknown): string {
+  const collected: string[] = [];
+  for (const root of resolveAgentTurnResultObjects(input)) {
+    for (const payload of extractAgentTurnPayloads(root)) {
+      collectAgentReplyTextFragments(payload, collected);
     }
   }
   if (collected.length > 0) return collected.join("\n\n").trim();
 
-  const topLevelText = asString(root?.replyText) ?? asString(root?.text);
-  return topLevelText?.trim() ?? "";
+  for (const root of resolveAgentTurnResultObjects(input)) {
+    const topLevelText =
+      asString(root.replyText) ??
+      asString(root.text) ??
+      asString(root.message) ??
+      asString(root.content);
+    if (topLevelText?.trim()) {
+      return topLevelText.trim();
+    }
+  }
+
+  return "";
 }
 
 interface AgentTurnCompletion {
@@ -865,29 +1353,51 @@ interface AgentTurnCompletion {
   incomplete: boolean;
 }
 
+interface RecoveredAssistantReply {
+  replyText: string;
+  stopReason?: string;
+  timestampMs: number;
+}
+
 function inspectAgentTurnCompletion(input: unknown): AgentTurnCompletion {
-  const root = asObject(input);
-  const stopReason =
-    asString(root?.stopReason) ??
-    asString(root?.stop_reason) ??
-    asString(asObject(root?.response)?.stopReason) ??
-    asString(asObject(root?.response)?.stop_reason);
-  const errorMessage =
-    asString(root?.errorMessage) ??
-    asString(root?.error_message) ??
-    asString(asObject(root?.response)?.errorMessage) ??
-    asString(asObject(root?.response)?.error_message);
+  const roots = resolveAgentTurnResultObjects(input);
+  const stopReason = roots
+    .map((root) =>
+      asString(root.stopReason) ??
+      asString(root.stop_reason) ??
+      asString(asObject(root.meta)?.stopReason) ??
+      asString(asObject(root.meta)?.stop_reason),
+    )
+    .find((value) => value?.trim());
+  const errorMessage = roots
+    .map((root) =>
+      asString(root.errorMessage) ??
+      asString(root.error_message) ??
+      asString(asObject(root.meta)?.errorMessage) ??
+      asString(asObject(root.meta)?.error_message) ??
+      asString(asObject(root.error)?.message) ??
+      asString(asObject(root.error)?.error),
+    )
+    .find((value) => value?.trim());
   const normalizedStopReason = normalizeAgentTurnStopReason(stopReason);
   const visibleReplyText = extractAgentReplyText(input);
+  const combinedSignalText = joinNonEmptyText(errorMessage, visibleReplyText);
+  const aborted = roots.some(
+    (root) => asBoolean(root.aborted) === true || asBoolean(asObject(root.meta)?.aborted) === true,
+  );
+  const payloads = roots.flatMap((root) => extractAgentTurnPayloads(root));
   const incomplete =
+    aborted ||
     normalizedStopReason === "aborted" ||
     normalizedStopReason === "interrupted" ||
     normalizedStopReason === "cancelled" ||
     normalizedStopReason === "canceled" ||
     normalizedStopReason === "tooluse" ||
     normalizedStopReason === "toolcall" ||
-    /request was aborted|turn was aborted|was aborted|cancelled|canceled/i.test(errorMessage ?? "") ||
-    (!visibleReplyText.trim() && payloadsContainToolCall(root?.payloads));
+    /request was aborted|turn was aborted|was aborted|cancelled|canceled|request timed out before a response was generated|timed out before a response was generated/i.test(
+      combinedSignalText,
+    ) ||
+    (!visibleReplyText.trim() && payloadsContainToolCall(payloads));
   return {
     stopReason: stopReason?.trim() || undefined,
     errorMessage: errorMessage?.trim() || undefined,
@@ -920,25 +1430,53 @@ function shouldRetryTemporary502AgentTurn(
   if (response.ok) return false;
   const haystacks = buildAgentTurnRetryHaystack(response);
   if (!haystacks) return false;
-  if (haystacks.includes("http 502")) return true;
-  if (haystacks.includes("error code 502")) return true;
-  if (haystacks.includes("502") && (haystacks.includes("bad gateway") || haystacks.includes("temporarily unavailable"))) {
-    return true;
-  }
   return looksLikeRetryableUpstreamProviderError(haystacks);
 }
 
-function looksLikeRetryableUpstreamProviderError(input: string): boolean {
-  const normalized = input.trim().toLowerCase();
+function shouldFailOverToFallbackModel(
+  response: Pick<AgentTurnResponse, "ok" | "failureReason" | "replyText" | "rawText" | "rawJson">,
+): boolean {
+  if (!response.ok) {
+    return looksLikeRetryableUpstreamProviderError(buildAgentTurnRetryHaystack(response));
+  }
+  return looksLikeVisibleUpstreamFailureReply(response.replyText);
+}
+
+function looksLikeRetryableUpstreamProviderError(input: string | undefined): boolean {
+  const normalized = input?.trim().toLowerCase() ?? "";
   if (!normalized) return false;
+  if (/\bhttp\s*(502|503|521|522|524|529)\b/.test(normalized)) return true;
+  if (/\berror code\s*(502|503|521|522|524|529)\b/.test(normalized)) return true;
+  if (
+    /\b(502|503|521|522|524|529)\b/.test(normalized) &&
+    /(bad gateway|gateway timeout|temporarily unavailable|service unavailable|upstream)/.test(normalized)
+  ) {
+    return true;
+  }
+  if (normalized.includes("the ai service is temporarily unavailable")) return true;
   if (normalized.includes("an error occurred while processing your request")) return true;
   return normalized.includes("help.openai.com") && normalized.includes("request id");
 }
 
+function looksLikeVisibleUpstreamFailureReply(input: string | undefined): boolean {
+  const normalized = input?.trim().toLowerCase() ?? "";
+  if (!normalized) return false;
+  if (normalized.startsWith("the ai service is temporarily unavailable")) return true;
+  if (normalized.startsWith("an error occurred while processing your request")) return true;
+  if (!looksLikeRetryableUpstreamProviderError(normalized)) return false;
+  return (
+    normalized.length <= 240 &&
+    /(temporarily unavailable|service unavailable|bad gateway|gateway timeout|help.openai.com|request id)/.test(
+      normalized,
+    )
+  );
+}
+
 function shouldRetryTransientAgentTurn(
-  response: Pick<AgentTurnResponse, "ok" | "failureReason" | "replyText" | "rawText" | "rawJson">,
+  response: Pick<AgentTurnResponse, "ok" | "failureReason" | "replyText" | "rawText" | "rawJson" | "runId">,
 ): boolean {
   if (response.ok) return false;
+  if (response.runId) return false;
   const haystacks = buildAgentTurnRetryHaystack(response);
   if (!haystacks) return false;
   if (/(session file locked|resource busy|ebusy|\bfile is locked\b)/i.test(haystacks)) {
@@ -965,6 +1503,17 @@ async function maybeRecoverTransientAgentTurnFailure(
     clearedStaleLock,
     lockPath: clearedStaleLock ? details.lockPath : undefined,
   };
+}
+
+async function maybeSwapAgentTurnToFallbackModel(agentId: string) {
+  try {
+    return await swapOpenClawAgentToFallbackModel(agentId);
+  } catch (error) {
+    console.warn(
+      `[openclaw] failed to switch ${agentId} to a fallback model: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
 }
 
 function buildAgentTurnRetryHaystack(
@@ -1119,6 +1668,12 @@ export function shouldRetryTransientAgentTurnForSmoke(
   response: Pick<AgentTurnResponse, "ok" | "failureReason" | "replyText" | "rawText" | "rawJson">,
 ): boolean {
   return shouldRetryTransientAgentTurn(response);
+}
+
+export function shouldFailOverToFallbackModelForSmoke(
+  response: Pick<AgentTurnResponse, "ok" | "failureReason" | "replyText" | "rawText" | "rawJson">,
+): boolean {
+  return shouldFailOverToFallbackModel(response);
 }
 
 export function parseSessionLockFailureDetailsForSmoke(input: string): {

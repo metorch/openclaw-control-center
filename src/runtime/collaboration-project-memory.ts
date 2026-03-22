@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadProjectStore } from "./project-store";
 import { loadTaskStore } from "./task-store";
+
+const SAFE_PROJECT_DIR_NAME_REGEX = /^[A-Za-z0-9._-]{1,100}$/;
+const WINDOWS_RESERVED_PATH_SEGMENT_REGEX = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
 export interface CollaborationProjectFiles {
   projectDir: string;
@@ -38,9 +42,40 @@ interface OpenTasksSnapshot {
     status: string;
     reviewState?: string;
     lastResultState?: string;
+    waitingFor?: string;
     stage?: string;
     updatedAt: string;
   }>;
+}
+
+export function collaborationProjectDirName(projectId: string): string {
+  const raw = String(projectId || "").trim();
+  const direct = trimWindowsUnsafeSegmentTail(raw);
+  if (
+    direct &&
+    SAFE_PROJECT_DIR_NAME_REGEX.test(direct) &&
+    !WINDOWS_RESERVED_PATH_SEGMENT_REGEX.test(direct)
+  ) {
+    return direct;
+  }
+
+  const hash = createHash("sha1")
+    .update(raw || "project")
+    .digest("hex")
+    .slice(0, 10);
+  const normalizedBase = trimWindowsUnsafeSegmentTail(
+    raw
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/-{2,}/g, "-")
+      .replace(/^[._-]+|[._-]+$/g, ""),
+  );
+  const base = trimWindowsUnsafeSegmentTail((normalizedBase || "project").slice(0, 64)) || "project";
+  const candidate = `${base}-${hash}`;
+  if (WINDOWS_RESERVED_PATH_SEGMENT_REGEX.test(candidate)) {
+    return `project-${hash}`;
+  }
+  return candidate;
 }
 
 export async function ensureCollaborationProjectMemory(input: {
@@ -169,6 +204,7 @@ export async function syncCollaborationProjectOpenTasks(input: {
     projectId: string;
     reviewState?: string;
     lastResultState?: string;
+    waitingFor?: string;
     lastReportedAt: string;
   }>;
   dispatchRecords?: Array<{
@@ -204,6 +240,7 @@ export async function syncCollaborationProjectOpenTasks(input: {
         status: task.status,
         reviewState: receiptByTaskId.get(task.taskId)?.reviewState,
         lastResultState: receiptByTaskId.get(task.taskId)?.lastResultState,
+        waitingFor: receiptByTaskId.get(task.taskId)?.waitingFor,
         stage: dispatchByTaskId.get(task.taskId)?.stage,
         updatedAt: task.updatedAt,
       }))
@@ -232,7 +269,7 @@ export function resolveCollaborationProjectFiles(
   workspaceRoot: string,
   projectId: string,
 ): CollaborationProjectFiles {
-  const projectDir = join(workspaceRoot, "projects", projectId);
+  const projectDir = join(workspaceRoot, "projects", collaborationProjectDirName(projectId));
   return {
     projectDir,
     projectSummaryPath: join(projectDir, "PROJECT.md"),
@@ -283,6 +320,7 @@ function normalizeOpenTasks(input: string, projectId: string): OpenTasksSnapshot
                 reviewState: typeof item.reviewState === "string" ? item.reviewState.trim() : undefined,
                 lastResultState:
                   typeof item.lastResultState === "string" ? item.lastResultState.trim() : undefined,
+                waitingFor: typeof item.waitingFor === "string" ? item.waitingFor.trim() : undefined,
                 stage: typeof item.stage === "string" ? item.stage.trim() : undefined,
                 updatedAt,
               },
@@ -337,6 +375,10 @@ function buildDefaultProjectSummary(input: { projectId: string; projectTitle: st
     "Wait for Jarvis to dispatch the first task.",
     "",
   ].join("\n");
+}
+
+function trimWindowsUnsafeSegmentTail(value: string): string {
+  return String(value || "").replace(/[. ]+$/g, "");
 }
 
 function asIsoString(input: unknown): string | undefined {

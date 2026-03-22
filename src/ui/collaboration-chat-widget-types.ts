@@ -57,6 +57,7 @@ interface CollaborationChatLabels {
   typingHint: string;
   routeDefault: string;
   routePrefix: string;
+  routeAllMembers: string;
   roomLocked: string;
   roomUnavailable: string;
   noEvents: string;

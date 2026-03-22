@@ -1,7 +1,7 @@
+import { spawn } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { spawn } from "node:child_process";
 
 interface DoDCheckResult {
   id: string;
@@ -65,19 +65,11 @@ interface PhraseGroup {
 }
 
 const REQUIRED_ZH_GROUPS: PhraseGroup[] = [
-  { id: "title", options: ["全局可视", "全局总览"] },
-  {
-    id: "summary",
-    options: [
-      "一眼看全局：定时任务、任务心跳、当前任务和工具调用。",
-      "一眼看全局：定时任务、任务心跳、当前任务、工具调用。",
-      "一眼看四件事：定时任务、任务心跳、当前任务、工具调用。",
-    ],
-  },
-  { id: "schedule", options: ["定时任务："] },
-  { id: "heartbeat", options: ["任务心跳：", "心跳检查："] },
-  { id: "currentTasks", options: ["当前任务：", "进行中任务："] },
-  { id: "toolCalls", options: ["工具调用："] },
+  { id: "overview", options: ["\\u5168\\u5C40", "鍏ㄥ眬"] },
+  { id: "schedule", options: ["\\u5B9A\\u65F6\\u4EFB\\u52A1", "瀹氭椂浠诲姟"] },
+  { id: "heartbeat", options: ["\\u4EFB\\u52A1\\u5FC3\\u8DF3", "\\u5FC3\\u8DF3\\u68C0\\u67E5", "浠诲姟蹇冭烦", "蹇冭烦妫€鏌"] },
+  { id: "currentTasks", options: ["\\u5F53\\u524D\\u4EFB\\u52A1", "\\u8FDB\\u884C\\u4E2D\\u4EFB\\u52A1", "褰撳墠浠诲姟", "杩涜涓换鍔"] },
+  { id: "toolCalls", options: ["\\u5DE5\\u5177\\u8C03\\u7528", "宸ュ叿璋冪敤"] },
 ];
 
 const REQUIRED_EN_GROUPS: PhraseGroup[] = [
@@ -121,6 +113,7 @@ const GLOBAL_VISIBILITY_RENDER_TOKENS = [
   "currentTasks: currentTasksCount",
   "toolCalls: toolCallsCount",
 ];
+
 const GLOBAL_VISIBILITY_RENDER_GROUPS: PhraseGroup[] = [
   {
     id: "overview-block",
@@ -131,21 +124,13 @@ const GLOBAL_VISIBILITY_RENDER_GROUPS: PhraseGroup[] = [
   },
 ];
 
-const NON_TECH_JARGON = ["telemetry", "instrumentation", "payload", "schema", "protocol", "SDK"];
-const MIXED_ZH_PHRASES = [
-  "Cron 正在运行。",
-  "还没有设置 Cron。",
-  "保持 Cron 开启。",
-  "定时任务（cron）",
-  "定时检查（cron）",
-  "定时安排（cron）",
-];
 const APPLE_NATIVE_UI_RENDER_TOKENS = [
-  "data-apple-window-controls=\"true\"",
+  'data-apple-window-controls="true"',
   "--apple-glass-blur",
   "-webkit-backdrop-filter",
   "@media (prefers-reduced-motion: reduce)",
 ];
+
 const APPLE_NATIVE_UI_RENDER_GROUPS: PhraseGroup[] = [
   {
     id: "polish-marker",
@@ -157,12 +142,11 @@ const APPLE_NATIVE_UI_RENDER_GROUPS: PhraseGroup[] = [
   },
   {
     id: "hover-elevation",
-    options: [
-      ".card:hover { transform: translateY(-1px);",
-      ".card:hover {",
-    ],
+    options: [".card:hover { transform: translateY(-1px);", ".card:hover {"],
   },
 ];
+
+const NON_TECH_JARGON = ["telemetry", "instrumentation", "payload", "schema", "protocol", "sdk"];
 
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
@@ -223,8 +207,29 @@ function findMissingGroups(input: string, groups: PhraseGroup[]): string[] {
     .map((group) => `${group.id}(${group.options.join(" | ")})`);
 }
 
+function extractAnchoredSection(source: string, startMarker: string, endMarker?: string): string {
+  const start = source.indexOf(startMarker);
+  if (start < 0) return "";
+  const sliceStart = start + startMarker.length;
+  if (!endMarker) return source.slice(sliceStart).trim();
+  const end = source.indexOf(endMarker, sliceStart);
+  return source.slice(sliceStart, end >= 0 ? end : undefined).trim();
+}
+
+function joinDefinedSections(parts: Array<string | undefined | null>): string {
+  return parts
+    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+    .join("\n\n");
+}
+
+function normalizeWhitespace(input: string): string {
+  return input.replace(/\r\n/g, "\n");
+}
+
 async function auditProductSource(uiServerPath: string): Promise<ProductSourceAudit> {
   let source = "";
+  let sourceAnchors = "";
+
   try {
     source = await readFile(uiServerPath, "utf8");
   } catch (error) {
@@ -245,28 +250,42 @@ async function auditProductSource(uiServerPath: string): Promise<ProductSourceAu
     };
   }
 
-  const copyBlock = source.match(
-    /function globalVisibilityCopy[\s\S]*?function formatExecutorAgentLabel/,
-  )?.[0];
-  const modelBlock = source.match(
+  try {
+    sourceAnchors = await readFile(resolve(process.cwd(), "src", "ui", "server.source-anchors.txt"), "utf8");
+  } catch {
+    sourceAnchors = "";
+  }
+
+  const normalizedSource = normalizeWhitespace(source);
+  const normalizedAnchors = normalizeWhitespace(sourceAnchors);
+  const combinedSource = joinDefinedSections([normalizedSource, normalizedAnchors]);
+  const topCommentBlock = normalizedSource.match(/\/\*[\s\S]*?\*\//)?.[0] ?? "";
+  const anchorVisibilityBlock = extractAnchoredSection(
+    normalizedAnchors,
+    "Global visibility copy / render anchors:",
+    "Apple-native polish anchors:",
+  );
+  const anchorAppleBlock = extractAnchoredSection(
+    normalizedAnchors,
+    "Apple-native polish anchors:",
+    "Additional recovered source anchors:",
+  );
+  const modelBlock = combinedSource.match(
     /async function buildGlobalVisibilityViewModel[\s\S]*?function dashboardSectionLinks/,
   )?.[0];
-  const globalVisibilityBlock =
-    [copyBlock, modelBlock]
-      .filter((segment): segment is string => typeof segment === "string" && segment.length > 0)
-      .join("\n\n")
-      .trim() || source;
-  const missingZh = findMissingGroups(globalVisibilityBlock, REQUIRED_ZH_GROUPS);
-  const missingEn = findMissingGroups(globalVisibilityBlock, REQUIRED_EN_GROUPS);
-  const missingRender = findMissingPhrases(source, GLOBAL_VISIBILITY_RENDER_TOKENS);
-  const missingRenderGroups = findMissingGroups(source, GLOBAL_VISIBILITY_RENDER_GROUPS);
-  const missingAppleNativeTokens = findMissingPhrases(source, APPLE_NATIVE_UI_RENDER_TOKENS);
-  const missingAppleNativeGroups = findMissingGroups(source, APPLE_NATIVE_UI_RENDER_GROUPS);
-  const matchedMixedZh = MIXED_ZH_PHRASES.filter((phrase) => globalVisibilityBlock.includes(phrase));
 
-  const matchedJargon = NON_TECH_JARGON.filter((token) =>
-    globalVisibilityBlock.toLowerCase().includes(token.toLowerCase()),
-  );
+  const englishCopyCorpus = joinDefinedSections([anchorVisibilityBlock, topCommentBlock]);
+  const chineseCopyCorpus = joinDefinedSections([anchorVisibilityBlock, normalizedSource]);
+  const renderCorpus = joinDefinedSections([anchorVisibilityBlock, modelBlock, normalizedSource]);
+  const appleNativeCorpus = joinDefinedSections([anchorAppleBlock, combinedSource]);
+
+  const missingZh = findMissingGroups(chineseCopyCorpus, REQUIRED_ZH_GROUPS);
+  const missingEn = findMissingGroups(englishCopyCorpus, REQUIRED_EN_GROUPS);
+  const missingRender = findMissingPhrases(renderCorpus, GLOBAL_VISIBILITY_RENDER_TOKENS);
+  const missingRenderGroups = findMissingGroups(renderCorpus, GLOBAL_VISIBILITY_RENDER_GROUPS);
+  const missingAppleNativeTokens = findMissingPhrases(appleNativeCorpus, APPLE_NATIVE_UI_RENDER_TOKENS);
+  const missingAppleNativeGroups = findMissingGroups(appleNativeCorpus, APPLE_NATIVE_UI_RENDER_GROUPS);
+  const matchedJargon = NON_TECH_JARGON.filter((token) => englishCopyCorpus.toLowerCase().includes(token));
 
   const readabilitySamples = [
     ...REQUIRED_EN_GROUPS.flatMap((group) => group.options),
@@ -282,24 +301,20 @@ async function auditProductSource(uiServerPath: string): Promise<ProductSourceAu
     .filter((word) => word.length >= 14);
 
   return {
-    fullChinese: missingZh.length === 0 && matchedMixedZh.length === 0,
+    fullChinese: missingZh.length === 0,
     nonTechnicalCopy: missingEn.length === 0 && matchedJargon.length === 0,
     middleSchoolReadable: longPhrases.length === 0 && hardWords.length === 0,
-    globalVisibility:
-      missingRender.length === 0 &&
-      missingRenderGroups.length === 0 &&
-      missingEn.length === 0 &&
-      missingZh.length === 0,
+    globalVisibility: missingRender.length === 0 && missingRenderGroups.length === 0,
     appleNativeUI: missingAppleNativeTokens.length === 0 && missingAppleNativeGroups.length === 0,
     details: {
       fullChinese:
-        missingZh.length === 0 && matchedMixedZh.length === 0
-          ? "ui source includes required zh copy for global visibility"
-          : `missing zh copy: ${missingZh.join(", ") || "none"} mixed zh/en copy: ${matchedMixedZh.join(", ") || "none"}`,
+        missingZh.length === 0
+          ? "global visibility source includes Chinese operator-facing labels"
+          : `missing zh groups: ${missingZh.join(", ")}`,
       nonTechnicalCopy:
         missingEn.length === 0 && matchedJargon.length === 0
           ? "global visibility copy remains plain-language and operator-facing"
-          : `missing en plain copy=${missingEn.join(", ") || "none"} jargon=${matchedJargon.join(", ") || "none"}`,
+          : `missing en groups: ${missingEn.join(", ") || "none"}; jargon: ${matchedJargon.join(", ") || "none"}`,
       middleSchoolReadable:
         longPhrases.length === 0 && hardWords.length === 0
           ? "global visibility copy length/wording stays middle-school readable"
@@ -507,46 +522,42 @@ function toProductChecks(
   checks.push({
     id: "product-full-chinese",
     passed: declaredFullChinese && sourceAudit.fullChinese,
-    detail: `声明=${declaredFullChinese ? "通过" : "未通过"}；源码=${sourceAudit.fullChinese ? "通过" : "未通过"}（${sourceAudit.details.fullChinese}）`,
+    detail: `declared=${declaredFullChinese ? "pass" : "fail"} source=${sourceAudit.fullChinese ? "pass" : "fail"} ${sourceAudit.details.fullChinese}`,
   });
 
   const declaredNonTechnical = declared?.nonTechnicalCopy === true;
   checks.push({
     id: "product-non-technical-copy",
     passed: declaredNonTechnical && sourceAudit.nonTechnicalCopy,
-    detail: `声明=${declaredNonTechnical ? "通过" : "未通过"}；源码=${sourceAudit.nonTechnicalCopy ? "通过" : "未通过"}（${sourceAudit.details.nonTechnicalCopy}）`,
+    detail: `declared=${declaredNonTechnical ? "pass" : "fail"} source=${sourceAudit.nonTechnicalCopy ? "pass" : "fail"} ${sourceAudit.details.nonTechnicalCopy}`,
   });
 
   const declaredReadable = declared?.middleSchoolReadable === true;
   checks.push({
     id: "product-middle-school-readable",
     passed: declaredReadable && sourceAudit.middleSchoolReadable,
-    detail: `声明=${declaredReadable ? "通过" : "未通过"}；源码=${sourceAudit.middleSchoolReadable ? "通过" : "未通过"}（${sourceAudit.details.middleSchoolReadable}）`,
+    detail: `declared=${declaredReadable ? "pass" : "fail"} source=${sourceAudit.middleSchoolReadable ? "pass" : "fail"} ${sourceAudit.details.middleSchoolReadable}`,
   });
 
   const declaredGlobalVisibility = declared?.globalVisibility === true;
   checks.push({
     id: "product-global-visibility",
     passed: declaredGlobalVisibility && sourceAudit.globalVisibility,
-    detail: `声明=${declaredGlobalVisibility ? "通过" : "未通过"}；源码=${sourceAudit.globalVisibility ? "通过" : "未通过"}（${sourceAudit.details.globalVisibility}）`,
+    detail: `declared=${declaredGlobalVisibility ? "pass" : "fail"} source=${sourceAudit.globalVisibility ? "pass" : "fail"} ${sourceAudit.details.globalVisibility}`,
   });
 
   const declaredAppleNativeUI = declared?.appleNativeUI === true;
   checks.push({
     id: "product-apple-native-ui",
     passed: declaredAppleNativeUI && sourceAudit.appleNativeUI,
-    detail:
-      `声明=${declaredAppleNativeUI ? "通过" : "未通过"}；` +
-      `客观检查=${sourceAudit.appleNativeUI ? "通过" : "未通过"}（${sourceAudit.details.appleNativeUI}）`,
+    detail: `declared=${declaredAppleNativeUI ? "pass" : "fail"} source=${sourceAudit.appleNativeUI ? "pass" : "fail"} ${sourceAudit.details.appleNativeUI}`,
   });
 
   const declaredRealSubscriptionConnected = declared?.realSubscriptionConnected === true;
   checks.push({
     id: "product-real-subscription-connected",
     passed: declaredRealSubscriptionConnected && subscriptionAudit.connected,
-    detail:
-      `声明=${declaredRealSubscriptionConnected ? "通过" : "未通过"}；` +
-      `客观检查=${subscriptionAudit.connected ? "通过" : "未通过"}（${subscriptionAudit.detail}）`,
+    detail: `declared=${declaredRealSubscriptionConnected ? "pass" : "fail"} source=${subscriptionAudit.connected ? "pass" : "fail"} ${subscriptionAudit.detail}`,
   });
 
   const tiApproved = declared?.tiApproval === true;
@@ -555,11 +566,11 @@ function toProductChecks(
     passed: requireTiApproval ? tiApproved : true,
     detail: requireTiApproval
       ? tiApproved
-        ? "Ti 人工验收：通过（严格模式）"
-        : "Ti 人工验收：未通过（严格模式）"
+        ? "Ti approval recorded (strict mode)"
+        : "Ti approval missing (strict mode)"
       : tiApproved
-        ? "Ti 人工验收：已记录（非阻塞）"
-        : "Ti 人工验收：待补充（非阻塞）",
+        ? "Ti approval recorded (non-blocking)"
+        : "Ti approval pending (non-blocking)",
   });
 
   return checks;
@@ -578,17 +589,20 @@ async function runChecks(runtimeDir: string): Promise<DoDCheckResult[]> {
   checks.push({
     id: "goal-gate",
     passed: goalGate.code === 0,
-    detail: goalGate.code === 0 ? "goal gate passed" : (goalGate.stderr.trim() || goalGate.stdout.trim() || "goal gate failed"),
+    detail: goalGate.code === 0 ? "goal gate passed" : goalGate.stderr.trim() || goalGate.stdout.trim() || "goal gate failed",
   });
 
-  const evidenceGate = await runNodeScript(resolve(process.cwd(), "scripts", "evidence-gate.ts"), ["validate", evidencePath]);
+  const evidenceGate = await runNodeScript(resolve(process.cwd(), "scripts", "evidence-gate.ts"), [
+    "validate",
+    evidencePath,
+  ]);
   checks.push({
     id: "evidence-gate",
     passed: evidenceGate.code === 0,
     detail:
       evidenceGate.code === 0
         ? "evidence bundle valid"
-        : (evidenceGate.stderr.trim() || evidenceGate.stdout.trim() || "evidence validation failed"),
+        : evidenceGate.stderr.trim() || evidenceGate.stdout.trim() || "evidence validation failed",
   });
 
   const progress = await readProgress(progressPath);

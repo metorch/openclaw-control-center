@@ -19,6 +19,7 @@ function createHelpersForSmoke() {
     optionalBoundedString: (value: unknown) => (typeof value === "string" ? value : undefined),
     pickUiText: (_language: string, english: string) => english,
     resolveCollaborationParticipantName: (_directory: unknown, agentId: string) => agentId,
+    sanitizeCollaborationDisplayText: (value: string) => String(value ?? "").trim(),
     safeTruncate: (value: string) => String(value ?? ""),
     toCollaborationApiAttachment: () => ({}),
   });

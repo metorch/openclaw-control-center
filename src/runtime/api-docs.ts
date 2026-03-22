@@ -63,7 +63,7 @@ export function buildApiDocs(): ApiDocsPayload {
         response: {
           ok: "boolean",
           preferences:
-            "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, collaborationChat{expanded,autoRefresh,lastReadSequence}, updatedAt }",
+            "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, collaborationChat{expanded,autoRefresh,activeRoomId?,lastReadSequence?,roomReadCursors?}, updatedAt }",
           path: "string",
           issues: "string[]",
         },
@@ -72,18 +72,19 @@ export function buildApiDocs(): ApiDocsPayload {
         method: "PATCH",
         path: "/api/ui/preferences",
         summary:
-          "Update dashboard UI preferences persisted to runtime/ui-preferences.json",
+          "Update dashboard UI preferences persisted to runtime/ui-preferences.json. collaborationChat room fields store viewer-scoped room selection and read cursors, not shared collaboration content.",
         body: {
           compactStatusStrip: "boolean (optional)",
           quickFilter: "all|attention|todo|in_progress|blocked|done (optional)",
           taskFilters: "{ status?, owner?, project? } (optional)",
           taskCardOrder: "string[] (optional)",
-          collaborationChat: "{ expanded?, autoRefresh?, lastReadSequence? } (optional)",
+          collaborationChat:
+            "{ expanded?, autoRefresh?, activeRoomId?, lastReadSequence?, roomReadCursors? } (optional; room fields are viewer-scoped room state)",
         },
         response: {
           ok: "boolean",
           preferences:
-            "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, collaborationChat{expanded,autoRefresh,lastReadSequence}, updatedAt }",
+            "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, collaborationChat{expanded,autoRefresh,activeRoomId?,lastReadSequence?,roomReadCursors?}, updatedAt }",
         },
       },
       {

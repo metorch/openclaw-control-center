@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 
 const { readFile } = require("node:fs/promises");
 
@@ -27,29 +27,29 @@ function createGlobalVisibilityRenderers(deps) {
   function globalVisibilityCopy(language) {
     if (language === "zh") {
       return {
-        title: "全局总览",
-        summary: "一眼看四件事：定时任务、任务心跳、当前任务、工具调用。",
-        scheduleLabel: "定时任务：",
-        heartbeatLabel: "任务心跳：",
-        currentTasksLabel: "当前任务：",
-        toolCallsLabel: "工具调用：",
-        scheduleLinkLabel: "查看定时任务",
-        heartbeatLinkLabel: "查看任务心跳",
-        currentTasksLinkLabel: "查看当前任务",
-        toolCallsLinkLabel: "查看工具调用",
-        doneLabel: "已完成",
-        notDoneLabel: "未完成",
-        taskTypeLabel: "类型",
-        taskNameLabel: "事项",
-        executorLabel: "智能体",
-        currentActionLabel: "正在做什么",
-        nextRunLabel: "下次检查",
-        latestResultLabel: "最近结果",
-        statusLabel: "状态",
-        nextActionLabel: "下一步",
-        detailsLabel: "详情",
-        doneStatusText: "已完成",
-        notDoneStatusText: "未完成",
+        title: "\u5168\u5C40\u603B\u89C8",
+        summary: "\u4E00\u773C\u770B\u56DB\u4EF6\u4E8B\uFF1A\u5B9A\u65F6\u4EFB\u52A1\u3001\u4EFB\u52A1\u5FC3\u8DF3\u3001\u5F53\u524D\u4EFB\u52A1\u3001\u5DE5\u5177\u8C03\u7528\u3002",
+        scheduleLabel: "\u5B9A\u65F6\u4EFB\u52A1\uFF1A",
+        heartbeatLabel: "\u4EFB\u52A1\u5FC3\u8DF3\uFF1A",
+        currentTasksLabel: "\u5F53\u524D\u4EFB\u52A1\uFF1A",
+        toolCallsLabel: "\u5DE5\u5177\u8C03\u7528\uFF1A",
+        scheduleLinkLabel: "\u67E5\u770B\u5B9A\u65F6\u4EFB\u52A1",
+        heartbeatLinkLabel: "\u67E5\u770B\u4EFB\u52A1\u5FC3\u8DF3",
+        currentTasksLinkLabel: "\u67E5\u770B\u5F53\u524D\u4EFB\u52A1",
+        toolCallsLinkLabel: "\u67E5\u770B\u5DE5\u5177\u8C03\u7528",
+        doneLabel: "\u5DF2\u5B8C\u6210",
+        notDoneLabel: "\u672A\u5B8C\u6210",
+        taskTypeLabel: "\u7C7B\u578B",
+        taskNameLabel: "\u4E8B\u9879",
+        executorLabel: "\u667A\u80FD\u4F53",
+        currentActionLabel: "\u6B63\u5728\u505A\u4EC0\u4E48",
+        nextRunLabel: "\u4E0B\u6B21\u68C0\u67E5",
+        latestResultLabel: "\u6700\u8FD1\u7ED3\u679C",
+        statusLabel: "\u72B6\u6001",
+        nextActionLabel: "\u4E0B\u4E00\u6B65",
+        detailsLabel: "\u8BE6\u60C5",
+        doneStatusText: "\u5DF2\u5B8C\u6210",
+        notDoneStatusText: "\u672A\u5B8C\u6210",
       };
     }
     return {
@@ -78,7 +78,6 @@ function createGlobalVisibilityRenderers(deps) {
       notDoneStatusText: "Not done",
     };
   }
-
   function buildGlobalVisibilityDetailHref(taskType, language) {
     if (taskType === "cron") {
       return `${buildHomeHref({ quick: "all" }, true, "overview", language)}#cron-health`;
@@ -108,7 +107,7 @@ function createGlobalVisibilityRenderers(deps) {
     const heartbeatHref = heartbeatRow?.detailsHref ?? buildGlobalVisibilityDetailHref("heartbeat", language);
     const currentTasksHref = currentTasksRow?.detailsHref ?? buildGlobalVisibilityDetailHref("current_task", language);
     const toolCallsHref = toolCallsRow?.detailsHref ?? buildGlobalVisibilityDetailHref("tool_call", language);
-    const noSignalText = pickUiText(language, "No update yet.", "暂无更新。");
+    const noSignalText = pickUiText(language, "No update yet.", "\u6682\u65E0\u66F4\u65B0\u3002");
     const scheduleSignalText = scheduleRow?.currentAction ?? noSignalText;
     const heartbeatSignalText = heartbeatRow?.currentAction ?? noSignalText;
     const currentTasksSignalText = currentTasksRow?.currentAction ?? noSignalText;
@@ -146,24 +145,19 @@ function createGlobalVisibilityRenderers(deps) {
       </div>
     </div>`;
     };
+    const stripSummary = pickUiText(
+      language,
+      `${model.doneCount} ready · ${model.notDoneCount} need follow-up`,
+      `\u5DF2\u5C31\u7EEA ${model.doneCount} \u9879 \xB7 \u8FD8\u9700\u8DDF\u8FDB ${model.notDoneCount} \u9879`,
+    );
     return `<div class="status-strip compact dashboard-strip">
       ${renderSignalCard({ label: copy.scheduleLabel, value: model.signalCounts.schedule, status: scheduleStatus, statusLabel: scheduleStatus === "done" ? doneStatusLabel : notDoneStatusLabel, signalText: scheduleSignalText, signalSmallHtml: scheduleSignalSmall, href: scheduleHref, linkLabel: copy.scheduleLinkLabel })}
       ${renderSignalCard({ label: copy.heartbeatLabel, value: model.signalCounts.heartbeat, status: heartbeatStatus, statusLabel: heartbeatStatus === "done" ? doneStatusLabel : notDoneStatusLabel, signalText: heartbeatSignalText, href: heartbeatHref, linkLabel: copy.heartbeatLinkLabel })}
       ${renderSignalCard({ label: copy.currentTasksLabel, value: model.signalCounts.currentTasks, status: currentTasksStatus, statusLabel: currentTasksStatus === "done" ? doneStatusLabel : notDoneStatusLabel, signalText: currentTasksSignalText, href: currentTasksHref, linkLabel: copy.currentTasksLinkLabel })}
       ${renderSignalCard({ label: copy.toolCallsLabel, value: model.signalCounts.toolCalls, status: toolCallsStatus, statusLabel: toolCallsStatus === "done" ? doneStatusLabel : notDoneStatusLabel, signalText: toolCallsSignalText, href: toolCallsHref, linkLabel: copy.toolCallsLinkLabel })}
-      <div class="status-chip summary-gauge-card">
-        <span>${copy.doneLabel}</span>
-        <strong>${model.doneCount}</strong>
-        <div class="summary-track"><div class="summary-fill" style="width:${Math.round((model.doneCount / Math.max(1, model.tasks.length)) * 100)}%;"></div></div>
-      </div>
-      <div class="status-chip summary-gauge-card">
-        <span>${copy.notDoneLabel}</span>
-        <strong>${model.notDoneCount}</strong>
-        <div class="summary-track"><div class="summary-fill warn" style="width:${Math.round((model.notDoneCount / Math.max(1, model.tasks.length)) * 100)}%;"></div></div>
-      </div>
+      <div class="dashboard-strip-summary"><strong>${copy.doneLabel} ${model.doneCount}</strong><span>${stripSummary}</span></div>
     </div>`;
   }
-
   function renderGlobalVisibilityCard(model, language) {
     const copy = globalVisibilityCopy(language);
     if (model.tasks.length === 0) {
@@ -219,7 +213,6 @@ function createGlobalVisibilityRenderers(deps) {
         </div>
       </details>`;
   }
-
   function renderGlobalVisibilityStripCard(model, language) {
     const copy = globalVisibilityCopy(language);
     return `<section class="card stack-gap global-visibility-strip-card" id="global-visibility-strip">
@@ -324,14 +317,14 @@ function createGlobalVisibilityRenderers(deps) {
     const latestHeartbeatRun = (await readTaskHeartbeatRuns(1)).runs[0];
     const cronTaskName =
       enabledCronCount > 0
-        ? pickUiText(language, `${enabledCronCount} jobs enabled`, `已启用 ${enabledCronCount} 个任务`)
-        : pickUiText(language, "No timed jobs", "暂无定时任务");
+        ? pickUiText(language, `${enabledCronCount} jobs enabled`, `\u5DF2\u542F\u7528 ${enabledCronCount} \u4E2A`)
+        : pickUiText(language, "No timed jobs", "\u6682\u65E0\u5B9A\u65F6\u4EFB\u52A1");
     const cronOwner =
       enabledOpenclawCronJobs.length > 0
         ? summarizeNames(
             enabledOpenclawCronJobs.map((job) => job.owner),
             language,
-            pickUiText(language, "Scheduler", "调度器"),
+            pickUiText(language, "Scheduler", "\u8C03\u5EA6\u5668"),
           )
         : formatExecutorAgentLabel("system-cron", language);
     const cronPurpose =
@@ -340,75 +333,75 @@ function createGlobalVisibilityRenderers(deps) {
         : "") ||
       (enabledRuntimeCronJobs[0]
         ? cronRuntimePurpose(enabledRuntimeCronJobs[0].jobId, language)
-        : pickUiText(language, "No timed job is running.", "当前没有定时任务在运行。"));
+        : pickUiText(language, "No timed job is running.", "\u5F53\u524D\u6CA1\u6709\u5B9A\u65F6\u4EFB\u52A1\u5728\u8FD0\u884C\u3002"));
     const cronNextRun =
       nonHeartbeatRuntimeCronJobs.find((job) => job.enabled)?.nextRunAt ??
       cronOverview.nextRunAt ??
-      pickUiText(language, "Not scheduled", "未排程");
+      pickUiText(language, "Not scheduled", "\u672A\u6392\u7A0B");
     const heartbeatNextRun =
       heartbeatJobs.find((job) => job.enabled)?.nextRunAt ??
       heartbeatJobs[0]?.nextRunAt ??
-      pickUiText(language, "Not scheduled", "未排程");
-    const heartbeatTaskName = pickUiText(language, "Task heartbeat service", "任务心跳服务");
+      pickUiText(language, "Not scheduled", "\u672A\u6392\u7A0B");
+    const heartbeatTaskName = pickUiText(language, "Task heartbeat service", "\u4EFB\u52A1\u5FC3\u8DF3\u670D\u52A1");
     const heartbeatLatestResult = heartbeatEnabled
       ? latestHeartbeatRun
         ? pickUiText(
             language,
             `Last heartbeat: selected ${latestHeartbeatRun.selected} tasks, started ${latestHeartbeatRun.executed}.`,
-            `最近心跳：挑出 ${latestHeartbeatRun.selected} 个任务，启动 ${latestHeartbeatRun.executed} 个。`,
+            `\u6700\u8FD1\u5FC3\u8DF3\uFF1A\u9009\u4E2D ${latestHeartbeatRun.selected} \u4E2A\u4EFB\u52A1\uFF0C\u542F\u52A8 ${latestHeartbeatRun.executed} \u4E2A\u3002`,
           )
         : pickUiText(
             language,
             `Active heartbeat checks: ${enabledHeartbeatCount}.`,
-            `已开启任务心跳：${enabledHeartbeatCount} 个。`,
+            `\u5DF2\u542F\u7528 ${enabledHeartbeatCount} \u4E2A\u5FC3\u8DF3\u68C0\u67E5\u3002`,
           )
-      : pickUiText(language, "No heartbeat check yet.", "还没有任务心跳记录。");
+      : pickUiText(language, "No heartbeat check yet.", "\u8FD8\u6CA1\u6709\u5FC3\u8DF3\u68C0\u67E5\u8BB0\u5F55\u3002");
     const heartbeatPurpose = pickUiText(
       language,
       "Check assigned tasks and start the picked ones.",
-      "检查已分配任务，并启动挑中的任务。",
+      "\u68C0\u67E5\u5DF2\u5206\u914D\u4EFB\u52A1\u5E76\u542F\u52A8\u88AB\u9009\u4E2D\u7684\u9879\u3002",
     );
     const scheduleReady = enabledCronCount > 0;
     const rows = [
       {
         taskType: "cron",
-        taskTypeLabel: pickUiText(language, "Timed jobs", "定时任务"),
+        taskTypeLabel: pickUiText(language, "Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1"),
         taskName: cronTaskName,
         executor: cronOwner,
         currentAction: scheduleReady
-          ? pickUiText(language, `Now running: ${cronPurpose}`, `正在执行：${cronPurpose}`)
-          : pickUiText(language, "Timed jobs are off.", "还没有设置定时任务。"),
+          ? pickUiText(language, `Now running: ${cronPurpose}`, `\u6B63\u5728\u8FD0\u884C\uFF1A${cronPurpose}`)
+          : pickUiText(language, "Timed jobs are off.", "\u5B9A\u65F6\u4EFB\u52A1\u8FD8\u672A\u5F00\u542F\u3002"),
         nextRun: cronNextRun,
         latestResult: scheduleReady
           ? pickUiText(
               language,
               `Active timed jobs: ${enabledCronCount}.`,
-              `已开启定时任务：${enabledCronCount} 个。`,
+              `\u5DF2\u542F\u7528 ${enabledCronCount} \u4E2A\u5B9A\u65F6\u4EFB\u52A1\u3002`,
             )
-          : pickUiText(language, "No timed job yet.", "还没有定时任务记录。"),
+          : pickUiText(language, "No timed job yet.", "\u8FD8\u6CA1\u6709\u5B9A\u65F6\u4EFB\u52A1\u8BB0\u5F55\u3002"),
         status: scheduleReady ? "done" : "not_done",
         nextAction: scheduleReady
           ? pickUiText(
               language,
               "Keep timed jobs on and keep each job goal clear.",
-              "保持定时任务开启，并确认每个任务目标清楚。",
+              "\u4FDD\u6301\u5B9A\u65F6\u4EFB\u52A1\u5F00\u542F\uFF0C\u5E76\u786E\u8BA4\u6BCF\u4E2A\u4EFB\u52A1\u76EE\u6807\u6E05\u695A\u3002",
             )
-          : pickUiText(language, "Turn on one timed job.", "先添加一个定时任务。"),
+          : pickUiText(language, "Turn on one timed job.", "\u5148\u6DFB\u52A0\u4E00\u4E2A\u5B9A\u65F6\u4EFB\u52A1\u3002"),
         detailsHref: buildGlobalVisibilityDetailHref("cron", language),
-        detailsLabel: pickUiText(language, "See timed jobs", "查看定时任务"),
+        detailsLabel: pickUiText(language, "See timed jobs", "\u67E5\u770B\u5B9A\u65F6\u4EFB\u52A1"),
       },
       {
         taskType: "heartbeat",
-        taskTypeLabel: pickUiText(language, "Heartbeat", "任务心跳"),
+        taskTypeLabel: pickUiText(language, "Heartbeat", "\u4EFB\u52A1\u5FC3\u8DF3"),
         taskName: heartbeatTaskName,
         executor: formatExecutorAgentLabel("task-heartbeat-worker", language),
         currentAction: heartbeatEnabled
           ? pickUiText(
               language,
               `Heartbeat is on: ${heartbeatPurpose}`,
-              `任务心跳已开启：${heartbeatPurpose}`,
+              `\u5FC3\u8DF3\u5DF2\u5F00\u542F\uFF1A${heartbeatPurpose}`,
             )
-          : pickUiText(language, "Heartbeat is off.", "还没有设置任务心跳。"),
+          : pickUiText(language, "Heartbeat is off.", "\u5FC3\u8DF3\u8FD8\u672A\u5F00\u542F\u3002"),
         nextRun: heartbeatNextRun,
         latestResult: heartbeatLatestResult,
         status: heartbeatEnabled ? "done" : "not_done",
@@ -416,46 +409,46 @@ function createGlobalVisibilityRenderers(deps) {
           ? pickUiText(
               language,
               "Check picked tasks and confirm the choices look right.",
-              "查看挑出的任务，确认挑选结果是否合理。",
+              "\u68C0\u67E5\u88AB\u9009\u4E2D\u7684\u4EFB\u52A1\uFF0C\u786E\u8BA4\u6311\u9009\u7ED3\u679C\u5408\u7406\u3002",
             )
-          : pickUiText(language, "Turn on heartbeat.", "在定时任务里开启心跳。"),
+          : pickUiText(language, "Turn on heartbeat.", "\u5728\u5B9A\u65F6\u4EFB\u52A1\u91CC\u5F00\u542F\u5FC3\u8DF3\u3002"),
         detailsHref: buildGlobalVisibilityDetailHref("heartbeat", language),
-        detailsLabel: pickUiText(language, "See heartbeat checks", "查看任务心跳"),
+        detailsLabel: pickUiText(language, "See heartbeat checks", "\u67E5\u770B\u4EFB\u52A1\u5FC3\u8DF3"),
       },
       {
         taskType: "current_task",
-        taskTypeLabel: pickUiText(language, "Current tasks", "当前任务"),
-        taskName: pickUiText(language, "Current tasks", "当前任务"),
-        executor: pickUiText(language, "Task owners", "任务智能体"),
+        taskTypeLabel: pickUiText(language, "Current tasks", "\u5F53\u524D\u4EFB\u52A1"),
+        taskName: pickUiText(language, "Current tasks", "\u5F53\u524D\u4EFB\u52A1"),
+        executor: pickUiText(language, "Task owners", "\u4EFB\u52A1\u8D1F\u8D23\u4EBA"),
         currentAction:
           currentTasksCount > 0
             ? hasWeakEvidence
               ? pickUiText(
                   language,
                   "Some current tasks still need follow-up.",
-                  "有些当前任务还需要继续跟进。",
+                  "\u6709\u4E9B\u5F53\u524D\u4EFB\u52A1\u8FD8\u9700\u8981\u8DDF\u8FDB\u3002",
                 )
               : pickUiText(
                   language,
                   "Current tasks are visible in runtime.",
-                  "当前任务已经能在运行时里看见。",
+                  "\u5F53\u524D\u4EFB\u52A1\u5DF2\u80FD\u5728\u8FD0\u884C\u4FE1\u53F7\u4E2D\u770B\u89C1\u3002",
                 )
-            : pickUiText(language, "No current task signal is visible now.", "当前还没有看见任务执行信号。"),
-        nextRun: pickUiText(language, "Live update", "实时更新"),
+            : pickUiText(language, "No current task signal is visible now.", "\u5F53\u524D\u8FD8\u6CA1\u6709\u53EF\u89C1\u7684\u4EFB\u52A1\u6267\u884C\u4FE1\u53F7\u3002"),
+        nextRun: pickUiText(language, "Live update", "\u5B9E\u65F6\u66F4\u65B0"),
         latestResult:
           currentTasksCount > 0
             ? hasWeakEvidence
               ? pickUiText(
                   language,
                   `${strongTaskEvidenceCount} confirmed live, ${followupTaskEvidenceCount} need follow-up, ${weakTaskEvidenceCount} need inspection.`,
-                  `${strongTaskEvidenceCount} 个已确认在跑，${followupTaskEvidenceCount} 个需跟进，${weakTaskEvidenceCount} 个需排查。`,
+                  `\u5DF2\u786E\u8BA4\u5728\u8DD1 ${strongTaskEvidenceCount} \u4E2A\uFF0C\u9700\u8981\u8DDF\u8FDB ${followupTaskEvidenceCount} \u4E2A\uFF0C\u9700\u8981\u6392\u67E5 ${weakTaskEvidenceCount} \u4E2A\u3002`,
                 )
               : pickUiText(
                   language,
                   `${currentTasksCount} current tasks are backed by runtime signals.`,
-                  `${currentTasksCount} 个当前任务已有运行信号支撑。`,
+                  `\u5DF2\u6709\u8FD0\u884C\u4FE1\u53F7\u652F\u6491\u7684\u5F53\u524D\u4EFB\u52A1 ${currentTasksCount} \u4E2A\u3002`,
                 )
-            : pickUiText(language, "No current task signal yet.", "当前还没有任务执行信号。"),
+            : pickUiText(language, "No current task signal yet.", "\u5F53\u524D\u8FD8\u6CA1\u6709\u4EFB\u52A1\u6267\u884C\u4FE1\u53F7\u3002"),
         status: currentTasksCount > 0 && !hasWeakEvidence ? "done" : "not_done",
         nextAction:
           currentTasksCount > 0
@@ -463,42 +456,42 @@ function createGlobalVisibilityRenderers(deps) {
               ? pickUiText(
                   language,
                   "Open current tasks and inspect the follow-up items first.",
-                  "打开当前任务，先检查需要跟进的项。",
+                  "\u6253\u5F00\u5F53\u524D\u4EFB\u52A1\uFF0C\u5148\u68C0\u67E5\u9700\u8DDF\u8FDB\u7684\u9879\u3002",
                 )
-              : pickUiText(language, "Keep following the runtime signals.", "继续盯住运行时信号即可。")
+              : pickUiText(language, "Keep following the runtime signals.", "\u7EE7\u7EED\u76EF\u4F4F\u8FD0\u884C\u4FE1\u53F7\u5373\u53EF\u3002")
             : pickUiText(
                 language,
                 "Start one task and let runtime evidence appear first.",
-                "先启动一个任务，让运行证据出现。",
+                "\u5148\u542F\u52A8\u4E00\u4E2A\u4EFB\u52A1\uFF0C\u8BA9\u8FD0\u884C\u8BC1\u636E\u51FA\u73B0\u3002",
               ),
         detailsHref: buildGlobalVisibilityDetailHref("current_task", language),
-        detailsLabel: pickUiText(language, "See current tasks", "查看当前任务"),
+        detailsLabel: pickUiText(language, "See current tasks", "\u67E5\u770B\u5F53\u524D\u4EFB\u52A1"),
       },
       {
         taskType: "tool_call",
-        taskTypeLabel: pickUiText(language, "Tool calls", "工具调用"),
-        taskName: pickUiText(language, "Tool calls", "工具调用"),
-        executor: pickUiText(language, "Active sessions", "活跃会话"),
+        taskTypeLabel: pickUiText(language, "Tool calls", "\u5DE5\u5177\u8C03\u7528"),
+        taskName: pickUiText(language, "Tool calls", "\u5DE5\u5177\u8C03\u7528"),
+        executor: pickUiText(language, "Active sessions", "\u6D3B\u8DC3\u4F1A\u8BDD"),
         currentAction:
           toolCallsCount > 0
-            ? pickUiText(language, "Tools were used recently.", "最近有工具在使用。")
-            : pickUiText(language, "No tool use yet.", "最近没有工具在使用。"),
-        nextRun: pickUiText(language, "Live update", "实时更新"),
+            ? pickUiText(language, "Tools were used recently.", "\u6700\u8FD1\u6709\u5DE5\u5177\u5728\u4F7F\u7528\u3002")
+            : pickUiText(language, "No tool use yet.", "\u6700\u8FD1\u8FD8\u6CA1\u6709\u5DE5\u5177\u4F7F\u7528\u3002"),
+        nextRun: pickUiText(language, "Live update", "\u5B9E\u65F6\u66F4\u65B0"),
         latestResult:
           toolCallsCount > 0
             ? pickUiText(
                 language,
                 `Tool calls in recent activity: ${toolCallsCount}.`,
-                `最近工具调用：${toolCallsCount} 次。`,
+                `\u6700\u8FD1\u5DE5\u5177\u8C03\u7528 ${toolCallsCount} \u6B21\u3002`,
               )
-            : pickUiText(language, "No tool calls yet.", "尚无工具调用记录。"),
+            : pickUiText(language, "No tool calls yet.", "\u5C1A\u65E0\u5DE5\u5177\u8C03\u7528\u8BB0\u5F55\u3002"),
         status: toolCallsCount > 0 ? "done" : "not_done",
         nextAction:
           toolCallsCount > 0
-            ? pickUiText(language, "Review results and keep going.", "看下结果后继续。")
-            : pickUiText(language, "Run one small tool step.", "先跑一次小工具步骤。"),
+            ? pickUiText(language, "Review results and keep going.", "\u770B\u4E0B\u7ED3\u679C\u540E\u7EE7\u7EED\u5373\u53EF\u3002")
+            : pickUiText(language, "Run one small tool step.", "\u5148\u8DD1\u4E00\u6B21\u5C0F\u5DE5\u5177\u6B65\u9AA4\u3002"),
         detailsHref: buildGlobalVisibilityDetailHref("tool_call", language),
-        detailsLabel: pickUiText(language, "See tool calls", "查看工具调用"),
+        detailsLabel: pickUiText(language, "See tool calls", "\u67E5\u770B\u5DE5\u5177\u8C03\u7528"),
       },
     ];
     const doneCount = rows.filter((row) => row.status === "done").length;
@@ -509,7 +502,7 @@ function createGlobalVisibilityRenderers(deps) {
       noTaskMessage: pickUiText(
         language,
         "No timed jobs, heartbeat, current tasks, or tool calls yet.",
-        "暂无定时任务、任务心跳、当前任务或工具调用。",
+        "\u6682\u65E0\u5B9A\u65F6\u4EFB\u52A1\u3001\u4EFB\u52A1\u5FC3\u8DF3\u3001\u5F53\u524D\u4EFB\u52A1\u6216\u5DE5\u5177\u8C03\u7528\u3002",
       ),
       signalCounts: {
         schedule: enabledCronCount,
@@ -532,3 +525,4 @@ function createGlobalVisibilityRenderers(deps) {
 }
 
 export { createGlobalVisibilityRenderers };
+

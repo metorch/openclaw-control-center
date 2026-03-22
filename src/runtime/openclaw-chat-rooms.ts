@@ -23,7 +23,7 @@ export interface OpenClawChatRoomSummary {
 
 export interface OpenClawChatRoomDeleteResult {
   deletedRoomId: string;
-  fallbackRoomId: string;
+  fallbackRoomId?: string;
 }
 
 interface TranscriptSummaryDraft {
@@ -53,12 +53,13 @@ export async function listOpenClawChatRooms(input: {
   agentId: string;
   workspaceRoot: string;
   openclawHomeDir?: string;
+  createIfEmpty?: boolean;
 }): Promise<OpenClawChatRoomSummary[]> {
   const sessionsDir = resolveAgentSessionsDir(input.agentId, input.openclawHomeDir);
   await mkdir(sessionsDir, { recursive: true });
   let roomIds = await listTranscriptRoomIds(sessionsDir);
 
-  if (roomIds.length === 0) {
+  if (roomIds.length === 0 && input.createIfEmpty !== false) {
     const created = await createOpenClawChatRoom(input);
     roomIds = [created.roomId];
   }
@@ -87,35 +88,55 @@ export async function createOpenClawChatRoom(input: {
   workspaceRoot: string;
   openclawHomeDir?: string;
   title?: string;
+  roomId?: string;
+  activate?: boolean;
 }): Promise<OpenClawChatRoomSummary> {
-  const roomId = randomUUID();
+  const requestedRoomId = String(input.roomId || "").trim();
+  const normalizedRequestedRoomId = requestedRoomId ? normalizeTranscriptRoomId(requestedRoomId) : undefined;
+  if (requestedRoomId && !normalizedRequestedRoomId) {
+    throw new Error("A valid roomId is required when provided.");
+  }
+
+  const roomId = normalizedRequestedRoomId ?? randomUUID();
   const now = new Date().toISOString();
-  const transcriptPath = resolveTranscriptPath(resolveAgentSessionsDir(input.agentId, input.openclawHomeDir), roomId);
-  await mkdir(resolveAgentSessionsDir(input.agentId, input.openclawHomeDir), { recursive: true });
+  const sessionsDir = resolveAgentSessionsDir(input.agentId, input.openclawHomeDir);
+  const transcriptPath = resolveTranscriptPath(sessionsDir, roomId);
+  await mkdir(sessionsDir, { recursive: true });
   const title = normalizeTranscriptTitle(input.title) ?? DEFAULT_CHAT_ROOM_TITLE;
-  await writeFile(
-    transcriptPath,
-    `${JSON.stringify({
-      type: "session",
-      version: 3,
-      id: roomId,
-      timestamp: now,
-      cwd: input.workspaceRoot,
-    })}\n`,
-    "utf8",
-  );
-  await activateOpenClawChatRoom({
-    agentId: input.agentId,
-    roomId,
-    openclawHomeDir: input.openclawHomeDir,
-  });
+  const existingTranscript = await stat(transcriptPath).catch(() => undefined);
+  if (!existingTranscript?.isFile()) {
+    await writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: roomId,
+        timestamp: now,
+        cwd: input.workspaceRoot,
+      })}\n`,
+      "utf8",
+    );
+  }
+  if (input.activate !== false) {
+    await activateOpenClawChatRoom({
+      agentId: input.agentId,
+      roomId,
+      openclawHomeDir: input.openclawHomeDir,
+    });
+  }
+  const summary = existingTranscript?.isFile()
+    ? await readTranscriptSummary(transcriptPath)
+    : {
+        roomId,
+        title,
+        createdAt: now,
+        updatedAt: now,
+        transcriptPath,
+      };
   return {
-    roomId,
-    title,
-    createdAt: now,
-    updatedAt: now,
-    transcriptPath,
-    active: true,
+    ...summary,
+    title: summary.title || title,
+    active: input.activate !== false,
   };
 }
 
@@ -124,6 +145,7 @@ export async function deleteOpenClawChatRoom(input: {
   roomId: string;
   workspaceRoot: string;
   openclawHomeDir?: string;
+  ensureFallback?: boolean;
 }): Promise<OpenClawChatRoomDeleteResult> {
   const roomId = normalizeTranscriptRoomId(input.roomId);
   if (!roomId) {
@@ -135,7 +157,7 @@ export async function deleteOpenClawChatRoom(input: {
 
   let roomIds = await listTranscriptRoomIds(sessionsDir);
   let fallbackRoomId = roomIds[0];
-  if (!fallbackRoomId) {
+  if (!fallbackRoomId && input.ensureFallback !== false) {
     fallbackRoomId = (
       await createOpenClawChatRoom({
         agentId: input.agentId,

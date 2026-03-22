@@ -20,7 +20,7 @@ function createDashboardQueryHelpers(deps) {
     normalizeOptionalPatchString,
     normalizeQueryString,
     normalizeTaskCardOrderPatch,
-    normalizeTranscriptRoomId,
+    normalizeCollaborationRoomId,
     pickUiText,
     projectStates,
     projectTitleMap,
@@ -489,7 +489,7 @@ function createDashboardQueryHelpers(deps) {
         if (typeof chatObj.activeRoomId !== "string") {
           throw new RequestValidationError("collaborationChat.activeRoomId must be a string.", 400);
         }
-        const activeRoomId = normalizeTranscriptRoomId(chatObj.activeRoomId);
+        const activeRoomId = normalizeCollaborationRoomId(chatObj.activeRoomId);
         if (activeRoomId) {
           next.collaborationChat.activeRoomId = activeRoomId;
         }
@@ -501,7 +501,7 @@ function createDashboardQueryHelpers(deps) {
         }
         const nextCursors = {};
         for (const [roomId, sequence] of Object.entries(cursorObj)) {
-          const normalizedRoomId = normalizeTranscriptRoomId(roomId);
+          const normalizedRoomId = normalizeCollaborationRoomId(roomId);
           if (!normalizedRoomId) {
             continue;
           }

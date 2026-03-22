@@ -35,6 +35,7 @@ export function parseCollaborationAgentArtifacts(replyText: string): ParsedColla
       }
       return "";
     })
+    .replace(/^\[\[reply_to_current\]\]\s*/i, "")
     .trim();
 
   return {
@@ -44,16 +45,28 @@ export function parseCollaborationAgentArtifacts(replyText: string): ParsedColla
   };
 }
 
-export function buildCollaborationAgentArtifactInstruction(agentWorkspaceRoot: string): string {
+export function buildCollaborationAgentArtifactInstruction(
+  projectRoot: string,
+  preferredArtifactsDir?: string,
+): string {
+  const resolvedProjectRoot = String(projectRoot || "").trim();
+  const resolvedPreferredArtifactsDir =
+    String(preferredArtifactsDir || "").trim() || resolvedProjectRoot;
   return [
-    "If you create or update files for the user, actually write them inside your workspace before replying.",
-    `Preferred workspace root: ${agentWorkspaceRoot}.`,
+    "If you create or update files for the user, actually write them inside the current collaboration project before replying.",
+    resolvedProjectRoot ? `Current collaboration project root: ${resolvedProjectRoot}.` : "",
+    resolvedPreferredArtifactsDir
+      ? `Preferred save location for new deliverables: ${resolvedPreferredArtifactsDir}.`
+      : "",
+    "Do not create or update deliverables outside this project root, and do not save them to the global workspace root.",
     "When files were created or updated, append this exact footer at the very end of your reply. Do not wrap it in a code fence:",
     COLLABORATION_AGENT_FILE_BLOCK_START,
     "relative/or/absolute/path/to/file",
     COLLABORATION_AGENT_FILE_BLOCK_END,
     "The control center will hide that footer from the user and attach the files automatically.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function extractCollaborationAgentArtifactPathsFromRawJson(input: unknown): string[] {
@@ -107,6 +120,23 @@ export function extractCollaborationAgentArtifactPathsFromRawJson(input: unknown
   return dedupe(matches);
 }
 
+export function isMachineOnlyCollaborationText(value: string): boolean {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return false;
+  if (/^no_reply$/i.test(trimmed)) return true;
+  if (!/^[\[{]/.test(trimmed)) return false;
+  if (
+    !/"(?:payloads|meta|systemPromptReport|agentMeta|lastCallUsage|promptTokens)"/i.test(trimmed)
+  ) {
+    return false;
+  }
+  try {
+    return looksLikeMachinePayloadRoot(JSON.parse(trimmed) as unknown);
+  } catch {
+    return /"payloads"\s*:\s*\[/i.test(trimmed) && /"meta"\s*:/i.test(trimmed);
+  }
+}
+
 function extractHintedPaths(replyText: string): string[] {
   const matches: string[] = [];
   for (const rawLine of replyText.split(/\n+/)) {
@@ -126,6 +156,17 @@ function extractHintedPaths(replyText: string): string[] {
     }
   }
   return dedupe(matches);
+}
+
+function looksLikeMachinePayloadRoot(input: unknown): boolean {
+  if (!input || typeof input !== "object") return false;
+  const objectValue = input as Record<string, unknown>;
+  return Boolean(
+    Array.isArray(objectValue.payloads) ||
+      (objectValue.meta && typeof objectValue.meta === "object") ||
+      (objectValue.systemPromptReport && typeof objectValue.systemPromptReport === "object") ||
+      (objectValue.agentMeta && typeof objectValue.agentMeta === "object"),
+  );
 }
 
 function stripArtifactHintLines(replyText: string): string {

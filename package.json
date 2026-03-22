@@ -32,6 +32,7 @@
     "goal:gate": "node --import tsx scripts/goal-gate.ts",
     "health:snapshot": "node --import tsx scripts/health-snapshot.ts",
     "health:snapshot:periodic": "node --import tsx scripts/periodic-snapshot.ts",
+    "heart-rate-monitor:run": "node --import tsx scripts/heart-rate-monitor.ts",
     "worker:resident": "node --import tsx scripts/resident-worker.ts",
     "supervisor:resident": "node --import tsx scripts/resident-supervisor.ts",
     "dod:check": "node --import tsx scripts/dod-check.ts"

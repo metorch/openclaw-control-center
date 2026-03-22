@@ -133,6 +133,7 @@ export interface UsageBudgetStatus {
   limitCost30d?: number;
   burnRatePerDay?: number;
   projectedDaysToLimit?: number;
+  isUnlimited?: boolean;
   message: string;
 }
 
@@ -1768,9 +1769,10 @@ function buildUsageBudgetStatus(
 
   if (agentCostLimits.length === 0) {
     return {
-      status: "not_connected",
+      status: "ok",
       usedCost30d,
-      message: "Data source not connected: no cost budget limit configured.",
+      isUnlimited: true,
+      message: "No budget limit is configured, so spending is currently unrestricted.",
     };
   }
 

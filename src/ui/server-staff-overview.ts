@@ -75,6 +75,13 @@ function createStaffOverviewHelpers(deps) {
       case "release":
       case "sre":
         return pickUiText(language, "Release ops", "发布运维");
+      case "heart-rate-monitor":
+      case "heartratemonitor":
+      case "heartbeatmonitor":
+      case "heartbeat":
+      case "watchdog":
+      case "monitor":
+        return pickUiText(language, "Heartbeat supervision", "心跳监控");
       default:
         return void 0;
     }
