@@ -28,6 +28,7 @@ export function upsertCollaborationLiveDraft(input: CollaborationLiveDraft): Col
     agentId: input.agentId,
     createdAt: current?.createdAt || input.createdAt,
     updatedAt: input.updatedAt,
+    text: input.text ?? current?.text,
     state: input.state,
   };
   liveDrafts.set(key, next);

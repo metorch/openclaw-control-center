@@ -783,6 +783,53 @@ function createCollaborationChatHelpers(deps) {
     return summarizeCollaborationUiText(value, fallback, maxLength);
   }
 
+  function appendUniqueCollaborationText(base, suffix) {
+    if (!base) {
+      return suffix;
+    }
+    if (!suffix || base.endsWith(suffix)) {
+      return base;
+    }
+    const maxOverlap = Math.min(base.length, suffix.length);
+    for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+      if (base.slice(-overlap) === suffix.slice(0, overlap)) {
+        return base + suffix.slice(overlap);
+      }
+    }
+    return base + suffix;
+  }
+
+  function resolveMergedCollaborationStreamText(input) {
+    const previousText = String(input.previousText || "");
+    const nextText = typeof input.nextText === "string" ? input.nextText : "";
+    const nextDeltaText = typeof input.nextDeltaText === "string" ? input.nextDeltaText : "";
+    if (nextText.trim() && previousText.trim()) {
+      if (nextText.startsWith(previousText)) {
+        return nextText;
+      }
+      if (previousText.startsWith(nextText) && !nextDeltaText.trim()) {
+        return previousText;
+      }
+    }
+    if (nextDeltaText.trim()) {
+      return appendUniqueCollaborationText(previousText, nextDeltaText);
+    }
+    if (nextText.trim()) {
+      return nextText;
+    }
+    return previousText;
+  }
+
+  function resolveCollaborationLiveDraftText(input) {
+    const previousText = String(input.currentText || "");
+    const mergedText = resolveMergedCollaborationStreamText({
+      previousText,
+      nextText: input.event?.text,
+      nextDeltaText: input.event?.deltaText,
+    });
+    return sanitizeVisibleCollaborationText(mergedText, input.language, previousText, 12_000);
+  }
+
   function isJarvisWaitingForUserConfirmation(input) {
     const primaryKey = normalizeLookupKey(input.directory?.primaryAgentId);
     const actorKey = normalizeLookupKey(input.targetAgentId);
@@ -2208,18 +2255,29 @@ function createCollaborationChatHelpers(deps) {
       });
     const handleLiveStreamEvent = (event) => {
       const now = new Date().toISOString();
-      const visibleText = sanitizeVisibleCollaborationText(event?.text, input.language, "", 12_000);
+      const currentDraft = import_collaboration_live_drafts
+        .listCollaborationLiveDrafts(input.roomId)
+        .find(
+          (draft) =>
+            normalizeLookupKey(draft.sourceEventId) === normalizeLookupKey(input.sourceEvent.eventId) &&
+            normalizeLookupKey(draft.agentId) === normalizeLookupKey(input.targetAgentId),
+        );
+      const visibleText = resolveCollaborationLiveDraftText({
+        currentText: currentDraft?.text || "",
+        event,
+        language: input.language,
+      });
       import_collaboration_live_drafts.upsertCollaborationLiveDraft({
         roomId: input.roomId,
         sourceEventId: input.sourceEvent.eventId,
         agentId: input.targetAgentId,
         agentDisplayName: resolveCollaborationParticipantName(input.directory, input.targetAgentId),
-        runId: event?.runId,
-        sessionKey: event?.sessionKey || liveDraftSessionKey,
+        runId: event?.runId || currentDraft?.runId,
+        sessionKey: event?.sessionKey || currentDraft?.sessionKey || liveDraftSessionKey,
         createdAt: now,
         updatedAt: now,
-        text: visibleText || void 0,
-        state: event?.state || "delta",
+        text: visibleText || currentDraft?.text || void 0,
+        state: event?.state || currentDraft?.state || "delta",
         errorMessage: event?.errorMessage || void 0,
       });
     };
@@ -3266,6 +3324,7 @@ function createCollaborationChatHelpers(deps) {
     resolveCollaborationArtifactPaths,
     resolveCollaborationAgentSessionBinding,
     resolveCollaborationParticipantWorkspaceRoot,
+    resolveCollaborationLiveDraftText,
     shouldAutoPromoteCollaborationStageResult,
     isJarvisWaitingForUserConfirmation,
     summarizeCollaborationFailure,

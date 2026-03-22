@@ -247,6 +247,41 @@ test("Jarvis user-confirmation detection stays scoped to primary direct checkpoi
   );
 });
 
+test("live draft text keeps accumulated visible content when the stream only sends deltas", () => {
+  const helper = buildHelper();
+
+  assert.equal(
+    helper.resolveCollaborationLiveDraftText({
+      currentText: "Hello",
+      event: { deltaText: " world", state: "delta" },
+      language: "en",
+    }),
+    "Hello world",
+  );
+
+  assert.equal(
+    helper.resolveCollaborationLiveDraftText({
+      currentText: "Before tool call",
+      event: {
+        text: "After tool call",
+        deltaText: "\nAfter tool call",
+        state: "delta",
+      },
+      language: "en",
+    }),
+    "Before tool call After tool call",
+  );
+
+  assert.equal(
+    helper.resolveCollaborationLiveDraftText({
+      currentText: "Visible reply already started",
+      event: { state: "started" },
+      language: "en",
+    }),
+    "Visible reply already started",
+  );
+});
+
 test("artifact replies without stage_result can synthesize a reviewable completion when they stay local to the task", () => {
   const helper = buildHelper();
 

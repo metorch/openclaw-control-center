@@ -355,6 +355,7 @@ test("agentTurn can consume the upstream gateway event stream while still recove
   const previousGatewayUrl = process.env.GATEWAY_URL;
   const previousWebSocketDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
   const streamEvents: Array<{ state: string; text?: string; runId?: string }> = [];
+  const connectRequests: Array<{ minProtocol?: number; maxProtocol?: number }> = [];
 
   class FakeGatewayWebSocket {
     private listeners = new Map<string, Array<(event: unknown) => void>>();
@@ -365,6 +366,7 @@ test("agentTurn can consume the upstream gateway event stream while still recove
           data: JSON.stringify({
             type: "event",
             event: "connect.challenge",
+            payload: { nonce: "nonce-stream-1" },
           }),
         });
       }, 0);
@@ -380,9 +382,13 @@ test("agentTurn can consume the upstream gateway event stream while still recove
       const frame = JSON.parse(data) as {
         id?: string;
         method?: string;
-        params?: { sessionKey?: string };
+        params?: { sessionKey?: string; minProtocol?: number; maxProtocol?: number };
       };
       if (frame.method === "connect") {
+        connectRequests.push({
+          minProtocol: frame.params?.minProtocol,
+          maxProtocol: frame.params?.maxProtocol,
+        });
         setTimeout(() => {
           this.emit("message", {
             data: JSON.stringify({
@@ -529,12 +535,216 @@ test("agentTurn can consume the upstream gateway event stream while still recove
     assert.match(response.replyText, /<stage_result>/);
     assert.equal(response.stopReason, "stop");
     assert.equal(response.incomplete, false);
+    assert.deepEqual(connectRequests, [{ minProtocol: 3, maxProtocol: 3 }]);
     assert.deepEqual(
       streamEvents.map((event) => event.state),
       ["started", "delta", "final"],
     );
     assert.equal(streamEvents[0]?.runId, "run-stream-1");
     assert.equal(streamEvents[1]?.text, "Streaming a partial visible answer...");
+  } finally {
+    process.env.GATEWAY_URL = previousGatewayUrl;
+    if (previousWebSocketDescriptor) {
+      Object.defineProperty(globalThis, "WebSocket", previousWebSocketDescriptor);
+    } else {
+      delete (globalThis as { WebSocket?: unknown }).WebSocket;
+    }
+  }
+});
+
+test("agentTurn tolerates gateway delta-only payload variants and final-state aliases", async () => {
+  const previousGatewayUrl = process.env.GATEWAY_URL;
+  const previousWebSocketDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
+  const streamEvents: Array<{ state: string; text?: string; deltaText?: string }> = [];
+
+  class FakeGatewayVariantWebSocket {
+    private listeners = new Map<string, Array<(event: unknown) => void>>();
+
+    constructor(_url: string) {
+      setTimeout(() => {
+        this.emit("message", {
+          data: JSON.stringify({
+            type: "event",
+            event: "connect.challenge",
+            payload: { nonce: "nonce-stream-variant" },
+          }),
+        });
+      }, 0);
+    }
+
+    addEventListener(type: string, listener: (event: unknown) => void): void {
+      const current = this.listeners.get(type) ?? [];
+      current.push(listener);
+      this.listeners.set(type, current);
+    }
+
+    send(data: string): void {
+      const frame = JSON.parse(data) as {
+        id?: string;
+        method?: string;
+        params?: { sessionKey?: string };
+      };
+      if (frame.method === "connect") {
+        setTimeout(() => {
+          this.emit("message", {
+            data: JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { protocol: 3 },
+            }),
+          });
+        }, 0);
+        return;
+      }
+      if (frame.method === "chat.send") {
+        setTimeout(() => {
+          this.emit("message", {
+            data: JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { runId: "run-stream-variant" },
+            }),
+          });
+          this.emit("message", {
+            data: JSON.stringify({
+              type: "event",
+              event: "chat",
+              payload: {
+                runId: "run-stream-variant",
+                sessionKey: frame.params?.sessionKey,
+                state: "partial",
+                seq: 1,
+                data: { text: "Hello", delta: "Hello" },
+              },
+            }),
+          });
+          this.emit("message", {
+            data: JSON.stringify({
+              type: "event",
+              event: "chat",
+              payload: {
+                runId: "run-stream-variant",
+                sessionKey: frame.params?.sessionKey,
+                state: "delta",
+                seq: 2,
+                deltaText: " world",
+              },
+            }),
+          });
+          this.emit("message", {
+            data: JSON.stringify({
+              type: "event",
+              event: "chat",
+              payload: {
+                runId: "run-stream-variant",
+                sessionKey: frame.params?.sessionKey,
+                state: "completed",
+                seq: 3,
+                stopReason: "stop",
+              },
+            }),
+          });
+        }, 0);
+      }
+    }
+
+    close(): void {
+      // No-op for the fake socket.
+    }
+
+    private emit(type: string, event: unknown): void {
+      for (const listener of this.listeners.get(type) ?? []) {
+        listener(event);
+      }
+    }
+  }
+
+  try {
+    process.env.GATEWAY_URL = "ws://127.0.0.1:18789";
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      writable: true,
+      value: FakeGatewayVariantWebSocket,
+    });
+
+    const client = new OpenClawLiveClient();
+    const patchedClient = client as OpenClawLiveClient & {
+      sessionsList: () => Promise<{
+        sessions: Array<{
+          sessionId: string;
+          sessionKey: string;
+          agentId: string;
+          updatedAtMs: number;
+          active: boolean;
+          state: string;
+        }>;
+      }>;
+      sessionsHistory: (request: { sessionKey: string; limit?: number }) => Promise<{ rawText: string }>;
+    };
+
+    patchedClient.sessionsList = async () => ({
+      sessions: [
+        {
+          sessionId: "session-main",
+          sessionKey: "agent:main:thread:collab-room",
+          agentId: "main",
+          updatedAtMs: Date.now(),
+          active: true,
+          state: "active",
+        },
+      ],
+    });
+    patchedClient.sessionsHistory = async () => ({
+      rawText: [
+        JSON.stringify({
+          type: "message",
+          timestamp: new Date(Date.now() + 10).toISOString(),
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "Hello world",
+                textSignature: '{"phase":"final_answer"}',
+              },
+            ],
+            stopReason: "stop",
+          },
+        }),
+      ].join("\n"),
+    });
+
+    const response = await client.agentTurn({
+      agentId: "main",
+      sessionKey: "agent:main:thread:collab-room",
+      message: "stream the answer through the gateway",
+      timeoutSeconds: 20,
+      preferGatewayStream: true,
+      onStreamEvent: async (event) => {
+        streamEvents.push({
+          state: event.state,
+          text: event.text,
+          deltaText: event.deltaText,
+        });
+      },
+    });
+
+    assert.equal(response.ok, true);
+    assert.equal(response.runId, "run-stream-variant");
+    assert.equal(response.replyText, "Hello world");
+    assert.equal(response.stopReason, "stop");
+    assert.equal(response.incomplete, false);
+    assert.deepEqual(
+      streamEvents.map((event) => ({ state: event.state, text: event.text, deltaText: event.deltaText })),
+      [
+        { state: "started", text: undefined, deltaText: undefined },
+        { state: "delta", text: "Hello", deltaText: "Hello" },
+        { state: "delta", text: "Hello world", deltaText: " world" },
+        { state: "final", text: "Hello world", deltaText: undefined },
+      ],
+    );
   } finally {
     process.env.GATEWAY_URL = previousGatewayUrl;
     if (previousWebSocketDescriptor) {

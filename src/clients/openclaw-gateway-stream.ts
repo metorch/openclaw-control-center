@@ -5,7 +5,7 @@ import { resolveOpenClawConfigPath } from "../runtime/current-agent-catalog";
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 const DEFAULT_GATEWAY_PORT = 18_789;
-const GATEWAY_PROTOCOL_VERSION = 1;
+const GATEWAY_PROTOCOL_VERSION = 3;
 const GATEWAY_CONNECT_TIMEOUT_MS = 10_000;
 const GATEWAY_FINAL_GRACE_MS = 30_000;
 const CONTROL_CENTER_CLIENT_ID = "gateway-client";
@@ -170,7 +170,12 @@ export async function streamOpenClawGatewayAgentTurn(
     socket.send(JSON.stringify(frame));
   };
 
-  const handleConnectChallenge = (): void => {
+  const handleConnectChallenge = (frame: Record<string, unknown>): void => {
+    const nonce = asString(asObject(frame.payload)?.nonce)?.trim();
+    if (!nonce) {
+      rejectOnce(new GatewayStreamStartError("Gateway connect challenge missing nonce."));
+      return;
+    }
     if (connectSent) {
       return;
     }
@@ -275,9 +280,15 @@ export async function streamOpenClawGatewayAgentTurn(
       return;
     }
     const nextText = extractGatewayChatVisibleText(payload);
-    const deltaText = diffGatewayChatText(lastText, nextText);
-    if (nextText) {
-      lastText = nextText;
+    const nextDeltaText = extractGatewayChatDeltaText(payload);
+    const mergedText = resolveMergedGatewayChatText({
+      previousText: lastText,
+      nextText,
+      nextDeltaText,
+    });
+    const deltaText = diffGatewayChatText(lastText, mergedText) || nextDeltaText;
+    if (hasNonWhitespaceText(mergedText)) {
+      lastText = mergedText;
     }
     lastPayload = payload;
     const seq = asNumber(payload.seq);
@@ -346,7 +357,7 @@ export async function streamOpenClawGatewayAgentTurn(
     const type = asString(frame.type);
     if (type === "event") {
       if (asString(frame.event) === "connect.challenge") {
-        handleConnectChallenge();
+        handleConnectChallenge(frame);
         return;
       }
       handleChatEvent(frame);
@@ -548,29 +559,148 @@ function formatGatewayCloseReason(event?: { code?: number; reason?: string }): s
 
 function normalizeGatewayChatState(input: unknown): "delta" | "final" | "error" | undefined {
   const value = asString(input)?.trim().toLowerCase();
-  if (value === "delta" || value === "final" || value === "error") {
-    return value;
+  if (!value) {
+    return undefined;
+  }
+  if (value === "delta" || value === "partial" || value === "streaming" || value === "stream") {
+    return "delta";
+  }
+  if (
+    value === "final" ||
+    value === "done" ||
+    value === "complete" ||
+    value === "completed" ||
+    value === "finished"
+  ) {
+    return "final";
+  }
+  if (value === "error" || value === "failed" || value === "failure") {
+    return "error";
   }
   return undefined;
 }
 
 function extractGatewayChatVisibleText(payload: Record<string, unknown>): string {
-  const message = asObject(payload.message);
-  const direct =
-    asString(message?.text) ??
-    asString(message?.content) ??
-    asString(payload.text) ??
-    asString(payload.message);
-  if (direct?.trim()) {
-    return direct.trim();
+  for (const candidate of [
+    payload.message,
+    asObject(payload.message)?.content,
+    payload.data,
+    asObject(payload.data)?.content,
+    payload.content,
+    payload.text,
+    payload.outputText,
+    payload.visibleText,
+  ]) {
+    const resolved = extractGatewayStructuredText(candidate);
+    if (hasNonWhitespaceText(resolved)) {
+      return resolved;
+    }
   }
-  const content = Array.isArray(message?.content) ? message?.content : [];
-  const parts = content
-    .map((item) => asObject(item))
-    .map((item) => asString(item?.text) ?? asString(item?.content))
-    .filter((value): value is string => typeof value === "string" && value.trim() !== "")
-    .map((value) => value.trim());
-  return parts.join("\n").trim();
+  return "";
+}
+
+function extractGatewayChatDeltaText(payload: Record<string, unknown>): string {
+  for (const candidate of [payload, asObject(payload.message), asObject(payload.data)]) {
+    const resolved = extractGatewayStructuredDeltaText(candidate);
+    if (hasNonWhitespaceText(resolved)) {
+      return resolved;
+    }
+  }
+  return "";
+}
+
+function extractGatewayStructuredText(input: unknown, depth = 0): string {
+  if (depth > 4) {
+    return "";
+  }
+  if (typeof input === "string") {
+    return input;
+  }
+  if (Array.isArray(input)) {
+    const parts = input
+      .map((item) => extractGatewayStructuredText(item, depth + 1))
+      .filter((value) => hasNonWhitespaceText(value));
+    return parts.join("\n");
+  }
+  const entry = asObject(input);
+  if (!entry) {
+    return "";
+  }
+  for (const key of ["text", "content", "value", "outputText", "visibleText", "body"]) {
+    const value = entry[key];
+    if (typeof value === "string" && hasNonWhitespaceText(value)) {
+      return value;
+    }
+  }
+  for (const key of ["content", "message", "items", "parts", "blocks", "output"]) {
+    const resolved = extractGatewayStructuredText(entry[key], depth + 1);
+    if (hasNonWhitespaceText(resolved)) {
+      return resolved;
+    }
+  }
+  return "";
+}
+
+function extractGatewayStructuredDeltaText(input: unknown, depth = 0): string {
+  if (depth > 4) {
+    return "";
+  }
+  const entry = asObject(input);
+  if (!entry) {
+    return "";
+  }
+  for (const key of ["deltaText", "delta", "textDelta"]) {
+    const value = entry[key];
+    if (typeof value === "string" && hasNonWhitespaceText(value)) {
+      return value;
+    }
+  }
+  for (const key of ["message", "data", "payload"]) {
+    const resolved = extractGatewayStructuredDeltaText(entry[key], depth + 1);
+    if (hasNonWhitespaceText(resolved)) {
+      return resolved;
+    }
+  }
+  return "";
+}
+
+function appendUniqueGatewaySuffix(base: string, suffix: string): string {
+  if (!base) {
+    return suffix;
+  }
+  if (!suffix || base.endsWith(suffix)) {
+    return base;
+  }
+  const maxOverlap = Math.min(base.length, suffix.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
+      return base + suffix.slice(overlap);
+    }
+  }
+  return base + suffix;
+}
+
+function resolveMergedGatewayChatText(input: {
+  previousText: string;
+  nextText: string;
+  nextDeltaText: string;
+}): string {
+  const { previousText, nextText, nextDeltaText } = input;
+  if (hasNonWhitespaceText(nextText) && hasNonWhitespaceText(previousText)) {
+    if (nextText.startsWith(previousText)) {
+      return nextText;
+    }
+    if (previousText.startsWith(nextText) && !hasNonWhitespaceText(nextDeltaText)) {
+      return previousText;
+    }
+  }
+  if (hasNonWhitespaceText(nextDeltaText)) {
+    return appendUniqueGatewaySuffix(previousText, nextDeltaText);
+  }
+  if (hasNonWhitespaceText(nextText)) {
+    return nextText;
+  }
+  return previousText;
 }
 
 function diffGatewayChatText(previousText: string, nextText: string): string {
@@ -584,6 +714,10 @@ function diffGatewayChatText(previousText: string, nextText: string): string {
     return nextText.slice(previousText.length);
   }
   return nextText;
+}
+
+function hasNonWhitespaceText(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
 }
 
 function normalizeGatewayWebSocketUrl(input: string): string {
