@@ -1636,6 +1636,8 @@ test("collaboration source includes primary dispatcher filter and floating room 
   assert(widgetRenderingSource.includes('attachmentPreviewMode'));
   assert(widgetRenderingSource.includes('renderAttachmentTextPreview'));
   assert(widgetRenderingSource.includes("item.status === 'uploaded'"));
+  assert(widgetRenderingSource.includes("const stoppedPending = pendingEvent && event.pendingState === 'stopped';"));
+  assert(widgetRenderingSource.includes("if (stoppedPending) {"));
   assert(widgetRenderingSource.includes("if (persist && shouldPersistRoomViewState()) schedulePreferenceSave({ includeRoomViewState: true });"));
   assert(widgetBootSource.includes("inputNode.addEventListener('paste'"));
   assert(widgetBootSource.includes("panel.addEventListener('drop'"));
@@ -1648,6 +1650,7 @@ test("collaboration source includes primary dispatcher filter and floating room 
   assert(!widgetHtml.includes('data-collab-room-delete'));
   assert(serverSource.includes('loadExistingCollaborationRoom(input.roomId)'));
   assert(widgetHtml.includes('.collab-chat-room-dropdown {'));
+  assert(widgetHtml.includes('.collab-chat-event.is-pending.is-stopped {'));
   assert(widgetHtml.includes('data-collab-chat-person-card'));
   assert(widgetHtml.includes('data-person-agent'));
   assert(widgetHtml.includes('collab-chat-avatar-state'));

@@ -457,6 +457,7 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
       const historyToolEvent = isHistoryToolEvent(event);
       const livePreview = event.liveDraft === true || event.liveSessionBackfill === true;
       const pendingEvent = event.pending === true && !livePreview;
+      const stoppedPending = pendingEvent && event.pendingState === 'stopped';
       const actorName = event.authorRole === 'user'
         ? ${serializeJsonForScript(input.language === "zh" ? "你" : "You")}
         : participant && participant.displayName
@@ -464,12 +465,15 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
           : event.agentDisplayName || event.label || ${serializeJsonForScript(input.language === "zh" ? "系统" : "System")};
       const accent = participant && participant.identity && participant.identity.accent ? participant.identity.accent : '#0f766e';
       const imageHref = participant && participant.identity && participant.identity.imageHref ? participant.identity.imageHref : '';
-      const eventClass = (event.authorRole === 'user' ? ' is-user' : event.authorRole === 'agent' ? ' is-agent' : '') + (historyToolEvent ? ' is-tool-event' : '') + (livePreview ? ' is-live' : '') + (pendingEvent ? ' is-pending' : '');
-      const eventBadge = pendingEvent
+      const eventClass = (event.authorRole === 'user' ? ' is-user' : event.authorRole === 'agent' ? ' is-agent' : '') + (historyToolEvent ? ' is-tool-event' : '') + (livePreview ? ' is-live' : '') + (pendingEvent ? ' is-pending' : '') + (stoppedPending ? ' is-stopped' : '');
+      let eventBadge = pendingEvent
         ? ${serializeJsonForScript(input.language === "zh" ? "处理中" : "Working")}
         : livePreview
           ? ${serializeJsonForScript(input.language === "zh" ? "实时同步" : "Live sync")}
           : '';
+      if (stoppedPending) {
+        eventBadge = ${serializeJsonForScript(input.language === "zh" ? "已终止" : "Stopped")};
+      }
       const bodyHtml = event.messageHtml || (event.message ? '<p class="chat-md-paragraph">' + escapeHtml(event.message) + '</p>' : '');
       const detailHtml = event.detailHtml || (event.detail ? '<p class="chat-md-paragraph">' + escapeHtml(event.detail) + '</p>' : '');
       const eventContent = (bodyHtml ? '<div class="collab-chat-event-body">' + bodyHtml + '</div>' : '') +

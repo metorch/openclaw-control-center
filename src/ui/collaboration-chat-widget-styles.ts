@@ -1001,6 +1001,11 @@ function renderCollaborationChatStyles(): string {
   background: linear-gradient(135deg, rgba(224, 242, 254, 0.82), rgba(248, 250, 252, 0.96));
 }
 
+.collab-chat-event.is-pending.is-stopped {
+  border-color: rgba(239, 68, 68, 0.26);
+  background: linear-gradient(135deg, rgba(254, 226, 226, 0.82), rgba(255, 247, 237, 0.96));
+}
+
 .collab-chat-event-head {
   display: flex;
   align-items: center;
@@ -1050,6 +1055,11 @@ function renderCollaborationChatStyles(): string {
   font-weight: 700;
   letter-spacing: 0.02em;
   vertical-align: middle;
+}
+
+.collab-chat-event.is-pending.is-stopped .collab-chat-event-badge {
+  background: rgba(239, 68, 68, 0.14);
+  color: #b91c1c;
 }
 
 .collab-chat-event-time {

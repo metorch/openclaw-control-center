@@ -1165,6 +1165,18 @@ function createCollaborationRoomHelpers(deps) {
       if (!liveEvent || isDuplicateCollaborationSyncEvent(liveEvent, signatures)) {
         continue;
       }
+      if (false) {
+        pendingMessage = pickUiText(
+          input.language,
+          "This room task was stopped before a visible reply was synced.",
+          "当前协作会话中的这项任务已在可见回复同步前终止。",
+        );
+        pendingDetail = pickUiText(
+          input.language,
+          `${agentName}'s current room task was stopped before a visible reply was synced.`,
+          `${agentName} 的当前协作任务已在可见回复同步前终止。`,
+        );
+      }
       drafts.push({
         ...liveEvent,
         eventId: `live-session:${normalizeLookupKey(item.candidate.sessionKey)}:${toSortableMs(liveEvent.createdAt) || drafts.length + 1}`,
@@ -1274,6 +1286,55 @@ function createCollaborationRoomHelpers(deps) {
     ]);
   }
 
+  function buildPendingDispatchTaskId(sourceEventId, agentId) {
+    const safeEventId = String(sourceEventId || "")
+      .trim()
+      .replace(/[^A-Za-z0-9._:-]+/g, "-")
+      .slice(0, 80);
+    const safeAgentId = String(agentId || "")
+      .trim()
+      .replace(/[^A-Za-z0-9._:-]+/g, "-")
+      .slice(0, 40);
+    if (!safeEventId || !safeAgentId) {
+      return "";
+    }
+    return `collab-${safeEventId}-${safeAgentId}`.slice(0, 100);
+  }
+
+  function resolvePendingDispatchReceipt(state, dispatch) {
+    if (!state || !dispatch?.agentId) {
+      return void 0;
+    }
+    const taskId = buildPendingDispatchTaskId(dispatch.sourceEventId, dispatch.agentId);
+    if (!taskId) {
+      return void 0;
+    }
+    const preferredProjectId = String(state.projectId || "").trim();
+    return (state.taskReceipts || []).find(
+      (receipt) =>
+        receipt?.taskId === taskId &&
+        (!preferredProjectId || String(receipt.projectId || "").trim() === preferredProjectId),
+    );
+  }
+
+  function isUserStoppedPendingDispatchReceipt(receipt) {
+    if (!receipt || receipt.lastResultState !== "blocked") {
+      return false;
+    }
+    const signals = [
+      receipt.summary,
+      receipt.recentOutput,
+      ...(Array.isArray(receipt.blockers) ? receipt.blockers : []),
+    ]
+      .map((value) => normalizeCollaborationEventSyncText(value))
+      .filter(Boolean);
+    return signals.some(
+      (value) =>
+        (value.includes("stopped") && value.includes("collaboration chat")) ||
+        (value.includes("终止") && (value.includes("协作") || value.includes("群聊"))),
+    );
+  }
+
   function buildCollaborationPendingDraftEvents(input) {
     const drafts = [];
     const currentVisibleEvents = Array.isArray(input.currentEvents) ? input.currentEvents : [];
@@ -1315,16 +1376,30 @@ function createCollaborationRoomHelpers(deps) {
         continue;
       }
       const agentName = resolveCollaborationParticipantName(input.directory, dispatch.agentId);
-      const pendingMessage = pickUiText(
+      const receipt = resolvePendingDispatchReceipt(input.state, dispatch);
+      const stoppedByUser = isUserStoppedPendingDispatchReceipt(receipt);
+      let pendingMessage = pickUiText(
         input.language,
         "Working in the current room session...",
         "正在当前协作会话中处理...",
       );
-      const pendingDetail = pickUiText(
+      let pendingDetail = pickUiText(
         input.language,
         `${agentName} has started working and has not published a visible reply yet.`,
         `${agentName} 已开始处理，但还没有同步出可见回复。`,
       );
+      if (stoppedByUser) {
+        pendingMessage = pickUiText(
+          input.language,
+          "This room task was stopped before a visible reply was synced.",
+          "当前协作会话中的这项任务已在可见回复同步前终止。",
+        );
+        pendingDetail = pickUiText(
+          input.language,
+          `${agentName}'s current room task was stopped before a visible reply was synced.`,
+          `${agentName} 的当前协作任务已在可见回复同步前终止。`,
+        );
+      }
       drafts.push({
         sequence: 0,
         eventId: `pending:${dispatch.eventId}`,
@@ -1352,7 +1427,15 @@ function createCollaborationRoomHelpers(deps) {
           ? buildSessionDetailHref(dispatch.relatedSessionKey, input.language)
           : void 0,
         pending: true,
+        pendingState: stoppedByUser ? "stopped" : "working",
       });
+      if (stoppedByUser && drafts.length > 0) {
+        drafts[drafts.length - 1].label = pickUiText(
+          input.language,
+          `${agentName} was stopped`,
+          `${agentName} 已终止`,
+        );
+      }
     }
 
     return drafts

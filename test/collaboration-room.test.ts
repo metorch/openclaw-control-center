@@ -1822,6 +1822,7 @@ test("pending draft fallback appears only when a current-room dispatch has no vi
   const helpers = createRoomHelpersForSmoke();
   const baseInput = {
     state: {
+      projectId: "proj-alpha",
       events: [
         {
           sequence: 1,
@@ -1857,6 +1858,31 @@ test("pending draft fallback appears only when a current-room dispatch has no vi
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.pending, true);
   assert.match(String(pending[0]?.message || ""), /Working/);
+
+  const stoppedPending = helpers.buildCollaborationPendingDraftEvents({
+    ...baseInput,
+    state: {
+      ...baseInput.state,
+      taskReceipts: [
+        {
+          taskId: "collab-source-qa-qa",
+          projectId: "proj-alpha",
+          lastResultState: "blocked",
+          lastReportedAt: "2026-03-22T11:54:02.000Z",
+          lastReportedBy: "system",
+          summary: "Stopped the current in-progress work from the collaboration chat.",
+          recentOutput: "Stopped the current in-progress work from the collaboration chat.",
+          blockers: ["Stopped by the user from the collaboration chat."],
+        },
+      ],
+    },
+    currentEvents: [],
+  });
+  assert.equal(stoppedPending.length, 1);
+  assert.equal(stoppedPending[0]?.pending, true);
+  assert.equal(stoppedPending[0]?.pendingState, "stopped");
+  assert.match(String(stoppedPending[0]?.message || ""), /stopped/i);
+  assert.match(String(stoppedPending[0]?.detail || ""), /stopped/i);
 
   const noPending = helpers.buildCollaborationPendingDraftEvents({
     ...baseInput,
