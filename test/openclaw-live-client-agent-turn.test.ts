@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -147,6 +149,206 @@ test("agentTurn extracts nested result payloads and flags nested interrupted tur
   } finally {
     process.env.OPENCLAW_CLI_PATH = previousCliPath;
     invalidateOpenClawCliInvocationCache();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agentTurn streams through the upstream /v1/responses endpoint when it is available", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openclaw-live-agent-http-stream-"));
+  const configPath = join(root, "openclaw.json");
+  const previousGatewayUrl = process.env.GATEWAY_URL;
+  const previousHome = process.env.OPENCLAW_HOME;
+  const previousWebSocketDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
+  const streamEvents: Array<{ state: string; text?: string; deltaText?: string; runId?: string }> = [];
+  const requests: Array<{ authorization?: string; sessionKey?: string; body: string }> = [];
+
+  const server = createServer(async (req, res) => {
+    if (req.method !== "POST" || req.url !== "/v1/responses") {
+      res.statusCode = 404;
+      res.end("not found");
+      return;
+    }
+
+    let body = "";
+    for await (const chunk of req) {
+      body += chunk.toString();
+    }
+    requests.push({
+      authorization: Array.isArray(req.headers.authorization)
+        ? req.headers.authorization[0]
+        : req.headers.authorization,
+      sessionKey: Array.isArray(req.headers["x-openclaw-session-key"])
+        ? req.headers["x-openclaw-session-key"][0]
+        : req.headers["x-openclaw-session-key"],
+      body,
+    });
+
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store",
+      connection: "keep-alive",
+    });
+    res.write(
+      `event: response.created\ndata: ${JSON.stringify({
+        type: "response.created",
+        response: {
+          id: "resp-http-stream-1",
+          status: "in_progress",
+          model: "openclaw:main",
+          output: [],
+        },
+      })}\n\n`,
+    );
+    res.write(
+      `event: response.output_text.delta\ndata: ${JSON.stringify({
+        type: "response.output_text.delta",
+        delta: "HTTP ",
+      })}\n\n`,
+    );
+    res.write(
+      `event: response.output_text.delta\ndata: ${JSON.stringify({
+        type: "response.output_text.delta",
+        delta: "stream",
+      })}\n\n`,
+    );
+    res.write(
+      `event: response.completed\ndata: ${JSON.stringify({
+        type: "response.completed",
+        response: {
+          id: "resp-http-stream-1",
+          status: "completed",
+          model: "openclaw:main",
+          output: [
+            {
+              type: "message",
+              id: "msg-http-1",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: "HTTP stream" }],
+            },
+          ],
+        },
+      })}\n\n`,
+    );
+    res.write("data: [DONE]\n\n");
+    res.end();
+  });
+
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    process.env.GATEWAY_URL = `http://127.0.0.1:${port}`;
+    process.env.OPENCLAW_HOME = root;
+    await writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: "test-gateway-token",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      writable: true,
+      value: class ForbiddenWebSocket {
+        constructor() {
+          throw new Error("WebSocket should not be used when /v1/responses streaming succeeds.");
+        }
+      },
+    });
+
+    const client = new OpenClawLiveClient();
+    const patchedClient = client as OpenClawLiveClient & {
+      sessionsList: () => Promise<{
+        sessions: Array<{
+          sessionId: string;
+          sessionKey: string;
+          agentId: string;
+          updatedAtMs: number;
+          active: boolean;
+          state: string;
+        }>;
+      }>;
+      sessionsHistory: (request: { sessionKey: string; limit?: number }) => Promise<{ rawText: string }>;
+    };
+    let sessionsListCalls = 0;
+    patchedClient.sessionsList = async () => {
+      sessionsListCalls += 1;
+      return sessionsListCalls === 1
+        ? { sessions: [] }
+        : {
+            sessions: [
+              {
+                sessionId: "session-http-stream",
+                sessionKey: "agent:main:thread:collab-room-http",
+                agentId: "main",
+                updatedAtMs: Date.now(),
+                active: true,
+                state: "active",
+              },
+            ],
+          };
+    };
+    patchedClient.sessionsHistory = async () => ({ rawText: "" });
+
+    const response = await client.agentTurn({
+      agentId: "main",
+      sessionKey: "agent:main:thread:collab-room-http",
+      message: "stream through responses",
+      timeoutSeconds: 20,
+      preferGatewayStream: true,
+      onStreamEvent: async (event) => {
+        streamEvents.push({
+          state: event.state,
+          text: event.text,
+          deltaText: event.deltaText,
+          runId: event.runId,
+        });
+      },
+    });
+
+    assert.equal(response.ok, true);
+    assert.equal(response.runId, "resp-http-stream-1");
+    assert.equal(response.replyText, "HTTP stream");
+    assert.equal(response.stopReason, "completed");
+    assert.equal(response.incomplete, false);
+    assert.deepEqual(
+      streamEvents.map((event) => ({ state: event.state, text: event.text, deltaText: event.deltaText })),
+      [
+        { state: "started", text: undefined, deltaText: undefined },
+        { state: "delta", text: "HTTP ", deltaText: "HTTP " },
+        { state: "delta", text: "HTTP stream", deltaText: "stream" },
+        { state: "final", text: "HTTP stream", deltaText: undefined },
+      ],
+    );
+    assert.equal(streamEvents[0]?.runId, "resp-http-stream-1");
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0]?.authorization, "Bearer test-gateway-token");
+    assert.equal(requests[0]?.sessionKey, "agent:main:thread:collab-room-http");
+    assert.deepEqual(JSON.parse(requests[0]?.body ?? "{}"), {
+      model: "openclaw:main",
+      stream: true,
+      input: [{ type: "message", role: "user", content: "stream through responses" }],
+    });
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    process.env.GATEWAY_URL = previousGatewayUrl;
+    process.env.OPENCLAW_HOME = previousHome;
+    if (previousWebSocketDescriptor) {
+      Object.defineProperty(globalThis, "WebSocket", previousWebSocketDescriptor);
+    } else {
+      delete (globalThis as { WebSocket?: unknown }).WebSocket;
+    }
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -354,6 +556,7 @@ test("agentTurn treats a later final session reply as success even when the CLI 
 test("agentTurn can consume the upstream gateway event stream while still recovering the final raw reply from session history", async () => {
   const previousGatewayUrl = process.env.GATEWAY_URL;
   const previousWebSocketDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
+  const previousFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
   const streamEvents: Array<{ state: string; text?: string; runId?: string }> = [];
   const connectRequests: Array<{ minProtocol?: number; maxProtocol?: number }> = [];
 
@@ -455,6 +658,15 @@ test("agentTurn can consume the upstream gateway event stream while still recove
 
   try {
     process.env.GATEWAY_URL = "ws://127.0.0.1:18789";
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: async () =>
+        new Response("responses endpoint unavailable in this test", {
+          status: 404,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        }),
+    });
     Object.defineProperty(globalThis, "WebSocket", {
       configurable: true,
       writable: true,
@@ -544,6 +756,11 @@ test("agentTurn can consume the upstream gateway event stream while still recove
     assert.equal(streamEvents[1]?.text, "Streaming a partial visible answer...");
   } finally {
     process.env.GATEWAY_URL = previousGatewayUrl;
+    if (previousFetchDescriptor) {
+      Object.defineProperty(globalThis, "fetch", previousFetchDescriptor);
+    } else {
+      delete (globalThis as { fetch?: unknown }).fetch;
+    }
     if (previousWebSocketDescriptor) {
       Object.defineProperty(globalThis, "WebSocket", previousWebSocketDescriptor);
     } else {
@@ -555,6 +772,7 @@ test("agentTurn can consume the upstream gateway event stream while still recove
 test("agentTurn tolerates gateway delta-only payload variants and final-state aliases", async () => {
   const previousGatewayUrl = process.env.GATEWAY_URL;
   const previousWebSocketDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
+  const previousFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
   const streamEvents: Array<{ state: string; text?: string; deltaText?: string }> = [];
 
   class FakeGatewayVariantWebSocket {
@@ -663,6 +881,15 @@ test("agentTurn tolerates gateway delta-only payload variants and final-state al
 
   try {
     process.env.GATEWAY_URL = "ws://127.0.0.1:18789";
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: async () =>
+        new Response("responses endpoint unavailable in this test", {
+          status: 404,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        }),
+    });
     Object.defineProperty(globalThis, "WebSocket", {
       configurable: true,
       writable: true,
@@ -747,6 +974,11 @@ test("agentTurn tolerates gateway delta-only payload variants and final-state al
     );
   } finally {
     process.env.GATEWAY_URL = previousGatewayUrl;
+    if (previousFetchDescriptor) {
+      Object.defineProperty(globalThis, "fetch", previousFetchDescriptor);
+    } else {
+      delete (globalThis as { fetch?: unknown }).fetch;
+    }
     if (previousWebSocketDescriptor) {
       Object.defineProperty(globalThis, "WebSocket", previousWebSocketDescriptor);
     } else {

@@ -259,7 +259,7 @@ function createCollaborationRoomHelpers(deps) {
     };
   }
 
-  function sanitizeCollaborationDisplayText(value, language, fallback = "", maxLength = 240) {
+  function sanitizeCollaborationDisplayText(value, language, fallback = "", maxLength = 240, preserveLineBreaks = false) {
     const normalized = String(value || "").replace(/\r/g, "").trim();
     const fallbackText = String(fallback || "").trim();
     if (!normalized) {
@@ -295,19 +295,22 @@ function createCollaborationRoomHelpers(deps) {
         "分发失败：没有找到 OpenClaw CLI 可执行文件。",
       );
     }
-    const compact = text
+    const lines = text
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => line !== "")
       .filter((line) => !/^command failed:/i.test(line))
       .filter((line) => !/^traceback/i.test(line))
       .filter((line) => !/^file \"/i.test(line))
-      .filter((line) => !/^raise systemexit/i.test(line))
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const resolved = compact || fallbackText;
-    return resolved ? safeTruncate(resolved, maxLength) : "";
+      .filter((line) => !/^raise systemexit/i.test(line));
+    const resolved = preserveLineBreaks
+      ? lines.join("\n").trim()
+      : lines.join(" ").replace(/\s+/g, " ").trim();
+    const fallbackResolved = preserveLineBreaks
+      ? fallbackText.replace(/\r/g, "").trim()
+      : fallbackText.replace(/\s+/g, " ").trim();
+    const output = resolved || fallbackResolved;
+    return output ? safeTruncate(output, maxLength) : "";
   }
 
   function normalizeCollaborationRoomIdCandidate(value) {
@@ -759,7 +762,10 @@ function createCollaborationRoomHelpers(deps) {
   }
 
   function looksLikeAnyRoomScopedCollaborationSessionKey(sessionKey) {
-    const normalized = normalizeLookupKey(sessionKey);
+    const normalized =
+      typeof sessionKey === "string" && sessionKey.trim()
+        ? normalizeLookupKey(sessionKey)
+        : "";
     return Boolean(normalized && normalized.includes("thread:collab-"));
   }
 
@@ -1066,7 +1072,7 @@ function createCollaborationRoomHelpers(deps) {
         if (candidateRole !== "assistant") {
           continue;
         }
-        const sanitized = sanitizeCollaborationDisplayText(candidate.content, input.language, "", 12000);
+        const sanitized = sanitizeCollaborationDisplayText(candidate.content, input.language, "", 12000, true);
         if (
           !sanitized ||
           isCollaborationInternalPromptMessage(candidate.content) ||
@@ -1189,7 +1195,7 @@ function createCollaborationRoomHelpers(deps) {
 
     const projected = [];
     for (const draft of import_collaboration_live_drafts.listCollaborationLiveDrafts(input.roomId)) {
-      const visibleMessage = sanitizeCollaborationDisplayText(draft.text, input.language, "", 12_000);
+      const visibleMessage = sanitizeCollaborationDisplayText(draft.text, input.language, "", 12_000, true);
       if (!visibleMessage) {
         continue;
       }
@@ -1290,7 +1296,7 @@ function createCollaborationRoomHelpers(deps) {
         if (normalizeLookupKey(event?.agentId ?? "") !== normalizeLookupKey(dispatch.agentId ?? "")) {
           return false;
         }
-        if (event.pending) {
+        if (event.pending && !event.liveDraft && !event.liveSessionBackfill) {
           return false;
         }
         if (
@@ -1764,7 +1770,7 @@ function createCollaborationRoomHelpers(deps) {
     const detail = buildTranscriptBackfillDetail(input.message, input.language);
     const message =
       isUserMessage || isAgentMessage
-        ? sanitizeCollaborationDisplayText(rawMessageContent, input.language, "", 12000) || void 0
+        ? sanitizeCollaborationDisplayText(rawMessageContent, input.language, "", 12000, true) || void 0
         : void 0;
     return {
       sequence: input.sequence,

@@ -27,7 +27,7 @@ const projectMemoryModuleHref = pathToFileURL(
   join(process.cwd(), "src", "runtime", "collaboration-project-memory.ts"),
 ).href;
 
-function buildHelper() {
+function buildHelper(overrides: Record<string, unknown> = {}) {
   return createCollaborationChatHelpers({
     buildCollaborationAttachmentSummary: () => "",
     buildSessionDetailHref: () => "",
@@ -48,15 +48,20 @@ function buildHelper() {
     optionalBoundedString: (value: string) => value,
     pickUiText: (_language: string, english: string) => english,
     resolveCollaborationParticipantName: (_directory: unknown, agentId: string) => agentId,
-    sanitizeCollaborationDisplayText: (value: string) =>
-      String(value || "")
+    sanitizeCollaborationDisplayText: (value: string, _language?: string, _fallback?: string, _maxLength?: number, preserveLineBreaks?: boolean) => {
+      const lines = String(value || "")
         .replace(/<openclaw_coordination>[\s\S]*?<\/openclaw_coordination>/gi, " ")
         .replace(/^\[\[reply_to_current\]\]\s*/i, "")
         .replace(/<stage_result[\s\S]*?<\/stage_result>/gi, " ")
-        .replace(/\s+/g, " ")
-        .trim(),
+        .replace(/\r/g, "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      return preserveLineBreaks ? lines.join("\n") : lines.join(" ").replace(/\s+/g, " ").trim();
+    },
     safeTruncate: (value: string, maxLength: number) => String(value || "").slice(0, maxLength),
     toCollaborationApiAttachment: () => ({}),
+    ...overrides,
   });
 }
 
@@ -269,7 +274,7 @@ test("live draft text keeps accumulated visible content when the stream only sen
       },
       language: "en",
     }),
-    "Before tool call After tool call",
+    "Before tool call\nAfter tool call",
   );
 
   assert.equal(
@@ -375,10 +380,10 @@ test("artifact reply hints recognize Chinese attachment requests", () => {
 test("artifact reply hints keep verification-only follow-ups read-only", () => {
   const helper = buildHelper();
   const followUpMessage = [
-    "Original user request:",
+    "Original user request (context only):",
     "Build a small HTML status page and save it as status.html.",
     "",
-    "Jarvis coordination instruction:",
+    "Jarvis assigned follow-up for you:",
     "Verify the existing HTML artifact and reply with pass/fail only. Do not modify the file.",
   ].join("\n");
 
@@ -393,6 +398,74 @@ test("artifact reply hints keep verification-only follow-ups read-only", () => {
     ),
     true,
   );
+});
+
+test("jarvis status summaries only redispatch employees with actionable follow-up mentions", () => {
+  const helper = buildHelper();
+  const directory = {
+    primaryAgentId: "main",
+    entries: [
+      { agentId: "main", displayName: "Jarvis", aliases: ["jarvis", "main"] },
+      { agentId: "frontend", displayName: "Frontend", aliases: ["frontend"] },
+      { agentId: "qa", displayName: "QA", aliases: ["qa"] },
+    ],
+  };
+
+  const plans = helper.resolveCollaborationReplyMentionDispatchPlans({
+    replyText: [
+      "目前进度：",
+      "- `@frontend` 已反馈",
+      "- 还缺 `@qa`",
+      "",
+      "@qa 麻烦回复一个 `1`。",
+    ].join("\n"),
+    directory,
+    actorAgentId: "main",
+    currentRouteAgentIds: ["main"],
+    language: "zh",
+  });
+
+  assert.deepEqual(
+    plans.map((plan: { agentId: string; instructionLines: string[] }) => ({
+      agentId: plan.agentId,
+      instructionLines: plan.instructionLines,
+    })),
+    [
+      {
+        agentId: "qa",
+        instructionLines: ["@qa 麻烦回复一个 `1`。"],
+      },
+    ],
+  );
+});
+
+test("jarvis final summaries with completed @ mentions do not fan work out again", () => {
+  const helper = buildHelper();
+  const directory = {
+    primaryAgentId: "main",
+    entries: [
+      { agentId: "main", displayName: "Jarvis", aliases: ["jarvis", "main"] },
+      { agentId: "frontend", displayName: "Frontend", aliases: ["frontend"] },
+      { agentId: "qa", displayName: "QA", aliases: ["qa"] },
+    ],
+  };
+
+  const plans = helper.resolveCollaborationReplyMentionDispatchPlans({
+    replyText: [
+      "已全部完成，两个指定员工都已反馈：",
+      "- `@frontend` 已反馈",
+      "- `@qa` 已反馈并回复 `1`",
+      "",
+      "成都未来一周天气最终汇总：",
+      "- 整体以阴雨为主。",
+    ].join("\n"),
+    directory,
+    actorAgentId: "main",
+    currentRouteAgentIds: ["main"],
+    language: "zh",
+  });
+
+  assert.deepEqual(plans, []);
 });
 
 test("reply output hides reply control tokens and attribute-style stage_result payloads", () => {
@@ -1073,6 +1146,342 @@ test("failed turns do not backfill project memory files as generated attachments
   }
 });
 
+test("coordinator review waits for every fanout worker before redispatching Jarvis", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-chat-fanout-race-"));
+
+  try {
+    const output = await runCollaborationChatModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const chatMod = unwrap(await import(${JSON.stringify(collaborationChatModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const openclawChatRooms = unwrap(await import(${JSON.stringify(openclawChatRoomsModuleHref)}));
+        const { join } = await import("node:path");
+
+        const helpers = chatMod.createCollaborationChatHelpers({
+          buildCollaborationAttachmentSummary: () => "",
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message, statusCode = 400) => {
+            const error = new Error(message);
+            error.statusCode = statusCode;
+            return error;
+          },
+          describeCollaborationRoomEvent: () => ({ label: "", detail: "" }),
+          formatBytesCompact: () => "",
+          formatCollaborationDuration: (value) => String(value || 0) + "ms",
+          getOpenClawHomeDir: () => process.cwd(),
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          isUiLanguage: (value) => value === "en" || value === "zh",
+          normalizeCollaborationAttachmentIds: (input) => Array.isArray(input) ? input : [],
+          normalizeCollaborationRoomIdPayload: async (value) => value,
+          normalizeLookupKey: (value) => String(value || "").trim().toLowerCase(),
+          optionalBoundedString: (value) => typeof value === "string" ? value : undefined,
+          pickUiText: (language, english, chinese) => language === "zh" ? chinese : english,
+          resolveCollaborationParticipantName: (directory, agentId) =>
+            directory.entries.find((entry) => String(entry.agentId || "").toLowerCase() === String(agentId || "").toLowerCase())?.displayName || agentId,
+          sanitizeCollaborationDisplayText: (value) => String(value || "").trim(),
+          safeTruncate: (value, maxLength) => String(value || "").slice(0, maxLength),
+          toCollaborationApiAttachment: (attachment) => attachment,
+        });
+
+        const workspaceRoot = join(process.cwd(), "workspace");
+        const transcriptRoom = await openclawChatRooms.createOpenClawChatRoom({
+          agentId: "jarvis",
+          workspaceRoot,
+          openclawHomeDir: process.cwd(),
+          title: "Fanout race room",
+        });
+        await collaborationRoom.saveCollaborationRoom(
+          collaborationRoom.defaultCollaborationRoomState({
+            roomId: transcriptRoom.roomId,
+            title: "Fanout race room",
+            titleMode: "manual",
+          }),
+        );
+
+        const directory = {
+          primaryAgentId: "jarvis",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            { agentId: "jarvis", displayName: "Jarvis", aliases: ["jarvis"], workspaceRoot },
+            { agentId: "ops", displayName: "Ops", aliases: ["ops"], workspaceRoot },
+            { agentId: "frontend", displayName: "Frontend", aliases: ["frontend"], workspaceRoot },
+          ],
+        };
+
+        const requests = [];
+        let jarvisTurnCount = 0;
+        const toolClient = {
+          agentTurn: async (request) => {
+            requests.push({
+              agentId: request.agentId,
+              message: request.message,
+            });
+            if (request.agentId === "jarvis") {
+              jarvisTurnCount += 1;
+              const replyText =
+                jarvisTurnCount === 1
+                  ? [
+                      "[[reply_to_current]] I will coordinate this with @ops and @frontend.",
+                      "",
+                      "@ops reply with 1 only.",
+                      "@frontend reply with 1 only.",
+                    ].join("\\n")
+                  : "[[reply_to_current]] Both workers replied, so I am closing the loop now.";
+              return {
+                ok: true,
+                replyText,
+                rawText: replyText,
+                rawJson: {},
+                durationMs: 20,
+                sessionId: "session-jarvis",
+                sessionKey: "agent:jarvis:main",
+              };
+            }
+            if (request.agentId === "ops") {
+              const replyText = [
+                "[[reply_to_current]] 1",
+                "",
+                '<stage_result resultState="awaiting_review">',
+                "<summary>Ops replied with 1.</summary>",
+                "</stage_result>",
+              ].join("\\n");
+              return {
+                ok: true,
+                replyText,
+                rawText: replyText,
+                rawJson: {},
+                durationMs: 20,
+                sessionId: "session-ops",
+                sessionKey: "agent:ops:main",
+              };
+            }
+            await new Promise((resolve) => setTimeout(resolve, 160));
+            const replyText = [
+              "[[reply_to_current]] 1",
+              "",
+              '<stage_result resultState="awaiting_review">',
+              "<summary>Frontend replied with 1.</summary>",
+              "</stage_result>",
+            ].join("\\n");
+            return {
+              ok: true,
+              replyText,
+              rawText: replyText,
+              rawJson: {},
+              durationMs: 20,
+              sessionId: "session-frontend",
+              sessionKey: "agent:frontend:main",
+            };
+          },
+        };
+
+        await helpers.createCollaborationRoomMessage(
+          {
+            roomId: transcriptRoom.roomId,
+            text: "@jarvis Run a quick coordination check and ask two workers to reply with 1 only.",
+          },
+          toolClient,
+          directory,
+          "en",
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, 1400));
+
+        const roomState = await collaborationRoom.loadCollaborationRoom(transcriptRoom.roomId);
+        const jarvisReviewPrompts = requests
+          .filter((request) => request.agentId === "jarvis")
+          .slice(1)
+          .map((request) => request.message);
+
+        process.stdout.write(JSON.stringify({
+          jarvisTurnCount,
+          jarvisReviewPromptCount: jarvisReviewPrompts.length,
+          jarvisReviewPrompts,
+          roomReplyAgents: roomState.events.filter((event) => event.type === "agent_reply").map((event) => event.agentId),
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output) as {
+      jarvisTurnCount: number;
+      jarvisReviewPromptCount: number;
+      jarvisReviewPrompts: string[];
+      roomReplyAgents: string[];
+    };
+
+    assert.equal(parsed.jarvisTurnCount, 2);
+    assert.equal(parsed.jarvisReviewPromptCount, 1);
+    assert.match(parsed.jarvisReviewPrompts[0], /- Ops:/);
+    assert.match(parsed.jarvisReviewPrompts[0], /- Frontend:/);
+    assert.deepEqual([...parsed.roomReplyAgents].sort(), ["frontend", "jarvis", "jarvis", "ops"]);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("room termination aborts active collaboration turns without writing a failed fallback reply", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-chat-terminate-room-"));
+
+  try {
+    const output = await runCollaborationChatModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const chatMod = unwrap(await import(${JSON.stringify(collaborationChatModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const taskStore = unwrap(await import(${JSON.stringify(taskStoreModuleHref)}));
+        const openclawChatRooms = unwrap(await import(${JSON.stringify(openclawChatRoomsModuleHref)}));
+        const { join } = await import("node:path");
+
+        const helpers = chatMod.createCollaborationChatHelpers({
+          buildCollaborationAttachmentSummary: () => "",
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message, statusCode = 400) => {
+            const error = new Error(message);
+            error.statusCode = statusCode;
+            return error;
+          },
+          describeCollaborationRoomEvent: () => ({ label: "", detail: "" }),
+          formatBytesCompact: () => "",
+          formatCollaborationDuration: (value) => String(value || 0) + "ms",
+          getOpenClawHomeDir: () => process.cwd(),
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          isUiLanguage: (value) => value === "en" || value === "zh",
+          normalizeCollaborationAttachmentIds: (input) => Array.isArray(input) ? input : [],
+          normalizeCollaborationRoomIdPayload: async (value) => value,
+          normalizeLookupKey: (value) => String(value || "").trim().toLowerCase(),
+          optionalBoundedString: (value) => typeof value === "string" ? value : undefined,
+          pickUiText: (language, english, chinese) => language === "zh" ? chinese : english,
+          resolveCollaborationParticipantName: (directory, agentId) =>
+            directory.entries.find((entry) => String(entry.agentId || "").toLowerCase() === String(agentId || "").toLowerCase())?.displayName || agentId,
+          sanitizeCollaborationDisplayText: (value) => String(value || "").trim(),
+          safeTruncate: (value, maxLength) => String(value || "").slice(0, maxLength),
+          toCollaborationApiAttachment: (attachment) => attachment,
+        });
+
+        const workspaceRoot = join(process.cwd(), "workspace");
+        const transcriptRoom = await openclawChatRooms.createOpenClawChatRoom({
+          agentId: "jarvis",
+          workspaceRoot,
+          openclawHomeDir: process.cwd(),
+          title: "Terminate room",
+        });
+        await collaborationRoom.saveCollaborationRoom(
+          collaborationRoom.defaultCollaborationRoomState({
+            roomId: transcriptRoom.roomId,
+            title: "Terminate room",
+            titleMode: "manual",
+          }),
+        );
+
+        const directory = {
+          primaryAgentId: "jarvis",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            { agentId: "jarvis", displayName: "Jarvis", aliases: ["jarvis"], workspaceRoot },
+          ],
+        };
+
+        let aborted = false;
+        const toolClient = {
+          agentTurn: async (request) =>
+            await new Promise((resolve) => {
+              const finishAbort = () => {
+                aborted = true;
+                resolve({
+                  ok: false,
+                  replyText: "",
+                  rawText: String(request.signal?.reason || "cancelled"),
+                  rawJson: {},
+                  durationMs: 25,
+                  failureReason: String(request.signal?.reason || "cancelled"),
+                  stopReason: "cancelled",
+                  errorMessage: String(request.signal?.reason || "cancelled"),
+                });
+              };
+              if (request.signal?.aborted) {
+                finishAbort();
+                return;
+              }
+              request.signal?.addEventListener("abort", finishAbort, { once: true });
+              setTimeout(() => {
+                resolve({
+                  ok: true,
+                  replyText: "[[reply_to_current]] This reply should never be written.",
+                  rawText: "[[reply_to_current]] This reply should never be written.",
+                  rawJson: {},
+                  durationMs: 400,
+                  sessionId: "session-jarvis",
+                  sessionKey: "agent:jarvis:main",
+                });
+              }, 1200);
+            }),
+        };
+
+        await helpers.createCollaborationRoomMessage(
+          {
+            roomId: transcriptRoom.roomId,
+            text: "@jarvis Start a long-running task.",
+          },
+          toolClient,
+          directory,
+          "en",
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        const terminated = await helpers.terminateCollaborationRoomWork(
+          { roomId: transcriptRoom.roomId, language: "en" },
+          directory,
+          "en",
+        );
+        await new Promise((resolve) => setTimeout(resolve, 260));
+
+        const roomState = await collaborationRoom.loadCollaborationRoom(transcriptRoom.roomId);
+        const tasks = await taskStore.loadTaskStore();
+
+        process.stdout.write(JSON.stringify({
+          aborted,
+          terminated,
+          roomEventTypes: roomState.events.map((event) => event.type),
+          roomEventMessages: roomState.events.map((event) => event.message || event.detail || ""),
+          receipts: roomState.taskReceipts,
+          taskStatuses: tasks.tasks.map((task) => ({ taskId: task.taskId, status: task.status })),
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output) as {
+      aborted: boolean;
+      terminated: {
+        abortedTurnCount: number;
+        blockedTaskCount: number;
+        message: string;
+      };
+      roomEventTypes: string[];
+      roomEventMessages: string[];
+      receipts: Array<{
+        lastResultState?: string;
+        blockers?: string[];
+      }>;
+      taskStatuses: Array<{ taskId: string; status: string }>;
+    };
+
+    assert.equal(parsed.aborted, true);
+    assert.equal(parsed.terminated.abortedTurnCount, 1);
+    assert.equal(parsed.roomEventTypes.includes("agent_reply"), false);
+    assert.equal(parsed.roomEventTypes.includes("dispatch_failed"), false);
+    assert.equal(parsed.roomEventTypes.includes("system_note"), true);
+    assert(parsed.roomEventMessages.some((message) => /Stopped the current in-progress work/i.test(message)));
+    assert(parsed.receipts.some((receipt) => receipt.lastResultState === "blocked"));
+    assert(parsed.receipts.some((receipt) => (receipt.blockers || []).some((item) => /Stopped by the user/i.test(item))));
+    assert(parsed.taskStatuses.some((task) => task.status === "blocked"));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("explicit multi-mentions keep main's direct reply visible alongside review notes", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "collab-chat-main-broadcast-"));
 
@@ -1508,20 +1917,23 @@ test("jarvis reply mentions can fan work out to employees with the original requ
             request.message.split("\\n").find((line) => line.startsWith("ownerAgentId: ")) || ""
           ),
           workerPromptHasOriginalRequest: workerRequests.map((request) =>
-            request.message.includes("Original user request:") &&
+            request.message.includes("Original user request (context only):") &&
             request.message.includes("Please inspect this release flow and tell me what to fix.")
           ),
           workerPromptHasCoordinatorInstruction: workerRequests.map((request) =>
-            request.message.includes("Jarvis coordination instruction:") &&
-            request.message.includes("@qa and @architect")
+            request.message.includes("Jarvis assigned follow-up for you:") &&
+            request.message.includes("should verify")
+          ),
+          workerPromptHasScopedExecutionGuard: workerRequests.map((request) =>
+            request.message.includes("Do only this assigned follow-up unless the coordinator explicitly asks you to redo the whole user request.")
           ),
           workerPromptHasReturnInstruction: requests
             .filter((request) => request.agentId === "jarvis")
             .slice(1)
             .map((request) =>
               request.message.includes("Latest worker updates:") &&
-              request.message.includes("- QA:") &&
-              request.message.includes("- Architect:")
+              /- (?:QA|Architect):/.test(request.message) &&
+              request.message.includes("Continue as Jarvis in this same room.")
             ),
           dispatchOwners: roomState.dispatchRecords.map((record) => record.ownerAgentId),
           roomReplyAgents: roomState.events
@@ -1542,6 +1954,7 @@ test("jarvis reply mentions can fan work out to employees with the original requ
       workerOwnerLines: string[];
       workerPromptHasOriginalRequest: boolean[];
       workerPromptHasCoordinatorInstruction: boolean[];
+      workerPromptHasScopedExecutionGuard: boolean[];
       workerPromptHasReturnInstruction: boolean[];
       dispatchOwners: string[];
       roomReplyAgents: string[];
@@ -1559,6 +1972,7 @@ test("jarvis reply mentions can fan work out to employees with the original requ
     assert.deepEqual([...parsed.workerOwnerLines].sort(), ["ownerAgentId: architect", "ownerAgentId: qa"]);
     assert.deepEqual(parsed.workerPromptHasOriginalRequest, [true, true]);
     assert.deepEqual(parsed.workerPromptHasCoordinatorInstruction, [true, true]);
+    assert.deepEqual(parsed.workerPromptHasScopedExecutionGuard, [true, true]);
     assert.deepEqual(parsed.workerPromptHasReturnInstruction, [true]);
     assert.deepEqual([...parsed.dispatchOwners].sort(), ["architect", "jarvis", "jarvis", "qa"]);
     assert.deepEqual([...parsed.roomReplyAgents].sort(), ["architect", "jarvis", "jarvis", "qa"]);

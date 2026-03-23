@@ -28,3 +28,17 @@ test("chat markdown escapes unsafe html instead of rendering it", () => {
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
 });
+
+test("chat markdown restores multiple inline code spans on the same line without leaking internal tokens", () => {
+  const html = renderChatMarkdownToHtml(
+    "- `Monday`: cloudy, `18-25C`, rain chance `20%`\n- `Tuesday`: light rain, `17-22C`, rain chance `70%`",
+  );
+
+  assert.doesNotMatch(html, /CHAT_CODE_|CHATCODETOKEN\d+PLACEHOLDER/);
+  assert.match(html, /<code>Monday<\/code>/);
+  assert.match(html, /<code>18-25C<\/code>/);
+  assert.match(html, /<code>20%<\/code>/);
+  assert.match(html, /<code>Tuesday<\/code>/);
+  assert.match(html, /<code>17-22C<\/code>/);
+  assert.match(html, /<code>70%<\/code>/);
+});

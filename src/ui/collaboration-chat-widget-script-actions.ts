@@ -29,6 +29,19 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
     syncComposerState();
   };
 
+  const hasProjectedRoomActivity = () => {
+    const events = state.room && Array.isArray(state.room.events) ? state.room.events : [];
+    return state.sending || events.some((event) => event && (event.pending || event.liveDraft || event.liveSessionBackfill));
+  };
+
+  const roomStreamSnapshotIsStale = () => {
+    if (!state.roomStream) return true;
+    const lastSnapshotAt = Number(state.roomStreamLastSnapshotAt || 0);
+    if (!Number.isFinite(lastSnapshotAt) || lastSnapshotAt <= 0) return true;
+    const thresholdMs = hasProjectedRoomActivity() ? 1400 : 4500;
+    return Date.now() - lastSnapshotAt >= thresholdMs;
+  };
+
   const normalizeUploadErrorMessage = (error) => {
     const message = error instanceof Error ? error.message : String(error || '');
     const normalized = String(message || '').trim();
@@ -124,8 +137,7 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
 
   const activePollingDelay = () => {
     if (document.visibilityState === 'hidden') return 12000;
-    const events = state.room && Array.isArray(state.room.events) ? state.room.events : [];
-    const hasProjectedActivity = state.sending || events.some((event) => event && (event.pending || event.liveSessionBackfill));
+    const hasProjectedActivity = hasProjectedRoomActivity();
     if (hasProjectedActivity) return state.expanded ? 550 : 1200;
     return state.expanded ? 900 : 4000;
   };
@@ -143,6 +155,7 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
   const applyRoomPayload = (room, reason = 'auto') => {
     if (!room || typeof room !== 'object') return;
     state.room = room;
+    state.roomStreamLastSnapshotAt = Date.now();
     state.rooms = Array.isArray(room.rooms) ? room.rooms : [];
     state.participants = Array.isArray(room.participants) && room.participants.length > 0
       ? room.participants
@@ -177,6 +190,7 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
     const current = state.roomStream;
     state.roomStream = null;
     state.roomStreamKey = '';
+    state.roomStreamLastSnapshotAt = 0;
     if (current && typeof current.close === 'function') {
       try {
         current.close();
@@ -227,9 +241,11 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
     const source = new window.EventSource(endpoints.roomStream + '?' + params.toString());
     state.roomStream = source;
     state.roomStreamKey = nextKey;
+    state.roomStreamLastSnapshotAt = Date.now();
     source.onopen = () => {
       if (source !== state.roomStream) return;
       state.roomStreamDisabledUntil = 0;
+      state.roomStreamLastSnapshotAt = Date.now();
     };
     source.addEventListener('snapshot', (event) => {
       if (source !== state.roomStream) return;
@@ -242,15 +258,18 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
       if (!payload || typeof payload !== 'object' || !payload.room) {
         return;
       }
+      state.roomStreamLastSnapshotAt = Date.now();
       applyRoomPayload(payload.room, 'stream');
     });
     source.addEventListener('room-error', () => {
       if (source !== state.roomStream) return;
+      state.roomStreamLastSnapshotAt = 0;
       closeRoomStream();
       delayRoomStreamReconnect();
     });
     source.onerror = () => {
       if (source !== state.roomStream) return;
+      state.roomStreamLastSnapshotAt = 0;
       closeRoomStream();
       delayRoomStreamReconnect();
     };
@@ -359,11 +378,16 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
       window.clearTimeout(state.pollingTimer);
       state.pollingTimer = 0;
     }
-    if (syncRoomStream()) return;
     if (!state.autoRefresh) return;
+    const usingRoomStream = syncRoomStream();
+    if (usingRoomStream && !hasProjectedRoomActivity()) return;
     const delay = activePollingDelay();
     state.pollingTimer = window.setTimeout(async () => {
       if (document.visibilityState === 'hidden' || state.roomMutationPending) {
+        schedulePolling();
+        return;
+      }
+      if (state.roomStream && !roomStreamSnapshotIsStale()) {
         schedulePolling();
         return;
       }
@@ -571,6 +595,7 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
   };
 
   const sendCurrentMessage = async () => {
+    if (state.terminating) return;
     const lock = roomLockMessage();
     if (lock) {
       setStatus(lock, true);
@@ -621,6 +646,55 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
     } finally {
       state.sending = false;
       renderRooms();
+      syncComposerState();
+      syncRefreshGuard();
+    }
+  };
+
+  const terminateCurrentRoomWork = async () => {
+    if (state.terminating || state.sending || state.roomMutationPending) return;
+    const lock = roomLockMessage();
+    if (lock) {
+      setStatus(lock, true);
+      return;
+    }
+    if (hasUploadingFiles()) {
+      setStatus(uploadBusyMessage, true);
+      return;
+    }
+    state.terminating = true;
+    state.pendingScrollToLatestRoomId = state.activeRoomId;
+    setRoomMenuOpen(false);
+    syncComposerState();
+    syncRefreshGuard();
+    setStatus(labels.terminating, true);
+    try {
+      const response = await fetch(endpoints.terminate, {
+        method: 'POST',
+        headers: mutationHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({
+          roomId: state.activeRoomId,
+          language: root.dataset.language || embeddedLanguage,
+        }),
+        cache: 'no-store',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.ok !== true || !payload.terminated) {
+        throw new Error(typeof payload?.error?.message === 'string' ? payload.error.message : labels.failed);
+      }
+      await refreshRoom('manual');
+      window.setTimeout(() => { void refreshRoom('auto'); }, 700);
+      setStatus(
+        typeof payload?.terminated?.message === 'string' && payload.terminated.message.trim()
+          ? payload.terminated.message
+          : (embeddedLanguage === 'zh'
+            ? '\\u5df2\\u7ec8\\u6b62\\u5f53\\u524d\\u623f\\u95f4\\u7684\\u8fdb\\u884c\\u4e2d\\u5de5\\u4f5c\\u3002'
+            : 'Stopped the current in-progress work in this room.'),
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : labels.failed, true);
+    } finally {
+      state.terminating = false;
       syncComposerState();
       syncRefreshGuard();
     }

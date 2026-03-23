@@ -263,6 +263,7 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
   });
   autoButton.addEventListener('click', () => { setAutoRefresh(!state.autoRefresh); });
   createButton.addEventListener('click', () => { void createRoom(); });
+  terminateButton.addEventListener('click', () => { void terminateCurrentRoomWork(); });
   sendButton.addEventListener('click', () => { void sendCurrentMessage(); });
   fileInput.addEventListener('change', () => {
     queueFiles(fileInput.files);

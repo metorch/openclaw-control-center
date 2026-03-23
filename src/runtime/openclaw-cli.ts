@@ -18,6 +18,7 @@ export interface OpenClawCommandOptions {
   maxBuffer?: number;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }
 
 export interface OpenClawCliInvocation {
@@ -81,6 +82,7 @@ export async function runOpenClawCommand(
     maxBuffer: options.maxBuffer ?? 2 * 1024 * 1024,
     cwd: options.cwd,
     env: options.env,
+    signal: options.signal,
     windowsHide: true,
   });
   return {

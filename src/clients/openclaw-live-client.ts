@@ -21,6 +21,10 @@ import {
   GatewayStreamStartError,
   streamOpenClawGatewayAgentTurn,
 } from "./openclaw-gateway-stream";
+import {
+  HttpResponsesStreamStartError,
+  streamOpenClawHttpResponsesAgentTurn,
+} from "./openclaw-http-responses-stream";
 import type { ToolClient } from "./tool-client";
 
 interface SessionCacheItem {
@@ -94,6 +98,7 @@ interface AgentTurnAttemptInput {
   timeoutSeconds: number;
   preferGatewayStream?: boolean;
   onStreamEvent?: AgentTurnRequest["onStreamEvent"];
+  signal?: AbortSignal;
 }
 
 interface ResolvedAgentTurnSessionBinding {
@@ -290,6 +295,19 @@ export class OpenClawLiveClient implements ToolClient {
     }
 
     const startedAt = Date.now();
+    if (request.signal?.aborted) {
+      const abortedMessage = resolveAbortSignalMessage(request.signal);
+      return {
+        ok: false,
+        agentId,
+        replyText: "",
+        durationMs: 0,
+        rawText: abortedMessage,
+        failureReason: abortedMessage,
+        stopReason: "cancelled",
+        errorMessage: abortedMessage,
+      };
+    }
     // `openclaw health` has produced false negatives on some local setups while
     // the actual `openclaw agent` command still succeeds. Use the real turn as
     // the source of truth so collaboration dispatch is not blocked by a flaky
@@ -313,9 +331,13 @@ export class OpenClawLiveClient implements ToolClient {
         timeoutSeconds,
         preferGatewayStream: request.preferGatewayStream,
         onStreamEvent: request.onStreamEvent,
+        signal: request.signal,
         beforeSessions,
         startedAt,
       });
+      if (request.signal?.aborted || isAbortLikeAgentTurnResponse(response)) {
+        return response;
+      }
       if (!fallbackEvaluated && shouldFailOverToFallbackModel(response)) {
         fallbackEvaluated = true;
         const swapped = await maybeSwapAgentTurnToFallbackModel(agentId);
@@ -377,10 +399,17 @@ export class OpenClawLiveClient implements ToolClient {
     beforeSessions: SessionsListResponse;
     startedAt: number;
   }): Promise<AgentTurnResponse> {
-    if (
-      (input.preferGatewayStream || input.onStreamEvent) &&
-      input.sessionKey?.trim()
-    ) {
+    if (input.preferGatewayStream || input.onStreamEvent) {
+      try {
+        return await this.runHttpResponsesAgentTurnAttempt(input);
+      } catch (error) {
+        if (!(error instanceof HttpResponsesStreamStartError)) {
+          throw error;
+        }
+      }
+    }
+
+    if ((input.preferGatewayStream || input.onStreamEvent) && input.sessionKey?.trim()) {
       try {
         return await this.runGatewayAgentTurnAttempt(input);
       } catch (error) {
@@ -396,6 +425,7 @@ export class OpenClawLiveClient implements ToolClient {
       const rawText = await runText(args, {
         timeoutMs: input.timeoutSeconds * 1000 + 30_000,
         maxBuffer: 8 * 1024 * 1024,
+        signal: input.signal,
       });
       const rawJson = parseEmbeddedJson(rawText);
       const completion = inspectAgentTurnCompletion(rawJson);
@@ -435,6 +465,19 @@ export class OpenClawLiveClient implements ToolClient {
         incomplete: applied.incomplete,
       };
     } catch (error) {
+      if (input.signal?.aborted || isAbortError(error)) {
+        const abortedMessage = resolveAbortSignalMessage(input.signal);
+        return {
+          ok: false,
+          agentId: input.agentId,
+          replyText: "",
+          durationMs: Date.now() - input.startedAt,
+          rawText: abortedMessage,
+          failureReason: abortedMessage,
+          stopReason: "cancelled",
+          errorMessage: abortedMessage,
+        };
+      }
       const rawText = extractOpenClawCommandErrorText(error);
       const rawJson = parseEmbeddedJson(rawText);
       const completion = inspectAgentTurnCompletion(rawJson);
@@ -481,6 +524,94 @@ export class OpenClawLiveClient implements ToolClient {
     }
   }
 
+  private async runHttpResponsesAgentTurnAttempt(input: AgentTurnAttemptInput & {
+    beforeSessions: SessionsListResponse;
+    startedAt: number;
+  }): Promise<AgentTurnResponse> {
+    const streamed = await streamOpenClawHttpResponsesAgentTurn({
+      agentId: input.agentId,
+      message: input.message,
+      sessionKey: input.sessionKey,
+      timeoutSeconds: input.timeoutSeconds,
+      onStreamEvent: input.onStreamEvent,
+      signal: input.signal,
+    });
+    if (input.signal?.aborted || normalizeAgentTurnStopReason(streamed.stopReason) === "cancelled") {
+      const abortedMessage = streamed.errorMessage?.trim() || resolveAbortSignalMessage(input.signal);
+      return {
+        ok: false,
+        agentId: input.agentId,
+        runId: streamed.runId,
+        replyText: streamed.replyText || "",
+        durationMs: Date.now() - input.startedAt,
+        rawText: streamed.replyText || abortedMessage,
+        rawJson: streamed.rawPayload,
+        failureReason: abortedMessage,
+        stopReason: "cancelled",
+        errorMessage: abortedMessage,
+      };
+    }
+    const afterSessions = await this.sessionsList().catch(() => input.beforeSessions);
+    const resolvedSession = this.resolveLatestAgentSession(
+      input.agentId,
+      input.beforeSessions,
+      afterSessions,
+      input.sessionId,
+      input.sessionKey,
+    );
+    const rawText =
+      streamed.rawPayload
+        ? JSON.stringify(streamed.rawPayload)
+        : streamed.errorMessage?.trim() || streamed.replyText;
+    const completionInput: Record<string, unknown> = streamed.rawPayload
+      ? { ...streamed.rawPayload }
+      : {};
+    if (streamed.stopReason) {
+      completionInput.stopReason = streamed.stopReason;
+    }
+    if (streamed.errorMessage) {
+      completionInput.errorMessage = streamed.errorMessage;
+    }
+    if (streamed.replyText) {
+      completionInput.message = streamed.replyText;
+      completionInput.payloads = [{ text: streamed.replyText }];
+    }
+    const completion = inspectAgentTurnCompletion(completionInput);
+    const recoveredReply = await this.maybeRecoverFinalAssistantReplyFromSessionHistory({
+      sessionId: resolvedSession?.sessionId,
+      sessionKey: resolvedSession?.sessionKey ?? input.sessionKey,
+      sessionFile: resolvedSession?.sessionFile,
+      startedAtMs: input.startedAt,
+      waitForFinal: !looksLikeFinalAgentTurnReply(streamed.replyText, completion),
+    });
+    const applied = applyRecoveredAssistantReply({
+      ok: !streamed.errorMessage,
+      replyText: streamed.replyText,
+      completion,
+      recoveredReply,
+    });
+
+    return {
+      ok: applied.ok,
+      agentId: input.agentId,
+      runId: streamed.runId,
+      replyText: applied.replyText,
+      durationMs: Date.now() - input.startedAt,
+      sessionId: resolvedSession?.sessionId,
+      sessionKey: resolvedSession?.sessionKey,
+      rawText,
+      rawJson: streamed.rawPayload,
+      failureReason: applied.ok
+        ? undefined
+        : streamed.errorMessage?.trim() ||
+          firstNonEmptyLine(rawText) ||
+          "Agent turn failed while streaming through /v1/responses.",
+      stopReason: applied.stopReason,
+      errorMessage: applied.errorMessage,
+      incomplete: applied.incomplete,
+    };
+  }
+
   private async runGatewayAgentTurnAttempt(input: AgentTurnAttemptInput & {
     beforeSessions: SessionsListResponse;
     startedAt: number;
@@ -491,7 +622,23 @@ export class OpenClawLiveClient implements ToolClient {
       sessionKey: input.sessionKey || "",
       timeoutSeconds: input.timeoutSeconds,
       onStreamEvent: input.onStreamEvent,
+      signal: input.signal,
     });
+    if (input.signal?.aborted || normalizeAgentTurnStopReason(streamed.stopReason) === "cancelled") {
+      const abortedMessage = streamed.errorMessage?.trim() || resolveAbortSignalMessage(input.signal);
+      return {
+        ok: false,
+        agentId: input.agentId,
+        runId: streamed.runId,
+        replyText: streamed.replyText || "",
+        durationMs: Date.now() - input.startedAt,
+        rawText: streamed.replyText || abortedMessage,
+        rawJson: streamed.rawPayload,
+        failureReason: abortedMessage,
+        stopReason: "cancelled",
+        errorMessage: abortedMessage,
+      };
+    }
     const afterSessions = await this.sessionsList().catch(() => input.beforeSessions);
     const resolvedSession = this.resolveLatestAgentSession(
       input.agentId,
@@ -843,18 +990,22 @@ function resolveRequestedAgentTurnSessionBinding(
   };
 }
 
-async function runJson<T>(args: string[], options?: { timeoutMs?: number; maxBuffer?: number }): Promise<T> {
+async function runJson<T>(
+  args: string[],
+  options?: { timeoutMs?: number; maxBuffer?: number; signal?: AbortSignal },
+): Promise<T> {
   const stdout = await runText(args, options);
   return JSON.parse(stdout) as T;
 }
 
 async function runText(
   args: string[],
-  options?: { timeoutMs?: number; maxBuffer?: number },
+  options?: { timeoutMs?: number; maxBuffer?: number; signal?: AbortSignal },
 ): Promise<string> {
   const { stdout } = await runOpenClawCommand(args, {
     timeoutMs: options?.timeoutMs ?? 20_000,
     maxBuffer: options?.maxBuffer ?? 2 * 1024 * 1024,
+    signal: options?.signal,
   });
   return stdout;
 }
@@ -880,6 +1031,31 @@ function firstNonEmptyLine(input: string): string | undefined {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => line !== "");
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function resolveAbortSignalMessage(signal?: AbortSignal): string {
+  const reason = signal?.reason;
+  if (typeof reason === "string" && reason.trim()) {
+    return reason.trim();
+  }
+  if (reason instanceof Error && reason.message.trim()) {
+    return reason.message.trim();
+  }
+  return "Agent turn was cancelled.";
+}
+
+function isAbortLikeAgentTurnResponse(response: AgentTurnResponse | undefined): boolean {
+  const stopReason = normalizeAgentTurnStopReason(response?.stopReason);
+  if (stopReason === "cancelled" || stopReason === "canceled" || stopReason === "aborted") {
+    return true;
+  }
+  return /agent turn was cancelled|request was aborted|turn was aborted|cancelled|canceled/i.test(
+    String(response?.errorMessage || response?.failureReason || ""),
+  );
 }
 
 async function readSessionHistoryFromCli(

@@ -455,8 +455,8 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     eventsList.innerHTML = events.map((event) => {
       const participant = event.agentId ? findParticipant(event.agentId) : null;
       const historyToolEvent = isHistoryToolEvent(event);
-      const livePreview = event.liveSessionBackfill === true;
-      const pendingEvent = event.pending === true;
+      const livePreview = event.liveDraft === true || event.liveSessionBackfill === true;
+      const pendingEvent = event.pending === true && !livePreview;
       const actorName = event.authorRole === 'user'
         ? ${serializeJsonForScript(input.language === "zh" ? "你" : "You")}
         : participant && participant.displayName
@@ -516,7 +516,7 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
   const syncPresence = () => {
     const events = state.room && Array.isArray(state.room.events) ? state.room.events : [];
     const latest = events.length > 0 ? events[events.length - 1] : null;
-    const hasProjectedActivity = events.some((event) => event && (event.pending || event.liveSessionBackfill));
+    const hasProjectedActivity = events.some((event) => event && (event.pending || event.liveDraft || event.liveSessionBackfill));
     presenceNode.classList.remove('is-busy', 'is-failed');
     if (state.sending || hasProjectedActivity || (latest && latest.type === 'dispatch_started')) {
       presenceNode.classList.add('is-busy');
@@ -525,14 +525,29 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     }
   };
 
+  const roomHasTerminableWork = () => {
+    if (hasProjectedRoomActivity()) return true;
+    const participants = Array.isArray(state.room?.participants) ? state.room.participants : [];
+    return participants.some((participant) => {
+      const executionState = String(participant?.executionState || '').trim().toLowerCase();
+      return executionState === 'in_progress' || executionState === 'working' || executionState === 'processing';
+    });
+  };
+
   const syncComposerState = () => {
     const lock = roomLockMessage();
     const uploadsBusy = hasUploadingFiles();
     const writable = !lock;
-    inputNode.disabled = !writable || state.sending;
-    sendButton.disabled = !writable || state.sending || uploadsBusy || (!inputNode.value.trim() && state.uploads.length === 0);
-    fileInput.disabled = !writable || state.sending || uploadsBusy;
-    createButton.disabled = !writable || state.sending || state.roomMutationPending || uploadsBusy;
+    inputNode.disabled = !writable || state.sending || state.terminating;
+    terminateButton.disabled = !writable || state.sending || state.terminating || state.roomMutationPending || uploadsBusy || !roomHasTerminableWork();
+    sendButton.disabled =
+      !writable ||
+      state.sending ||
+      state.terminating ||
+      uploadsBusy ||
+      (!inputNode.value.trim() && state.uploads.length === 0);
+    fileInput.disabled = !writable || state.sending || state.terminating || uploadsBusy;
+    createButton.disabled = !writable || state.sending || state.terminating || state.roomMutationPending || uploadsBusy;
     writeStateNode.textContent = lock || labels.writeReady;
     syncDeleteDialog();
   };

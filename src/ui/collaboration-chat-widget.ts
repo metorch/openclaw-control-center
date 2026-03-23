@@ -164,7 +164,10 @@ ${renderCollaborationChatStyles()}
                 rows="4"
                 placeholder="${escapeHtml(labels.typingHint)}"
               ></textarea>
-              <button class="collab-chat-send" type="button" data-collab-chat-send>${escapeHtml(labels.send)}</button>
+              <div class="collab-chat-input-actions">
+                <button class="collab-chat-danger collab-chat-stop" type="button" data-collab-chat-terminate>${escapeHtml(labels.terminate)}</button>
+                <button class="collab-chat-send" type="button" data-collab-chat-send>${escapeHtml(labels.send)}</button>
+              </div>
             </div>
             <div class="collab-chat-mentions" data-collab-mentions hidden></div>
           </div>

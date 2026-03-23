@@ -182,7 +182,7 @@ const collaborationChatHelpers = createCollaborationChatHelpers({
 });
 const { renderCollaborationThreadCards, renderOfficeCards, renderOfficeFloor, renderStaffOverviewCards, renderSubscriptionStatusCard, renderTaskExecutionChainCards } = createTeamPanelRenderers({ asPercent, collaborationParticipantRoleLabel: collaborationThreadHelpers.collaborationParticipantRoleLabel, collaborationRoleAgentLabel: collaborationThreadHelpers.collaborationRoleAgentLabel, deriveAgentAnimalIdentity: (agentId) => officeRuntimeHelpers.deriveAgentAnimalIdentity(agentId), executionChainCardTitle: (item, language) => executionChainHelpers.executionChainCardTitle(item, language), executionChainSourceLabel: (chain, language = "zh") => executionChainHelpers.executionChainSourceLabel(chain, language), executionChainStageLabel: (stage, language = "zh") => executionChainHelpers.executionChainStageLabel(stage, language), formatSubscriptionNumericField, humanizeOperatorLabel, normalizeQuotaWindowLabel, officeZoneLabel: (zone, language = "zh") => officeRuntimeHelpers.officeZoneLabel(zone, language), renderAgentAvatarFrame: (input) => officeRuntimeHelpers.renderAgentAvatarFrame({ ...input, escapeHtml }), renderQuotaWindowRow, sessionStateLabel, summarizeVisibleSessionSnippet: (rawSnippet, language = "zh", maxLength = 96) => executionChainHelpers.summarizeVisibleSessionSnippet(rawSnippet, language, maxLength) });
 const { attachCollaborationRoomRefsToCards, buildCollaborationAttachmentSummary, buildCollaborationChatBootPreferences, buildCollaborationChatParticipantViews, buildCollaborationEventSyncSignature, buildCollaborationRoomApiView, buildCollaborationRoomStreamSignature, buildCollaborationTranscriptBackfillEvent, buildCollaborationTranscriptBackfillEvents, buildTranscriptBackfillDetail, compareCollaborationApiEventsByTime, describeCollaborationRoomEvent, extractCollaborationMentionTokens, findUnknownCollaborationMentions, formatBytesCompact, formatCollaborationDuration, isCollaborationRelayPromptMessage, isDuplicateCollaborationSyncEvent, listCollaborationTranscriptRooms, loadCollaborationParticipantDirectory, mergeCollaborationRoomApiEvents, normalizeCollaborationAttachmentIds, normalizeCollaborationEventSyncText, normalizeCollaborationRoomIdPayload, normalizeCollaborationRoomIdQuery, registerCollaborationSyncEventSignature, resolveCollaborationParticipantName, shouldCountUnreadCollaborationApiEvent, shouldCountUnreadCollaborationEvent, summarizeCollaborationAttachmentNames, toCollaborationApiAttachment } = collaborationRoomHelpers;
-const { buildCollaborationAgentPrompt, buildCollaborationAgentPromptV2, buildCollaborationAgentReplyDetail, buildCollaborationPromptContextLines, buildCollaborationRoomApiEvent, collectCollaborationAgentReplyAttachments, createCollaborationRoomMessage, dispatchCollaborationRoomMessage, dispatchCollaborationTurnToAgent, dispatchCollaborationTurnToAgentV2, isAbsoluteLikePath, isPathInsideAnyRoot, isPathInsideRoot, isReadableCollaborationArtifactPath, isSupportedCollaborationArtifactPath, resolveCollaborationArtifactPaths, resolveCollaborationParticipantWorkspaceRoot, shouldHintCollaborationArtifactReply } = collaborationChatHelpers;
+const { buildCollaborationAgentPrompt, buildCollaborationAgentPromptV2, buildCollaborationAgentReplyDetail, buildCollaborationPromptContextLines, buildCollaborationRoomApiEvent, collectCollaborationAgentReplyAttachments, createCollaborationRoomMessage, terminateCollaborationRoomWork, dispatchCollaborationRoomMessage, dispatchCollaborationTurnToAgent, dispatchCollaborationTurnToAgentV2, isAbsoluteLikePath, isPathInsideAnyRoot, isPathInsideRoot, isReadableCollaborationArtifactPath, isSupportedCollaborationArtifactPath, resolveCollaborationArtifactPaths, resolveCollaborationParticipantWorkspaceRoot, shouldHintCollaborationArtifactReply } = collaborationChatHelpers;
 const { buildCollaborationThreadCards, buildCollaborationTimelineSteps, buildInterSessionCollaborationCards, buildInterSessionCollaborationTimelineSteps, collaborationInterSessionCurrentOwnerLabel, collaborationInterSessionRouteLabel, collaborationInterSessionSummary, collaborationParticipantRoleLabel, collaborationRoleAgentLabel, collaborationRouteLabel, collaborationStatusRank, collaborationThreadKindLabel, collaborationThreadStatusLabel, collaborationThreadSummary, deriveCollaborationTaskTitle, deriveInterSessionTaskTitle, extractCollaborationTaskLabel, foldCollaborationThreadCards, mergeCollaborationThreadCards, normalizeAgentIdCandidate, resolveCollaborationCurrentOwner, resolveInterSessionCollaborationStatus, resolveCollaborationThreadStatus } = collaborationThreadHelpers;
 const SNAPSHOT_PATH = (0, import_node_path.join)(process.cwd(), "runtime", "last-snapshot.json");
 const OPENCLAW_HOME_DIR = process.env.OPENCLAW_HOME?.trim() || (0, import_node_path.join)((0, import_node_os.homedir)(), ".openclaw");
@@ -597,6 +597,7 @@ function writeSseEvent(res, event, data) {
         res.write(`data: ${line}\n`);
     }
     res.write("\n");
+    res.flush?.();
 }
 __name(writeSseEvent, "writeSseEvent");
 function writeSseComment(res, comment) {
@@ -604,6 +605,7 @@ function writeSseComment(res, comment) {
         return;
     }
     res.write(`: ${String(comment || "keepalive")}\n\n`);
+    res.flush?.();
 }
 __name(writeSseComment, "writeSseComment");
 function startUiServer(port, toolClient) {
@@ -1059,22 +1061,30 @@ function startUiServer(port, toolClient) {
                     connection: "keep-alive",
                     "x-accel-buffering": "no"
                 });
+                res.socket?.setNoDelay?.(true);
+                res.socket?.setKeepAlive?.(true, COLLABORATION_ROOM_STREAM_KEEPALIVE_MS);
                 res.write(`retry: ${COLLABORATION_ROOM_STREAM_RETRY_MS}\n\n`);
                 res.flushHeaders?.();
                 let closed = false;
-                let tickTimer = null;
+                let snapshotTimer = null;
                 let keepAliveTimer = null;
                 let unsubscribeLiveDrafts = null;
+                let unsubscribeRoomMutations = null;
                 let lastSignature = "";
+                let snapshotInFlight = false;
+                let snapshotQueued = false;
+                const clearSnapshotTimer = () => {
+                    if (snapshotTimer) {
+                        clearTimeout(snapshotTimer);
+                        snapshotTimer = null;
+                    }
+                };
                 const closeStream = () => {
                     if (closed) {
                         return;
                     }
                     closed = true;
-                    if (tickTimer) {
-                        clearTimeout(tickTimer);
-                        tickTimer = null;
-                    }
+                    clearSnapshotTimer();
                     if (keepAliveTimer) {
                         clearInterval(keepAliveTimer);
                         keepAliveTimer = null;
@@ -1082,6 +1092,10 @@ function startUiServer(port, toolClient) {
                     if (unsubscribeLiveDrafts) {
                         unsubscribeLiveDrafts();
                         unsubscribeLiveDrafts = null;
+                    }
+                    if (unsubscribeRoomMutations) {
+                        unsubscribeRoomMutations();
+                        unsubscribeRoomMutations = null;
                     }
                     if (!res.writableEnded && !res.destroyed) {
                         res.end();
@@ -1091,10 +1105,33 @@ function startUiServer(port, toolClient) {
                 req.on("error", closeStream);
                 res.on("close", closeStream);
                 res.on("error", closeStream);
+                const queueSnapshot = (delayMs = 0) => {
+                    if (closed) {
+                        return;
+                    }
+                    if (snapshotInFlight) {
+                        snapshotQueued = true;
+                        return;
+                    }
+                    if (snapshotTimer) {
+                        return;
+                    }
+                    snapshotTimer = setTimeout(() => {
+                        snapshotTimer = null;
+                        void emitSnapshot();
+                    }, Math.max(0, Math.trunc(delayMs)));
+                    snapshotTimer.unref?.();
+                };
                 const emitSnapshot = async () => {
                     if (closed) {
                         return;
                     }
+                    if (snapshotInFlight) {
+                        snapshotQueued = true;
+                        return;
+                    }
+                    snapshotInFlight = true;
+                    snapshotQueued = false;
                     try {
                         const roomView = await buildCollaborationRoomApiView({
                             roomId,
@@ -1124,23 +1161,29 @@ function startUiServer(port, toolClient) {
                         closeStream();
                         return;
                     }
+                    snapshotInFlight = false;
                     if (closed) {
                         return;
                     }
-                    tickTimer = setTimeout(() => {
-                        void emitSnapshot();
-                    }, COLLABORATION_ROOM_STREAM_INTERVAL_MS);
-                    tickTimer.unref?.();
+                    if (snapshotQueued) {
+                        queueSnapshot();
+                        return;
+                    }
+                    queueSnapshot(COLLABORATION_ROOM_STREAM_INTERVAL_MS);
                 };
                 unsubscribeLiveDrafts = import_collaboration_live_drafts.subscribeCollaborationLiveDrafts(roomId, () => {
                     if (closed) {
                         return;
                     }
-                    if (tickTimer) {
-                        clearTimeout(tickTimer);
-                        tickTimer = null;
+                    clearSnapshotTimer();
+                    queueSnapshot();
+                });
+                unsubscribeRoomMutations = import_collaboration_room.subscribeCollaborationRoomMutations(roomId, () => {
+                    if (closed) {
+                        return;
                     }
-                    void emitSnapshot();
+                    clearSnapshotTimer();
+                    queueSnapshot();
                 });
                 keepAliveTimer = setInterval(() => {
                     writeSseComment(res, "collaboration-room");
@@ -1150,7 +1193,7 @@ function startUiServer(port, toolClient) {
                     requestId,
                     roomId
                 });
-                void emitSnapshot();
+                queueSnapshot();
                 return;
             }
             if (method === "POST" && path === "/api/collaboration/room/uploads") {
@@ -1174,6 +1217,14 @@ function startUiServer(port, toolClient) {
                 const directory = await loadCollaborationParticipantDirectory();
                 const messageResult = await createCollaborationRoomMessage(payload, toolClient, directory, "zh");
                 return writeJson(res, 202, { ok: true, message: messageResult });
+            }
+            if (method === "POST" && path === "/api/collaboration/room/terminate") {
+                assertMutationAuthorized(req, "/api/collaboration/room/terminate");
+                assertJsonContentType(req);
+                const payload = expectObject(await readJsonBody(req), "collaboration room terminate payload");
+                const directory = await loadCollaborationParticipantDirectory();
+                const termination = await terminateCollaborationRoomWork(payload, directory, "zh");
+                return writeJson(res, 200, { ok: true, terminated: termination });
             }
             if (method === "GET" && path.startsWith("/api/collaboration/room/attachments/") && path.endsWith("/content")) {
                 assertAllowedQueryParams(url.searchParams, ["download", "roomId"], true);

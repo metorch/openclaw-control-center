@@ -27,6 +27,7 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     rooms: '/api/collaboration/rooms',
     uploads: '/api/collaboration/room/uploads',
     messages: '/api/collaboration/room/messages',
+    terminate: '/api/collaboration/room/terminate',
     preferences: '/api/ui/preferences',
   };
 
@@ -54,6 +55,7 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
   const uploadList = root.querySelector('[data-collab-chat-upload-list]');
   const inputShell = root.querySelector('[data-collab-chat-input-shell]');
   const inputNode = root.querySelector('[data-collab-chat-input]');
+  const terminateButton = root.querySelector('[data-collab-chat-terminate]');
   const sendButton = root.querySelector('[data-collab-chat-send]');
   const fileInput = root.querySelector('[data-collab-chat-files]');
   const mentionsNode = root.querySelector('[data-collab-mentions]');
@@ -97,6 +99,7 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     !(uploadList instanceof HTMLElement) ||
     !(inputShell instanceof HTMLElement) ||
     !(inputNode instanceof HTMLTextAreaElement) ||
+    !(terminateButton instanceof HTMLButtonElement) ||
     !(sendButton instanceof HTMLButtonElement) ||
     !(fileInput instanceof HTMLInputElement) ||
     !(mentionsNode instanceof HTMLElement) ||
@@ -131,8 +134,10 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     attachmentIndex: new Map(),
     loading: false,
     sending: false,
+    terminating: false,
     roomStream: null,
     roomStreamKey: '',
+    roomStreamLastSnapshotAt: 0,
     roomStreamReconnectTimer: 0,
     roomStreamDisabledUntil: 0,
     pollingTimer: 0,

@@ -164,6 +164,7 @@ export interface CollaborationParticipantMention {
 
 let collaborationRoomWriteChain: Promise<void> = Promise.resolve();
 let collaborationRoomInitPromise: Promise<void> | undefined;
+const roomSubscribers = new Map<string, Set<() => void>>();
 
 export function defaultCollaborationRoomState(input?: {
   roomId?: string;
@@ -417,7 +418,31 @@ export async function saveCollaborationRoom(state: CollaborationRoomState): Prom
           : 0,
     },
   });
+  notifyCollaborationRoomSubscribers(normalized.roomId);
   return resolveCollaborationRoomStatePath(normalized.roomId);
+}
+
+export function subscribeCollaborationRoomMutations(
+  roomId: string,
+  listener: () => void,
+): () => void {
+  const normalizedRoomId = normalizeRoomId(roomId);
+  if (!normalizedRoomId) {
+    return () => undefined;
+  }
+  const listeners = roomSubscribers.get(normalizedRoomId) ?? new Set<() => void>();
+  listeners.add(listener);
+  roomSubscribers.set(normalizedRoomId, listeners);
+  return () => {
+    const current = roomSubscribers.get(normalizedRoomId);
+    if (!current) {
+      return;
+    }
+    current.delete(listener);
+    if (current.size === 0) {
+      roomSubscribers.delete(normalizedRoomId);
+    }
+  };
 }
 
 export async function createCollaborationAttachment(
@@ -731,18 +756,7 @@ export function parseMentionedAgentIds(
 ): string[] {
   const directMentions = new Set<string>();
   const mentionRegex = /@([^\s@]+)/gu;
-  const aliasToAgentId = new Map<string, string>();
-  for (const participant of participants) {
-    const aliases = participant.aliases.length > 0
-      ? participant.aliases
-      : buildMentionAliases(participant.agentId, participant.displayName);
-    for (const alias of aliases) {
-      const normalized = normalizeMentionAlias(alias);
-      if (normalized && !aliasToAgentId.has(normalized)) {
-        aliasToAgentId.set(normalized, participant.agentId);
-      }
-    }
-  }
+  const aliasToAgentId = buildMentionAliasLookup(participants);
 
   let match: RegExpExecArray | null;
   while ((match = mentionRegex.exec(message)) !== null) {
@@ -755,12 +769,55 @@ export function parseMentionedAgentIds(
   return [...directMentions];
 }
 
+function buildMentionAliasLookup(
+  participants: CollaborationParticipantMention[],
+): Map<string, string> {
+  const aliasToAgentId = new Map<string, string>();
+  for (const participant of participants) {
+    const aliases = participant.aliases.length > 0
+      ? participant.aliases
+      : buildMentionAliases(participant.agentId, participant.displayName);
+    for (const alias of aliases) {
+      const normalized = normalizeMentionAlias(alias);
+      if (normalized && !aliasToAgentId.has(normalized)) {
+        aliasToAgentId.set(normalized, participant.agentId);
+      }
+    }
+  }
+  return aliasToAgentId;
+}
+
+function parseLeadingDispatchMentionedAgentIds(
+  message: string,
+  participants: CollaborationParticipantMention[],
+): string[] {
+  const firstNonEmptyLine = String(message || "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstNonEmptyLine) {
+    return [];
+  }
+
+  // User-side direct dispatch is opt-in: only a leading mention prefix counts.
+  const dispatchPrefix = firstNonEmptyLine
+    .replace(/^(?:[-*+>]+|\d+[.)])+[\s\t]*/u, "")
+    .replace(/^(?:(?:please|pls|kindly|请|麻烦|劳烦)\s+)+/iu, "")
+    .trimStart();
+  if (!dispatchPrefix.startsWith("@")) {
+    return [];
+  }
+
+  return parseMentionedAgentIds(message, participants);
+}
+
 export function resolveCollaborationDispatchTargets(input: {
   message: string;
   participants: CollaborationParticipantMention[];
   primaryAgentId: string;
 }): string[] {
-  const mentioned = parseMentionedAgentIds(input.message, input.participants);
+  const mentioned = parseLeadingDispatchMentionedAgentIds(input.message, input.participants);
   if (mentioned.length === 0) {
     const preferredPrimary = input.participants.find((participant) => {
       const agentId = participant.agentId?.trim();
@@ -1565,4 +1622,22 @@ function mutateCollaborationRoomStore<T>(mutator: () => Promise<T> | T): Promise
     () => undefined,
   );
   return next;
+}
+
+function notifyCollaborationRoomSubscribers(roomId: string): void {
+  const normalizedRoomId = normalizeRoomId(roomId);
+  if (!normalizedRoomId) {
+    return;
+  }
+  const listeners = roomSubscribers.get(normalizedRoomId);
+  if (!listeners || listeners.size === 0) {
+    return;
+  }
+  for (const listener of listeners) {
+    try {
+      listener();
+    } catch {
+      // Ignore subscriber failures so room updates continue propagating.
+    }
+  }
 }

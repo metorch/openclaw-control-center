@@ -76,6 +76,19 @@ test("matching collaboration background bindings keep their existing session id"
   );
 });
 
+test("live draft session keys stay aligned with the collaboration room and agent", () => {
+  const helpers = createHelpersForSmoke();
+
+  assert.equal(
+    helpers.resolveCollaborationLiveDraftSessionKey(
+      "ddfbd24c-4507-444d-a20b-22d3bcc15996",
+      "Jarvis",
+      undefined,
+    ),
+    "agent:jarvis:thread:collab-ddfbd24c-4507-444d-a20b-22d3bcc15996",
+  );
+});
+
 test("collaboration failures are summarized without leaking raw command scaffolding", () => {
   const helpers = createHelpersForSmoke();
 

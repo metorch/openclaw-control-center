@@ -41,6 +41,63 @@ function createCollaborationChatHelpers(deps) {
     safeTruncate,
     toCollaborationApiAttachment,
   } = deps;
+  const collaborationActiveTurns = new Map();
+  const collaborationRoomAbortGenerations = new Map();
+
+  function currentCollaborationRoomAbortGeneration(roomId) {
+    const normalizedRoomId = String(roomId || "").trim();
+    if (!normalizedRoomId) {
+      return 0;
+    }
+    const current = collaborationRoomAbortGenerations.get(normalizedRoomId);
+    return Number.isInteger(current) && current >= 0 ? current : 0;
+  }
+
+  function registerCollaborationActiveTurn(input) {
+    const roomId = String(input.roomId || "").trim();
+    const turnId = randomUUID();
+    const handle = {
+      turnId,
+      roomId,
+      sourceEventId: String(input.sourceEventId || "").trim(),
+      agentId: String(input.agentId || "").trim(),
+      startedAt: new Date().toISOString(),
+      abortGeneration: currentCollaborationRoomAbortGeneration(roomId),
+      abortController: new AbortController(),
+      projectId: void 0,
+      taskId: void 0,
+      taskTitle: void 0,
+      stage: void 0,
+    };
+    collaborationActiveTurns.set(turnId, handle);
+    return handle;
+  }
+
+  function updateCollaborationActiveTurn(handle, input) {
+    if (!handle?.turnId || !collaborationActiveTurns.has(handle.turnId)) {
+      return handle;
+    }
+    Object.assign(handle, input || {});
+    collaborationActiveTurns.set(handle.turnId, handle);
+    return handle;
+  }
+
+  function releaseCollaborationActiveTurn(handle) {
+    if (!handle?.turnId) {
+      return;
+    }
+    collaborationActiveTurns.delete(handle.turnId);
+  }
+
+  function isCollaborationTurnCancelled(handle) {
+    if (!handle) {
+      return false;
+    }
+    return (
+      handle.abortController?.signal?.aborted === true ||
+      currentCollaborationRoomAbortGeneration(handle.roomId) > Number(handle.abortGeneration || 0)
+    );
+  }
 
   async function createCollaborationRoomMessage(payload, toolClient, directory, defaultLanguage) {
     const roomId = await normalizeCollaborationRoomIdPayload(payload.roomId, directory);
@@ -144,6 +201,151 @@ function createCollaborationChatHelpers(deps) {
     };
   }
 
+  async function terminateCollaborationRoomWork(payload, directory, defaultLanguage) {
+    const roomId = await normalizeCollaborationRoomIdPayload(payload.roomId, directory);
+    const languageInput = optionalBoundedString(payload.lang ?? payload.language, "lang", 8);
+    const language =
+      languageInput && isUiLanguage(languageInput.trim().toLowerCase())
+        ? languageInput.trim().toLowerCase()
+        : defaultLanguage;
+    const now = new Date().toISOString();
+    const nextAbortGeneration = currentCollaborationRoomAbortGeneration(roomId) + 1;
+    collaborationRoomAbortGenerations.set(roomId, nextAbortGeneration);
+    const activeTurns = [...collaborationActiveTurns.values()].filter(
+      (handle) => String(handle.roomId || "").trim() === roomId,
+    );
+    const activeAgentIds = uniqueCompactStrings(activeTurns.map((handle) => handle.agentId));
+    for (const handle of activeTurns) {
+      try {
+        handle.abortController.abort(
+          pickUiText(
+            language,
+            "Stopped current room work from the collaboration chat.",
+            "已从协作群聊终止当前房间工作。",
+          ),
+        );
+      } catch {}
+      if (handle.sourceEventId && handle.agentId) {
+        import_collaboration_live_drafts.clearCollaborationLiveDraft({
+          roomId,
+          sourceEventId: handle.sourceEventId,
+          agentId: handle.agentId,
+        });
+      }
+    }
+    const roomState = await import_collaboration_room.loadCollaborationRoom(roomId);
+    const projectStore = await import_project_store.loadProjectStore().catch(() => ({ projects: [] }));
+    const projectTitleById = new Map(
+      (projectStore?.projects || []).map((project) => [project.projectId, project.title || project.projectId]),
+    );
+    const stopMessage = pickUiText(
+      language,
+      "Stopped the current in-progress work from the collaboration chat.",
+      "已从协作群聊终止当前进行中的工作。",
+    );
+    const stopBlocker = pickUiText(
+      language,
+      "Stopped by the user from the collaboration chat.",
+      "已由用户在协作群聊中终止。",
+    );
+    const blockedTaskMap = new Map();
+    for (const receipt of roomState.taskReceipts || []) {
+      if (receipt.lastResultState !== "in_progress") {
+        continue;
+      }
+      blockedTaskMap.set(`${receipt.projectId}::${receipt.taskId}`, {
+        agentId: receipt.lastReportedBy,
+        projectId: receipt.projectId,
+        taskId: receipt.taskId,
+        taskTitle: receipt.taskTitle,
+        stage: receipt.stage,
+      });
+    }
+    for (const handle of activeTurns) {
+      if (!handle.projectId || !handle.taskId) {
+        continue;
+      }
+      blockedTaskMap.set(`${handle.projectId}::${handle.taskId}`, {
+        agentId: handle.agentId,
+        projectId: handle.projectId,
+        taskId: handle.taskId,
+        taskTitle: handle.taskTitle,
+        stage: handle.stage,
+      });
+    }
+    const blockedTasks = [...blockedTaskMap.values()];
+    await Promise.allSettled(
+      blockedTasks.map(async (task) => {
+        await import_collaboration_room.upsertCollaborationTaskReceipt(roomId, {
+          taskId: task.taskId,
+          projectId: task.projectId,
+          lastResultState: "blocked",
+          lastReportedAt: now,
+          lastReportedBy: "system",
+          taskTitle: task.taskTitle,
+          stage: task.stage,
+          summary: stopMessage,
+          recentOutput: stopMessage,
+          blockers: [stopBlocker],
+        });
+        await updateCollaborationTaskStatusDirect({
+          projectId: task.projectId,
+          taskId: task.taskId,
+          status: "blocked",
+        }).catch(() => void 0);
+      }),
+    );
+    if (activeTurns.length > 0 || blockedTasks.length > 0) {
+      await import_collaboration_room.appendCollaborationRoomEvents(roomId, [
+        {
+          eventId: randomUUID(),
+          type: "system_note",
+          authorRole: "system",
+          agentId: directory.primaryAgentId,
+          message: stopMessage,
+          detail:
+            activeAgentIds.length > 0
+              ? pickUiText(
+                  language,
+                  `Stopped active turns for ${activeAgentIds.map((agentId) => resolveCollaborationParticipantName(directory, agentId)).join(", ")}.`,
+                  `已终止以下员工的进行中任务：${activeAgentIds.map((agentId) => resolveCollaborationParticipantName(directory, agentId)).join("、")}。`,
+                )
+              : stopMessage,
+        },
+      ]);
+    }
+    const nextState = await import_collaboration_room.loadCollaborationRoom(roomId);
+    const affectedProjectIds = uniqueCompactStrings(blockedTasks.map((task) => task.projectId));
+    for (const projectId of affectedProjectIds) {
+      await syncProjectOpenTasksForRoom(
+        projectId,
+        projectTitleById.get(projectId) || projectId,
+        nextState,
+      ).catch(() => void 0);
+    }
+    const statusMessage =
+      activeTurns.length > 0 || blockedTasks.length > 0
+        ? pickUiText(
+            language,
+            `Stopped ${Math.max(activeTurns.length, blockedTasks.length)} in-progress item(s) in this room.`,
+            `已终止当前房间内 ${Math.max(activeTurns.length, blockedTasks.length)} 项进行中的工作。`,
+          )
+        : pickUiText(
+            language,
+            "No active room work needed to be stopped.",
+            "当前房间没有需要终止的进行中工作。",
+          );
+    return {
+      roomId,
+      terminatedAt: now,
+      abortedTurnCount: activeTurns.length,
+      blockedTaskCount: blockedTasks.length,
+      activeAgentIds,
+      taskIds: blockedTasks.map((task) => task.taskId),
+      message: statusMessage,
+    };
+  }
+
   async function dispatchCollaborationRoomMessage(input) {
     try {
       await Promise.all(
@@ -227,7 +429,73 @@ function createCollaborationChatHelpers(deps) {
     );
   }
 
-  function resolveCollaborationReplyMentionDispatchTargets(input) {
+  function escapeRegExp(value) {
+    return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function stripCollaborationLineForMentionRouting(line) {
+    return String(line || "")
+      .replace(/[`*_~]/g, "")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .trim();
+  }
+
+  function looksLikeActionableCollaborationMentionLine(line) {
+    const normalized = stripCollaborationLineForMentionRouting(line);
+    if (!normalized) {
+      return false;
+    }
+    const actionablePattern =
+      /(please|pls|kindly|should|must|can you|could you|need(?:s)? to|reply\b|respond\b|check\b|verify\b|review\b|inspect\b|investigate\b|draft\b|summari[sz]e\b|look into\b|handle\b|take\b|sync\b|coordinate\b|follow up\b|回复|确认|检查|核对|验证|评审|查看|处理|跟进|补充|整理|起草|麻烦|请|回复一个)/iu;
+    const statusPattern =
+      /(reported\b|replied\b|feedback\b|done\b|completed\b|finished\b|complete\b|summary\b|summarizing\b|pending\b|still pending\b|latest worker updates\b|已反馈|已回复|都已反馈|已完成|完成了|汇总|最终|进度|反馈情况|还缺)/iu;
+    return actionablePattern.test(normalized) && !statusPattern.test(normalized);
+  }
+
+  function buildCollaborationParticipantReferencePatterns(participant) {
+    const seeds = [
+      participant?.agentId,
+      participant?.displayName,
+      ...(Array.isArray(participant?.aliases) ? participant.aliases : []),
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    const uniqueSeeds = [...new Set(seeds)];
+    return uniqueSeeds.map((seed) => new RegExp(`(^|[^\\p{L}\\p{N}_-])@?${escapeRegExp(seed)}(?=$|[^\\p{L}\\p{N}_-])`, "iu"));
+  }
+
+  function extractCollaborationTargetedInstructionLines(input) {
+    const participant = input.directory.entries.find(
+      (entry) => normalizeLookupKey(entry.agentId) === normalizeLookupKey(input.targetAgentId),
+    );
+    if (!participant) {
+      return [];
+    }
+    const visibleReplyText = sanitizeVisibleCollaborationText(input.replyText, input.language, "", 4000);
+    const lines = visibleReplyText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length === 0) {
+      return [];
+    }
+    const referencePatterns = buildCollaborationParticipantReferencePatterns(participant);
+    const targetedLines = [];
+    for (const line of lines) {
+      if (!referencePatterns.some((pattern) => pattern.test(line))) {
+        continue;
+      }
+      if (!looksLikeActionableCollaborationMentionLine(line)) {
+        continue;
+      }
+      if (!targetedLines.includes(line)) {
+        targetedLines.push(line);
+      }
+    }
+    return targetedLines;
+  }
+
+  function resolveCollaborationReplyMentionDispatchPlans(input) {
     const primaryKey = normalizeLookupKey(input.directory.primaryAgentId);
     const actorKey = normalizeLookupKey(input.actorAgentId);
     if (!primaryKey || actorKey !== primaryKey) {
@@ -239,26 +507,43 @@ function createCollaborationChatHelpers(deps) {
       .filter((agentId) => {
         const normalizedAgentId = normalizeLookupKey(agentId);
         return normalizedAgentId && normalizedAgentId !== primaryKey && !currentRouteKeys.has(normalizedAgentId);
-      });
+      })
+      .map((agentId) => ({
+        agentId,
+        instructionLines: extractCollaborationTargetedInstructionLines({
+          replyText: input.replyText,
+          targetAgentId: agentId,
+          directory: input.directory,
+          language: input.language,
+        }),
+      }))
+      .filter((plan) => plan.instructionLines.length > 0);
   }
 
   function buildCollaborationFollowUpRequestMessage(input) {
     const originalRequest = String(input.originalRequestText || "").trim();
     const coordinatorInstruction = String(input.coordinatorReplyText || "").trim();
+    const targetedInstruction = String(input.targetedInstructionText || "").trim();
     if (originalRequest && coordinatorInstruction) {
       return [
-        pickUiText(input.language, "Original user request:", "原始用户请求："),
+        pickUiText(input.language, "Original user request (context only):", "原始用户请求（仅作上下文）："),
         originalRequest,
         "",
         pickUiText(
           input.language,
-          `${input.coordinatorName} coordination instruction:`,
-          `${input.coordinatorName} 协调指令：`,
+          `${input.coordinatorName} assigned follow-up for you:`,
+          `${input.coordinatorName} 分配给你的后续动作：`,
         ),
-        coordinatorInstruction,
+        targetedInstruction || coordinatorInstruction,
+        "",
+        pickUiText(
+          input.language,
+          "Do only this assigned follow-up unless the coordinator explicitly asks you to redo the whole user request.",
+          "除非协调者明确要求你重做整个用户请求，否则只执行这里分配给你的这一小段后续动作。",
+        ),
       ].join("\n");
     }
-    return coordinatorInstruction || originalRequest;
+    return targetedInstruction || coordinatorInstruction || originalRequest;
   }
 
   async function maybeDispatchCollaborationReplyMentions(input) {
@@ -266,12 +551,14 @@ function createCollaborationChatHelpers(deps) {
     if (!replyText) {
       return [];
     }
-    const targets = resolveCollaborationReplyMentionDispatchTargets({
+    const plans = resolveCollaborationReplyMentionDispatchPlans({
       replyText,
       directory: input.directory,
       actorAgentId: input.replyEvent.agentId,
       currentRouteAgentIds: input.currentRouteAgentIds,
+      language: input.language,
     });
+    const targets = plans.map((plan) => plan.agentId);
     if (targets.length === 0) {
       return [];
     }
@@ -280,15 +567,6 @@ function createCollaborationChatHelpers(deps) {
       input.sourceEvent?.message || "",
       4000,
     );
-    const requestMessageOverride = buildCollaborationFollowUpRequestMessage({
-      originalRequestText,
-      coordinatorReplyText: replyText,
-      coordinatorName: resolveCollaborationParticipantName(input.directory, input.replyEvent.agentId),
-      language: input.language,
-    });
-    const requestTitleOverride =
-      summarizeCollaborationUiText(originalRequestText, replyText, 160) ||
-      summarizeCollaborationUiText(replyText, originalRequestText, 160);
     const attachmentRecords = mergeCollaborationAttachmentRecords(
       input.attachmentRecords,
       input.replyAttachments,
@@ -302,24 +580,62 @@ function createCollaborationChatHelpers(deps) {
       sourceAgentId: input.replyEvent.agentId,
       fromReplyMention: true,
     });
-    void dispatchCollaborationRoomMessage({
-      roomId: input.roomId,
-      sourceEvent: input.replyEvent,
-      attachmentRecords,
-      targetAgentIds: targets,
-      toolClient: input.toolClient,
-      directory: input.directory,
-      language: input.language,
-      requestMessageOverride,
-      requestTitleOverride,
-    });
+    for (const plan of plans) {
+      const targetedInstructionText = plan.instructionLines.join("\n");
+      const requestMessageOverride = buildCollaborationFollowUpRequestMessage({
+        originalRequestText,
+        coordinatorReplyText: replyText,
+        targetedInstructionText,
+        coordinatorName: resolveCollaborationParticipantName(input.directory, input.replyEvent.agentId),
+        language: input.language,
+      });
+      const requestTitleOverride =
+        summarizeCollaborationUiText(targetedInstructionText, originalRequestText, 160) ||
+        summarizeCollaborationUiText(originalRequestText, targetedInstructionText, 160);
+      void dispatchCollaborationRoomMessage({
+        roomId: input.roomId,
+        sourceEvent: input.replyEvent,
+        attachmentRecords,
+        targetAgentIds: [plan.agentId],
+        toolClient: input.toolClient,
+        directory: input.directory,
+        language: input.language,
+        requestMessageOverride,
+        requestTitleOverride,
+      });
+    }
     return targets;
+  }
+
+  function resolveCollaborationCoordinatorWorkerAgentIds(input) {
+    const primaryKey = normalizeLookupKey(input.directory?.primaryAgentId);
+    const discovered = uniqueCompactStrings(
+      (input.roomState?.events || [])
+        .filter(
+          (event) =>
+            event?.type === "dispatch_started" &&
+            event?.sourceEventId === input.sourceEventId,
+        )
+        .flatMap((event) =>
+          event?.targetAgentIds?.length > 0
+            ? event.targetAgentIds
+            : event?.agentId
+              ? [event.agentId]
+              : [],
+        ),
+    ).filter((agentId) => normalizeLookupKey(agentId) !== primaryKey);
+    if (discovered.length > 0) {
+      return discovered;
+    }
+    return uniqueCompactStrings(input.currentRouteAgentIds || []).filter(
+      (agentId) => normalizeLookupKey(agentId) !== primaryKey,
+    );
   }
 
   function buildCollaborationWorkerOutcomeSummaryLines(input) {
     const workerKeys = new Set((input.workerAgentIds || []).map((agentId) => normalizeLookupKey(agentId)).filter(Boolean));
     const latestByAgent = new Map();
-    for (const event of input.roomState?.events || []) {
+    for (const event of [...(input.roomState?.events || []), ...(input.supplementalEvents || [])]) {
       if (event?.sourceEventId !== input.sourceEventId) {
         continue;
       }
@@ -364,13 +680,16 @@ function createCollaborationChatHelpers(deps) {
     if (!primaryKey || !actorKey || actorKey === primaryKey) {
       return [];
     }
-    const workerAgentIds = uniqueCompactStrings(input.currentRouteAgentIds || []).filter(
-      (agentId) => normalizeLookupKey(agentId) !== primaryKey,
-    );
-    if (workerAgentIds.length === 0) {
+    const roomState = await import_collaboration_room.loadCollaborationRoom(input.roomId);
+    const workerAgentIds = resolveCollaborationCoordinatorWorkerAgentIds({
+      roomState,
+      sourceEventId: input.sourceEvent.eventId,
+      currentRouteAgentIds: input.currentRouteAgentIds,
+      directory: input.directory,
+    });
+    if (workerAgentIds.length === 0 || !workerAgentIds.some((agentId) => normalizeLookupKey(agentId) === actorKey)) {
       return [];
     }
-    const roomState = await import_collaboration_room.loadCollaborationRoom(input.roomId);
     if (
       roomState.events.some(
         (event) =>
@@ -385,6 +704,7 @@ function createCollaborationChatHelpers(deps) {
       roomState,
       sourceEventId: input.sourceEvent.eventId,
       workerAgentIds,
+      supplementalEvents: [input.replyEvent],
       directory: input.directory,
       language: input.language,
     }).filter(Boolean);
@@ -672,6 +992,10 @@ function createCollaborationChatHelpers(deps) {
     return `agent:${normalizedAgentId}:thread:collab-${normalizedRoomId}`;
   }
 
+  function resolveCollaborationLiveDraftSessionKey(roomId, agentId, binding) {
+    return binding?.sessionKey || buildCollaborationBackgroundSessionKey(roomId, agentId);
+  }
+
   function resolveCollaborationAgentSessionBinding(roomId, agentId, binding) {
     const sessionKey = buildCollaborationBackgroundSessionKey(roomId, agentId);
     const normalizedBoundKey = String(binding?.sessionKey || "").trim().toLowerCase();
@@ -778,7 +1102,7 @@ function createCollaborationChatHelpers(deps) {
 
   function sanitizeVisibleCollaborationText(value, language, fallback = "", maxLength = 240) {
     if (typeof sanitizeCollaborationDisplayText === "function") {
-      return sanitizeCollaborationDisplayText(value, language, fallback, maxLength);
+      return sanitizeCollaborationDisplayText(value, language, fallback, maxLength, true);
     }
     return summarizeCollaborationUiText(value, fallback, maxLength);
   }
@@ -851,11 +1175,12 @@ function createCollaborationChatHelpers(deps) {
       .filter(Boolean)
       .join("\n");
     if (
-      resolveCollaborationReplyMentionDispatchTargets({
+      resolveCollaborationReplyMentionDispatchPlans({
         replyText: visibleReplyText,
         directory: input.directory,
         actorAgentId: input.targetAgentId,
         currentRouteAgentIds: input.currentRouteAgentIds,
+        language: input.language,
       }).length > 0
     ) {
       return false;
@@ -2228,6 +2553,11 @@ function createCollaborationChatHelpers(deps) {
   }
 
   async function dispatchCollaborationTurnToAgentV2(input) {
+    const activeTurn = registerCollaborationActiveTurn({
+      roomId: input.roomId,
+      sourceEventId: input.sourceEvent?.eventId,
+      agentId: input.targetAgentId,
+    });
     const binding = resolveCollaborationAgentSessionBinding(
       input.roomId,
       input.targetAgentId,
@@ -2246,7 +2576,7 @@ function createCollaborationChatHelpers(deps) {
       language: input.language,
     });
     const liveDraftSessionKey =
-      binding?.sessionKey || buildCollaborationBackgroundSessionKey(input.targetAgentId, input.roomId);
+      resolveCollaborationLiveDraftSessionKey(input.roomId, input.targetAgentId, binding);
     const clearLiveDraft = () =>
       import_collaboration_live_drafts.clearCollaborationLiveDraft({
         roomId: input.roomId,
@@ -2254,6 +2584,9 @@ function createCollaborationChatHelpers(deps) {
         agentId: input.targetAgentId,
       });
     const handleLiveStreamEvent = (event) => {
+      if (isCollaborationTurnCancelled(activeTurn)) {
+        return;
+      }
       const now = new Date().toISOString();
       const currentDraft = import_collaboration_live_drafts
         .listCollaborationLiveDrafts(input.roomId)
@@ -2292,6 +2625,12 @@ function createCollaborationChatHelpers(deps) {
       requestMessageOverride: input.requestMessageOverride,
       requestTitleOverride: input.requestTitleOverride,
     });
+    updateCollaborationActiveTurn(activeTurn, {
+      projectId: projectContext.project.projectId,
+      taskId: dispatchRecord.taskId,
+      taskTitle: dispatchRecord.title,
+      stage: dispatchRecord.stage,
+    });
     await upsertCollaborationTaskRecord({
       projectId: projectContext.project.projectId,
       taskId: dispatchRecord.taskId,
@@ -2324,6 +2663,9 @@ function createCollaborationChatHelpers(deps) {
         : void 0,
       requestMessageOverride: input.requestMessageOverride,
     });
+    if (isCollaborationTurnCancelled(activeTurn)) {
+      return;
+    }
     const nextResponse = await input.toolClient.agentTurn({
       agentId: input.targetAgentId,
       sessionId: binding?.sessionId,
@@ -2332,7 +2674,11 @@ function createCollaborationChatHelpers(deps) {
       timeoutSeconds: 90,
       preferGatewayStream: true,
       onStreamEvent: handleLiveStreamEvent,
+      signal: activeTurn.abortController.signal,
     });
+    if (isCollaborationTurnCancelled(activeTurn)) {
+      return;
+    }
     if (nextResponse.sessionId) {
       await import_collaboration_room.setCollaborationSessionBinding(
         input.roomId,
@@ -2373,7 +2719,11 @@ function createCollaborationChatHelpers(deps) {
           timeoutSeconds: 60,
           preferGatewayStream: true,
           onStreamEvent: handleLiveStreamEvent,
+          signal: activeTurn.abortController.signal,
         });
+        if (isCollaborationTurnCancelled(activeTurn)) {
+          return;
+        }
         interruptedDurationMs += resumedResponse.durationMs;
         interruptedOutputs.push(describeCollaborationAgentTurnOutput(resumedResponse, stageResultFallback));
         if (resumedResponse.sessionId) {
@@ -2419,6 +2769,9 @@ function createCollaborationChatHelpers(deps) {
         targetAgentId: input.targetAgentId,
         rawPaths: interruptedRawPaths,
       });
+      if (isCollaborationTurnCancelled(activeTurn)) {
+        return;
+      }
       if (resumedResponse.ok && !isInterruptedCollaborationAgentTurn(resumedResponse)) {
         const finalizedReplyText =
           interruptedCurrentOutput.replyText ||
@@ -2445,6 +2798,9 @@ function createCollaborationChatHelpers(deps) {
           },
         ]);
         const finalizedReplyEvent = finalizedReplyEvents.at(-1);
+        if (isCollaborationTurnCancelled(activeTurn)) {
+          return;
+        }
         await persistCollaborationStageResult({
           roomId: input.roomId,
           sourceEvent: input.sourceEvent,
@@ -2561,6 +2917,9 @@ function createCollaborationChatHelpers(deps) {
         targetAgentId: input.targetAgentId,
         rawPaths: nextResponseOutput.rawPaths,
       });
+      if (isCollaborationTurnCancelled(activeTurn)) {
+        return;
+      }
       const nextReplyText = nextResponseOutput.replyText;
       const nextReplyEvents =
         nextReplyText || nextReplyAttachments.length > 0
@@ -2586,6 +2945,9 @@ function createCollaborationChatHelpers(deps) {
             ])
           : [];
       const nextReplyEvent = nextReplyEvents.at(-1);
+      if (isCollaborationTurnCancelled(activeTurn)) {
+        return;
+      }
       await persistCollaborationStageResult({
         roomId: input.roomId,
         sourceEvent: input.sourceEvent,
@@ -2639,6 +3001,9 @@ function createCollaborationChatHelpers(deps) {
       targetAgentId: input.targetAgentId,
       rawPaths: nextResponseOutput.rawPaths,
     });
+    if (isCollaborationTurnCancelled(activeTurn)) {
+      return;
+    }
     const nextFailureSummary = summarizeCollaborationFailure({
       language: input.language,
       failureReason: nextResponse.failureReason,
@@ -2826,6 +3191,7 @@ function createCollaborationChatHelpers(deps) {
       targetAgentIds: [...input.targetAgentIds, input.directory.primaryAgentId],
     });
     } finally {
+      releaseCollaborationActiveTurn(activeTurn);
       clearLiveDraft();
     }
   }
@@ -2998,7 +3364,12 @@ function createCollaborationChatHelpers(deps) {
     if (!text) {
       return "";
     }
-    const markers = [/coordination instruction:\s*/gi, /\u534f\u8c03\u6307\u4ee4[:：]\s*/g];
+    const markers = [
+      /coordination instruction:\s*/gi,
+      /\u534f\u8c03\u6307\u4ee4[:：]\s*/g,
+      /assigned follow-up for you:\s*/gi,
+      /\u5206\u914d\u7ed9\u4f60\u7684\u540e\u7eed\u52a8\u4f5c[:：]\s*/g,
+    ];
     let instructionStart = -1;
     for (const pattern of markers) {
       for (const match of text.matchAll(pattern)) {
@@ -3302,6 +3673,7 @@ function createCollaborationChatHelpers(deps) {
     buildCollaborationAgentPrompt,
     buildCollaborationAgentPromptV2,
     buildCollaborationBackgroundSessionKey,
+    resolveCollaborationLiveDraftSessionKey,
     buildCollaborationAgentReplyDetail,
     describeCollaborationAgentTurnOutput,
     extractVisibleCollaborationTurnReplyText,
@@ -3310,6 +3682,7 @@ function createCollaborationChatHelpers(deps) {
     buildCollaborationRoomApiEvent,
     collectCollaborationAgentReplyAttachments,
     createCollaborationRoomMessage,
+    terminateCollaborationRoomWork,
     dispatchCollaborationRoomMessage,
     dispatchCollaborationTurnToAgent,
     dispatchCollaborationTurnToAgentV2,
@@ -3324,6 +3697,8 @@ function createCollaborationChatHelpers(deps) {
     resolveCollaborationArtifactPaths,
     resolveCollaborationAgentSessionBinding,
     resolveCollaborationParticipantWorkspaceRoot,
+    extractCollaborationTargetedInstructionLines,
+    resolveCollaborationReplyMentionDispatchPlans,
     resolveCollaborationLiveDraftText,
     shouldAutoPromoteCollaborationStageResult,
     isJarvisWaitingForUserConfirmation,

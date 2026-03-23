@@ -1490,6 +1490,16 @@ function renderCollaborationChatStyles(): string {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.64);
 }
 
+.collab-chat-input-actions {
+  display: grid;
+  align-content: stretch;
+  gap: 0.3rem;
+}
+
+.collab-chat-stop {
+  min-width: 4.8rem;
+}
+
 .collab-chat-input-shell:focus-within {
   border-color: rgba(0, 113, 227, 0.22);
   box-shadow: var(--chat-ring), inset 0 1px 0 rgba(255, 255, 255, 0.64);
@@ -1648,6 +1658,10 @@ function renderCollaborationChatStyles(): string {
 
   .collab-chat-input-shell {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .collab-chat-input-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

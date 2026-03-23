@@ -129,6 +129,57 @@ test("collaboration routing defaults to the primary controller and still honors 
     }),
     ["alice", "bob"],
   );
+
+  assert.deepEqual(
+    resolveCollaborationDispatchTargets({
+      message: "Please @Alice sync with @bob on this task.",
+      participants,
+      primaryAgentId: "jarvis",
+    }),
+    ["alice", "bob"],
+  );
+});
+
+test("instructional @ mentions in user prompts no longer bypass the primary controller", () => {
+  const participants = [
+    {
+      agentId: "jarvis",
+      displayName: "Jarvis",
+      aliases: buildMentionAliases("jarvis", "Jarvis"),
+    },
+    {
+      agentId: "qa",
+      displayName: "QA",
+      aliases: buildMentionAliases("qa", "QA"),
+    },
+    {
+      agentId: "architect",
+      displayName: "Architect",
+      aliases: buildMentionAliases("architect", "Architect"),
+    },
+  ];
+
+  assert.deepEqual(
+    resolveCollaborationDispatchTargets({
+      message: [
+        "Jarvis, please run a coordination test.",
+        "Line 1: Received.",
+        "Line 2: @qa reply with 1 only.",
+      ].join("\n"),
+      participants,
+      primaryAgentId: "jarvis",
+    }),
+    ["jarvis"],
+  );
+
+  assert.deepEqual(
+    resolveCollaborationDispatchTargets({
+      message: "Please reply with exactly this example: @architect please draft the plan.",
+      participants,
+      primaryAgentId: "jarvis",
+    }),
+    ["jarvis"],
+  );
 });
 
 test("collaboration attachment filenames are sanitized for storage", () => {
@@ -159,6 +210,41 @@ test("collaboration room state keeps project binding and empty collaboration rec
   assert.equal(state.projectId, "proj-alpha");
   assert.deepEqual(state.dispatchRecords, []);
   assert.deepEqual(state.taskReceipts, []);
+});
+
+test("visible collaboration messages preserve line breaks after hidden payload cleanup", () => {
+  const helpers = createRoomHelpersForSmoke();
+  const message = [
+    "[[reply_to_current]] First line.",
+    "",
+    "Second line.",
+    "",
+    '<stage_result resultState="awaiting_review">',
+    "  <summary>Checkpoint ready.</summary>",
+    "</stage_result>",
+  ].join("\n");
+
+  assert.equal(
+    helpers.sanitizeCollaborationDisplayText(message, "en", "", 1200, true),
+    "First line.\nSecond line.",
+  );
+
+  const transcriptReply = helpers.buildCollaborationTranscriptBackfillEvent({
+    sequence: 1,
+    language: "en",
+    primaryAgentId: "jarvis",
+    primaryDisplayName: "Jarvis",
+    message: {
+      role: "assistant",
+      kind: "message",
+      timestamp: "2026-03-23T09:00:00.000Z",
+      sourceSessionKey: "agent:main:thread:collab-room-multiline",
+      content: message,
+    },
+  });
+
+  assert.equal(transcriptReply?.message, "First line.\nSecond line.");
+  assert.match(String(transcriptReply?.messageHtml || ""), /First line\.<br \/>Second line\./);
 });
 
 test("participant display text collapses raw relay prompts into short user-facing text", () => {
@@ -1601,6 +1687,58 @@ test("transcript merge drops room-scoped transcript user prompts once local cano
   );
 });
 
+test("transcript merge tolerates transcript user prompts without a related session key", () => {
+  const helpers = createRoomHelpersForSmoke();
+  const localUser = {
+    sequence: 1,
+    eventId: "local-user",
+    type: "user_message",
+    createdAt: "2026-03-22T14:22:19.977Z",
+    authorRole: "user",
+    message: "Kick off the room.",
+    detail: "Jarvis",
+    targetAgentIds: ["jarvis"],
+    targetDisplayNames: ["Jarvis"],
+    attachmentIds: [],
+    attachments: [],
+  };
+  const transcriptPrompt = {
+    sequence: 1,
+    eventId: "transcript-user-without-session",
+    type: "user_message",
+    createdAt: "2026-03-22T14:23:25.150Z",
+    authorRole: "user",
+    message: "Retry the same coordination turn with the same room context.",
+  };
+  const transcriptReply = {
+    sequence: 2,
+    eventId: "transcript-reply",
+    type: "agent_reply",
+    createdAt: "2026-03-22T14:23:58.860Z",
+    authorRole: "agent",
+    agentId: "jarvis",
+    message: "QA=1, Architect=1 — both confirmations received.",
+  };
+
+  const merged = helpers.mergeCollaborationRoomApiEvents({
+    lastLocalSequence: 1,
+    localEvents: [localUser],
+    transcriptEvents: [transcriptPrompt, transcriptReply],
+  });
+
+  assert.deepEqual(
+    merged.events.map((event: { eventId: string; type: string }) => ({
+      eventId: event.eventId,
+      type: event.type,
+    })),
+    [
+      { eventId: "local-user", type: "user_message" },
+      { eventId: "transcript-user-without-session", type: "user_message" },
+      { eventId: "transcript-reply", type: "agent_reply" },
+    ],
+  );
+});
+
 test("live session backfill projects the latest room-scoped worker reply into the shared timeline", async () => {
   const helpers = createRoomHelpersForSmoke({
     normalizeSessionHistoryMessages: (response: { messages?: unknown[] }, limit: number) =>
@@ -1742,6 +1880,24 @@ test("pending draft fallback appears only when a current-room dispatch has no vi
     ],
   });
   assert.equal(noPending.length, 0);
+
+  const noPendingDuringLiveDraft = helpers.buildCollaborationPendingDraftEvents({
+    ...baseInput,
+    currentEvents: [
+      {
+        sequence: 11,
+        eventId: "qa-live-draft",
+        type: "agent_reply",
+        createdAt: "2026-03-22T11:54:05.000Z",
+        authorRole: "agent",
+        agentId: "qa",
+        sourceEventId: "source-qa",
+        pending: true,
+        liveDraft: true,
+      },
+    ],
+  });
+  assert.equal(noPendingDuringLiveDraft.length, 0);
 });
 
 test("transcript-first merge keeps different employee replies visible and only deduplicates exact local equivalents", () => {

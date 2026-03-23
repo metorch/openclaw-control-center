@@ -73,7 +73,7 @@ export function renderChatMarkdownToHtml(input: string): string {
 function renderInlineMarkdown(input: string): string {
   const codeTokens: string[] = [];
   const codeTokenized = input.replace(/`([^`]+)`/g, (_match, group: string) => {
-    const token = `__CHAT_CODE_${codeTokens.length}__`;
+    const token = `CHATCODETOKEN${codeTokens.length}PLACEHOLDER`;
     codeTokens.push(`<code>${escapeHtml(group)}</code>`);
     return token;
   });
@@ -90,7 +90,7 @@ function renderInlineMarkdown(input: string): string {
     .replace(/(^|[\s(>])_([^_]+)_(?=$|[\s).,!?:;])/g, "$1<em>$2</em>")
     .replace(/~~([^~]+)~~/g, "<del>$1</del>");
 
-  return emphasized.replace(/__CHAT_CODE_(\d+)__/g, (_match, index: string) => codeTokens[Number(index)] ?? "");
+  return emphasized.replace(/CHATCODETOKEN(\d+)PLACEHOLDER/g, (_match, index: string) => codeTokens[Number(index)] ?? "");
 }
 
 function sanitizeHref(input: string): string | undefined {

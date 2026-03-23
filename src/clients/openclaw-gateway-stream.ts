@@ -25,6 +25,7 @@ interface OpenClawGatewayStreamRequest {
   sessionKey: string;
   timeoutSeconds: number;
   onStreamEvent?: (event: AgentTurnStreamEvent) => void | Promise<void>;
+  signal?: AbortSignal;
 }
 
 export interface OpenClawGatewayStreamResult {
@@ -82,6 +83,7 @@ export async function streamOpenClawGatewayAgentTurn(
   let runId: string | undefined;
   let lastText = "";
   let lastPayload: Record<string, unknown> | undefined;
+  let externalAbortMessage = "";
   let connectTimer: NodeJS.Timeout | undefined;
   let finalTimer: NodeJS.Timeout | undefined;
 
@@ -110,6 +112,30 @@ export async function streamOpenClawGatewayAgentTurn(
     } catch {
       // Ignore close races.
     }
+  };
+
+  const handleExternalAbort = (): void => {
+    if (settled) {
+      return;
+    }
+    externalAbortMessage = resolveAbortSignalMessage(request.signal);
+    void emitStreamEvent({
+      state: "error",
+      agentId: request.agentId,
+      runId,
+      sessionKey: request.sessionKey,
+      text: lastText || undefined,
+      errorMessage: externalAbortMessage,
+      rawPayload: lastPayload,
+    });
+    resolveOnce({
+      started: runStarted,
+      runId,
+      replyText: lastText,
+      stopReason: "cancelled",
+      errorMessage: externalAbortMessage,
+      rawPayload: lastPayload,
+    });
   };
 
   const setFinalTimer = (): void => {
@@ -414,6 +440,14 @@ export async function streamOpenClawGatewayAgentTurn(
     handleClose();
   });
 
+  if (request.signal) {
+    if (request.signal.aborted) {
+      handleExternalAbort();
+    } else {
+      request.signal.addEventListener("abort", handleExternalAbort, { once: true });
+    }
+  }
+
   connectTimer = setTimeout(() => {
     const message = "Timed out while opening the upstream gateway stream.";
     if (!runStarted) {
@@ -424,7 +458,24 @@ export async function streamOpenClawGatewayAgentTurn(
   }, GATEWAY_CONNECT_TIMEOUT_MS);
   connectTimer.unref?.();
 
-  return await done;
+  try {
+    return await done;
+  } finally {
+    if (request.signal) {
+      request.signal.removeEventListener("abort", handleExternalAbort);
+    }
+  }
+}
+
+function resolveAbortSignalMessage(signal?: AbortSignal): string {
+  const reason = signal?.reason;
+  if (typeof reason === "string" && reason.trim()) {
+    return reason.trim();
+  }
+  if (reason instanceof Error && reason.message.trim()) {
+    return reason.message.trim();
+  }
+  return "Agent turn was cancelled.";
 }
 
 async function resolveGatewayConnectionConfig(): Promise<GatewayConnectionConfig> {

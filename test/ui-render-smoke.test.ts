@@ -1642,9 +1642,9 @@ test("collaboration source includes primary dispatcher filter and floating room 
   assert(widgetBootSource.includes("document.addEventListener('dragover'"));
   assert(widgetBootSource.includes("data-upload-retry"));
   assert(widgetHtml.includes('Drop files here, or paste images / screenshots'));
-  assert(widgetHtml.includes('Default route: everyone in this room'));
+  assert(widgetHtml.includes('Default route: Jarvis coordinates first'));
   assert(widgetHtml.includes('routeAllMembers'));
-  assert(!widgetHtml.includes('Default route: Jarvis'));
+  assert(!widgetHtml.includes('Default route: everyone in this room'));
   assert(!widgetHtml.includes('data-collab-room-delete'));
   assert(serverSource.includes('loadExistingCollaborationRoom(input.roomId)'));
   assert(widgetHtml.includes('.collab-chat-room-dropdown {'));

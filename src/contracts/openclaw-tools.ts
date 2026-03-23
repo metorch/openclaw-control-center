@@ -108,6 +108,7 @@ export interface AgentTurnRequest {
   timeoutSeconds?: number;
   preferGatewayStream?: boolean;
   onStreamEvent?: (event: AgentTurnStreamEvent) => void | Promise<void>;
+  signal?: AbortSignal;
 }
 
 export interface AgentTurnStreamEvent {
