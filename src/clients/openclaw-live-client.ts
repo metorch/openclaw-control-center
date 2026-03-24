@@ -399,6 +399,16 @@ export class OpenClawLiveClient implements ToolClient {
     beforeSessions: SessionsListResponse;
     startedAt: number;
   }): Promise<AgentTurnResponse> {
+    if (input.preferGatewayStream && input.sessionKey?.trim()) {
+      try {
+        return await this.runGatewayAgentTurnAttempt(input);
+      } catch (error) {
+        if (!(error instanceof GatewayStreamStartError)) {
+          throw error;
+        }
+      }
+    }
+
     if (input.preferGatewayStream || input.onStreamEvent) {
       try {
         return await this.runHttpResponsesAgentTurnAttempt(input);
@@ -409,7 +419,7 @@ export class OpenClawLiveClient implements ToolClient {
       }
     }
 
-    if ((input.preferGatewayStream || input.onStreamEvent) && input.sessionKey?.trim()) {
+    if (!input.preferGatewayStream && input.onStreamEvent && input.sessionKey?.trim()) {
       try {
         return await this.runGatewayAgentTurnAttempt(input);
       } catch (error) {

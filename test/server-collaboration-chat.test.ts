@@ -1335,7 +1335,11 @@ test("room termination aborts active collaboration turns without writing a faile
         const openclawChatRooms = unwrap(await import(${JSON.stringify(openclawChatRoomsModuleHref)}));
         const { join } = await import("node:path");
 
+        const abortedSessionKeys = [];
         const helpers = chatMod.createCollaborationChatHelpers({
+          abortCollaborationSessionRun: async (sessionKey) => {
+            abortedSessionKeys.push(sessionKey);
+          },
           buildCollaborationAttachmentSummary: () => "",
           buildSessionDetailHref: () => "",
           createRequestValidationError: (message, statusCode = 400) => {
@@ -1443,6 +1447,7 @@ test("room termination aborts active collaboration turns without writing a faile
 
         process.stdout.write(JSON.stringify({
           aborted,
+          abortedSessionKeys,
           terminated,
           roomEventTypes: roomState.events.map((event) => event.type),
           roomEventMessages: roomState.events.map((event) => event.message || event.detail || ""),
@@ -1454,6 +1459,7 @@ test("room termination aborts active collaboration turns without writing a faile
 
     const parsed = JSON.parse(output) as {
       aborted: boolean;
+      abortedSessionKeys: string[];
       terminated: {
         abortedTurnCount: number;
         blockedTaskCount: number;
@@ -1469,6 +1475,8 @@ test("room termination aborts active collaboration turns without writing a faile
     };
 
     assert.equal(parsed.aborted, true);
+    assert.equal(parsed.abortedSessionKeys.length, 1);
+    assert.match(parsed.abortedSessionKeys[0] || "", /^agent:jarvis:thread:collab-/);
     assert.equal(parsed.terminated.abortedTurnCount, 1);
     assert.equal(parsed.roomEventTypes.includes("agent_reply"), false);
     assert.equal(parsed.roomEventTypes.includes("dispatch_failed"), false);
@@ -1477,6 +1485,356 @@ test("room termination aborts active collaboration turns without writing a faile
     assert(parsed.receipts.some((receipt) => receipt.lastResultState === "blocked"));
     assert(parsed.receipts.some((receipt) => (receipt.blockers || []).some((item) => /Stopped by the user/i.test(item))));
     assert(parsed.taskStatuses.some((task) => task.status === "blocked"));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("room termination accepts pre-start abort misses when local cancellation wins first", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-chat-terminate-room-prestart-"));
+
+  try {
+    const output = await runCollaborationChatModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const chatMod = unwrap(await import(${JSON.stringify(collaborationChatModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const taskStore = unwrap(await import(${JSON.stringify(taskStoreModuleHref)}));
+        const openclawChatRooms = unwrap(await import(${JSON.stringify(openclawChatRoomsModuleHref)}));
+        const { join } = await import("node:path");
+
+        const abortedCalls = [];
+        const helpers = chatMod.createCollaborationChatHelpers({
+          abortCollaborationSessionRun: async (sessionKey, runId) => {
+            abortedCalls.push({ sessionKey, runId: runId || "" });
+            return { ok: true, aborted: false, runIds: [] };
+          },
+          buildCollaborationAttachmentSummary: () => "",
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message, statusCode = 400) => {
+            const error = new Error(message);
+            error.statusCode = statusCode;
+            return error;
+          },
+          describeCollaborationRoomEvent: () => ({ label: "", detail: "" }),
+          formatBytesCompact: () => "",
+          formatCollaborationDuration: (value) => String(value || 0) + "ms",
+          getOpenClawHomeDir: () => process.cwd(),
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          isUiLanguage: (value) => value === "en" || value === "zh",
+          normalizeCollaborationAttachmentIds: (input) => Array.isArray(input) ? input : [],
+          normalizeCollaborationRoomIdPayload: async (value) => value,
+          normalizeLookupKey: (value) => String(value || "").trim().toLowerCase(),
+          optionalBoundedString: (value) => typeof value === "string" ? value : undefined,
+          pickUiText: (language, english, chinese) => language === "zh" ? chinese : english,
+          resolveCollaborationParticipantName: (directory, agentId) =>
+            directory.entries.find((entry) => String(entry.agentId || "").toLowerCase() === String(agentId || "").toLowerCase())?.displayName || agentId,
+          sanitizeCollaborationDisplayText: (value) => String(value || "").trim(),
+          safeTruncate: (value, maxLength) => String(value || "").slice(0, maxLength),
+          toCollaborationApiAttachment: (attachment) => attachment,
+        });
+
+        const workspaceRoot = join(process.cwd(), "workspace");
+        const transcriptRoom = await openclawChatRooms.createOpenClawChatRoom({
+          agentId: "jarvis",
+          workspaceRoot,
+          openclawHomeDir: process.cwd(),
+          title: "Terminate room prestart miss",
+        });
+        await collaborationRoom.saveCollaborationRoom(
+          collaborationRoom.defaultCollaborationRoomState({
+            roomId: transcriptRoom.roomId,
+            title: "Terminate room prestart miss",
+            titleMode: "manual",
+          }),
+        );
+
+        const directory = {
+          primaryAgentId: "jarvis",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            { agentId: "jarvis", displayName: "Jarvis", aliases: ["jarvis"], workspaceRoot },
+          ],
+        };
+
+        let aborted = false;
+        const toolClient = {
+          agentTurn: async (request) =>
+            await new Promise((resolve) => {
+              const finishAbort = () => {
+                aborted = true;
+                resolve({
+                  ok: false,
+                  replyText: "",
+                  rawText: String(request.signal?.reason || "cancelled"),
+                  rawJson: {},
+                  durationMs: 25,
+                  failureReason: String(request.signal?.reason || "cancelled"),
+                  stopReason: "cancelled",
+                  errorMessage: String(request.signal?.reason || "cancelled"),
+                });
+              };
+              if (request.signal?.aborted) {
+                finishAbort();
+                return;
+              }
+              request.signal?.addEventListener("abort", finishAbort, { once: true });
+              setTimeout(() => {
+                resolve({
+                  ok: true,
+                  replyText: "[[reply_to_current]] This reply should never be written.",
+                  rawText: "[[reply_to_current]] This reply should never be written.",
+                  rawJson: {},
+                  durationMs: 400,
+                  sessionId: "session-jarvis",
+                  sessionKey: request.sessionKey,
+                });
+              }, 1200);
+            }),
+        };
+
+        await helpers.createCollaborationRoomMessage(
+          {
+            roomId: transcriptRoom.roomId,
+            text: "@jarvis Start a long-running task.",
+          },
+          toolClient,
+          directory,
+          "en",
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        const terminated = await helpers.terminateCollaborationRoomWork(
+          { roomId: transcriptRoom.roomId, language: "en" },
+          directory,
+          "en",
+        );
+        await new Promise((resolve) => setTimeout(resolve, 260));
+
+        const roomState = await collaborationRoom.loadCollaborationRoom(transcriptRoom.roomId);
+        const tasks = await taskStore.loadTaskStore();
+
+        process.stdout.write(JSON.stringify({
+          aborted,
+          abortedCalls,
+          terminated,
+          roomEventTypes: roomState.events.map((event) => event.type),
+          roomEventMessages: roomState.events.map((event) => event.message || event.detail || ""),
+          receipts: roomState.taskReceipts,
+          taskStatuses: tasks.tasks.map((task) => ({ taskId: task.taskId, status: task.status })),
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output) as {
+      aborted: boolean;
+      abortedCalls: Array<{ sessionKey: string; runId: string }>;
+      terminated: {
+        abortedTurnCount: number;
+        blockedTaskCount: number;
+        message: string;
+      };
+      roomEventTypes: string[];
+      roomEventMessages: string[];
+      receipts: Array<{
+        lastResultState?: string;
+        blockers?: string[];
+      }>;
+      taskStatuses: Array<{ taskId: string; status: string }>;
+    };
+
+    assert.equal(parsed.aborted, true);
+    assert(parsed.abortedCalls.length >= 2);
+    assert(parsed.abortedCalls.every((call) => /^agent:jarvis:thread:collab-/.test(call.sessionKey)));
+    assert(parsed.abortedCalls.every((call) => call.runId === ""));
+    assert.equal(parsed.terminated.abortedTurnCount, 1);
+    assert.equal(parsed.roomEventTypes.includes("agent_reply"), false);
+    assert.equal(parsed.roomEventTypes.includes("dispatch_failed"), false);
+    assert.equal(parsed.roomEventTypes.includes("system_note"), true);
+    assert(parsed.roomEventMessages.some((message) => /Stopped the current in-progress work/i.test(message)));
+    assert.equal(
+      parsed.roomEventMessages.some((message) => /OpenClaw may still continue replying in this room/i.test(message)),
+      false,
+    );
+    assert(parsed.receipts.some((receipt) => receipt.lastResultState === "blocked"));
+    assert(parsed.receipts.some((receipt) => (receipt.blockers || []).some((item) => /Stopped by the user/i.test(item))));
+    assert(parsed.taskStatuses.some((task) => task.status === "blocked"));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("room termination surfaces upstream abort failures instead of pretending the room was stopped", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-chat-terminate-room-failure-"));
+
+  try {
+    const output = await runCollaborationChatModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const chatMod = unwrap(await import(${JSON.stringify(collaborationChatModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const taskStore = unwrap(await import(${JSON.stringify(taskStoreModuleHref)}));
+        const openclawChatRooms = unwrap(await import(${JSON.stringify(openclawChatRoomsModuleHref)}));
+        const { join } = await import("node:path");
+
+        let aborted = false;
+        const abortedCalls = [];
+        const helpers = chatMod.createCollaborationChatHelpers({
+          abortCollaborationSessionRun: async (sessionKey, runId) => {
+            abortedCalls.push({ sessionKey, runId: runId || "" });
+            return { ok: true, aborted: false, runIds: [] };
+          },
+          buildCollaborationAttachmentSummary: () => "",
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message, statusCode = 400) => {
+            const error = new Error(message);
+            error.statusCode = statusCode;
+            return error;
+          },
+          describeCollaborationRoomEvent: () => ({ label: "", detail: "" }),
+          formatBytesCompact: () => "",
+          formatCollaborationDuration: (value) => String(value || 0) + "ms",
+          getOpenClawHomeDir: () => process.cwd(),
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          isUiLanguage: (value) => value === "en" || value === "zh",
+          normalizeCollaborationAttachmentIds: (input) => Array.isArray(input) ? input : [],
+          normalizeCollaborationRoomIdPayload: async (value) => value,
+          normalizeLookupKey: (value) => String(value || "").trim().toLowerCase(),
+          optionalBoundedString: (value) => typeof value === "string" ? value : undefined,
+          pickUiText: (language, english, chinese) => language === "zh" ? chinese : english,
+          resolveCollaborationParticipantName: (directory, agentId) =>
+            directory.entries.find((entry) => String(entry.agentId || "").toLowerCase() === String(agentId || "").toLowerCase())?.displayName || agentId,
+          sanitizeCollaborationDisplayText: (value) => String(value || "").trim(),
+          safeTruncate: (value, maxLength) => String(value || "").slice(0, maxLength),
+          toCollaborationApiAttachment: (attachment) => attachment,
+        });
+
+        const workspaceRoot = join(process.cwd(), "workspace");
+        const transcriptRoom = await openclawChatRooms.createOpenClawChatRoom({
+          agentId: "jarvis",
+          workspaceRoot,
+          openclawHomeDir: process.cwd(),
+          title: "Terminate room abort failure",
+        });
+        await collaborationRoom.saveCollaborationRoom(
+          collaborationRoom.defaultCollaborationRoomState({
+            roomId: transcriptRoom.roomId,
+            title: "Terminate room abort failure",
+            titleMode: "manual",
+          }),
+        );
+
+        const directory = {
+          primaryAgentId: "jarvis",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            { agentId: "jarvis", displayName: "Jarvis", aliases: ["jarvis"], workspaceRoot },
+          ],
+        };
+
+        const toolClient = {
+          agentTurn: (request) =>
+            new Promise((resolve) => {
+              setTimeout(() => {
+                request.onStreamEvent?.({
+                  state: "started",
+                  agentId: "jarvis",
+                  sessionKey: request.sessionKey,
+                  runId: "run-started-1",
+                });
+              }, 20);
+              const finishAbort = () => {
+                aborted = true;
+                resolve({
+                  ok: false,
+                  replyText: "",
+                  rawText: String(request.signal?.reason || "cancelled"),
+                  rawJson: {},
+                  durationMs: 25,
+                  failureReason: String(request.signal?.reason || "cancelled"),
+                  stopReason: "cancelled",
+                  errorMessage: String(request.signal?.reason || "cancelled"),
+                  runId: "run-started-1",
+                  sessionId: "session-jarvis",
+                  sessionKey: request.sessionKey,
+                });
+              };
+              if (request.signal?.aborted) {
+                finishAbort();
+                return;
+              }
+              request.signal?.addEventListener("abort", finishAbort, { once: true });
+            }),
+        };
+
+        await helpers.createCollaborationRoomMessage(
+          {
+            roomId: transcriptRoom.roomId,
+            text: "@jarvis Start a long-running task.",
+          },
+          toolClient,
+          directory,
+          "en",
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        let terminationError = "";
+        try {
+          await helpers.terminateCollaborationRoomWork(
+            { roomId: transcriptRoom.roomId, language: "en" },
+            directory,
+            "en",
+          );
+        } catch (error) {
+          terminationError = error instanceof Error ? error.message : String(error || "");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 260));
+
+        const roomState = await collaborationRoom.loadCollaborationRoom(transcriptRoom.roomId);
+        const tasks = await taskStore.loadTaskStore();
+
+        process.stdout.write(JSON.stringify({
+          aborted,
+          abortedCalls,
+          terminationError,
+          roomEventTypes: roomState.events.map((event) => event.type),
+          roomEventMessages: roomState.events.map((event) => event.message || event.detail || ""),
+          receipts: roomState.taskReceipts,
+          taskStatuses: tasks.tasks.map((task) => ({ taskId: task.taskId, status: task.status })),
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output) as {
+      aborted: boolean;
+      abortedCalls: Array<{ sessionKey: string; runId: string }>;
+      terminationError: string;
+      roomEventTypes: string[];
+      roomEventMessages: string[];
+      receipts: Array<{
+        lastResultState?: string;
+      }>;
+      taskStatuses: Array<{ taskId: string; status: string }>;
+    };
+
+    assert.equal(parsed.aborted, true);
+    assert.equal(parsed.abortedCalls.length, 1);
+    assert.equal(parsed.abortedCalls[0]?.runId, "run-started-1");
+    assert.match(parsed.terminationError, /Failed to stop 1 upstream collaboration session/i);
+    assert.equal(parsed.roomEventTypes.includes("system_note"), true);
+    assert(
+      parsed.roomEventMessages.some((message) =>
+        /OpenClaw may still continue replying in this room/i.test(message),
+      ),
+    );
+    assert.equal(
+      parsed.roomEventMessages.some((message) => /Stopped the current in-progress work/i.test(message)),
+      false,
+    );
+    assert.equal(parsed.receipts.some((receipt) => receipt.lastResultState === "blocked"), false);
+    assert.equal(parsed.taskStatuses.some((task) => task.status === "blocked"), false);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }

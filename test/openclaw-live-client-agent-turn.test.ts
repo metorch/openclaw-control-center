@@ -153,7 +153,7 @@ test("agentTurn extracts nested result payloads and flags nested interrupted tur
   }
 });
 
-test("agentTurn streams through the upstream /v1/responses endpoint when it is available", async () => {
+test("agentTurn streams through the upstream /v1/responses endpoint when gateway priority is not requested", async () => {
   const root = await mkdtemp(join(tmpdir(), "openclaw-live-agent-http-stream-"));
   const configPath = join(root, "openclaw.json");
   const previousGatewayUrl = process.env.GATEWAY_URL;
@@ -299,15 +299,15 @@ test("agentTurn streams through the upstream /v1/responses endpoint when it is a
     };
     patchedClient.sessionsHistory = async () => ({ rawText: "" });
 
-    const response = await client.agentTurn({
-      agentId: "main",
-      sessionKey: "agent:main:thread:collab-room-http",
-      message: "stream through responses",
-      timeoutSeconds: 20,
-      preferGatewayStream: true,
-      onStreamEvent: async (event) => {
-        streamEvents.push({
-          state: event.state,
+      const response = await client.agentTurn({
+        agentId: "main",
+        sessionKey: "agent:main:thread:collab-room-http",
+        message: "stream through responses",
+        timeoutSeconds: 20,
+        preferGatewayStream: false,
+        onStreamEvent: async (event) => {
+          streamEvents.push({
+            state: event.state,
           text: event.text,
           deltaText: event.deltaText,
           runId: event.runId,
@@ -350,6 +350,214 @@ test("agentTurn streams through the upstream /v1/responses endpoint when it is a
       delete (globalThis as { WebSocket?: unknown }).WebSocket;
     }
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agentTurn prefers the abortable gateway stream before /v1/responses when requested", async () => {
+  const previousGatewayUrl = process.env.GATEWAY_URL;
+  const previousWebSocketDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
+  const previousFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+  const streamEvents: Array<{ state: string; text?: string; runId?: string }> = [];
+  let fetchCalls = 0;
+
+  class FakeGatewayPriorityWebSocket {
+    private listeners = new Map<string, Array<(event: unknown) => void>>();
+
+    constructor(_url: string) {
+      setTimeout(() => {
+        this.emit("message", {
+          data: JSON.stringify({
+            type: "event",
+            event: "connect.challenge",
+            payload: { nonce: "nonce-stream-priority" },
+          }),
+        });
+      }, 0);
+    }
+
+    addEventListener(type: string, listener: (event: unknown) => void): void {
+      const current = this.listeners.get(type) ?? [];
+      current.push(listener);
+      this.listeners.set(type, current);
+    }
+
+    send(data: string): void {
+      const frame = JSON.parse(data) as {
+        id?: string;
+        method?: string;
+        params?: { sessionKey?: string };
+      };
+      if (frame.method === "connect") {
+        setTimeout(() => {
+          this.emit("message", {
+            data: JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { protocol: 3 },
+            }),
+          });
+        }, 0);
+        return;
+      }
+      if (frame.method === "chat.send") {
+        setTimeout(() => {
+          this.emit("message", {
+            data: JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { runId: "run-stream-priority-1" },
+            }),
+          });
+        }, 0);
+        setTimeout(() => {
+          this.emit("message", {
+            data: JSON.stringify({
+              type: "event",
+              event: "chat",
+              payload: {
+                runId: "run-stream-priority-1",
+                sessionKey: frame.params?.sessionKey,
+                seq: 1,
+                state: "delta",
+                text: "Gateway priority answer",
+              },
+            }),
+          });
+        }, 20);
+        setTimeout(() => {
+          this.emit("message", {
+            data: JSON.stringify({
+              type: "event",
+              event: "chat",
+              payload: {
+                runId: "run-stream-priority-1",
+                sessionKey: frame.params?.sessionKey,
+                seq: 2,
+                state: "final",
+                text: "Gateway priority answer",
+                stopReason: "stop",
+              },
+            }),
+          });
+        }, 40);
+      }
+    }
+
+    close(): void {
+      // No-op in the fake socket.
+    }
+
+    private emit(type: string, event: unknown): void {
+      for (const listener of this.listeners.get(type) ?? []) {
+        listener(event);
+      }
+    }
+  }
+
+  try {
+    process.env.GATEWAY_URL = "ws://127.0.0.1:18789";
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: async () => {
+        fetchCalls += 1;
+        return new Response("responses should not be used when gateway priority is requested", {
+          status: 500,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      },
+    });
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      writable: true,
+      value: FakeGatewayPriorityWebSocket,
+    });
+
+    const client = new OpenClawLiveClient();
+    const patchedClient = client as OpenClawLiveClient & {
+      sessionsList: () => Promise<{
+        sessions: Array<{
+          sessionId: string;
+          sessionKey: string;
+          agentId: string;
+          updatedAtMs: number;
+          active: boolean;
+          state: string;
+        }>;
+      }>;
+      sessionsHistory: (request: { sessionKey: string; limit?: number }) => Promise<{ rawText: string }>;
+    };
+
+    patchedClient.sessionsList = async () => ({
+      sessions: [
+        {
+          sessionId: "session-main",
+          sessionKey: "agent:main:thread:collab-room-priority",
+          agentId: "main",
+          updatedAtMs: Date.now(),
+          active: true,
+          state: "active",
+        },
+      ],
+    });
+    patchedClient.sessionsHistory = async () => ({
+      rawText: [
+        JSON.stringify({
+          type: "message",
+          timestamp: new Date(Date.now() + 10).toISOString(),
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "Gateway priority answer",
+                textSignature: '{"phase":"final_answer"}',
+              },
+            ],
+            stopReason: "stop",
+          },
+        }),
+      ].join("\n"),
+    });
+
+    const response = await client.agentTurn({
+      agentId: "main",
+      sessionKey: "agent:main:thread:collab-room-priority",
+      message: "prefer the gateway stream first",
+      timeoutSeconds: 20,
+      preferGatewayStream: true,
+      onStreamEvent: async (event) => {
+        streamEvents.push({
+          state: event.state,
+          text: event.text,
+          runId: event.runId,
+        });
+      },
+    });
+
+    assert.equal(response.ok, true);
+    assert.equal(response.runId, "run-stream-priority-1");
+    assert.equal(response.replyText, "Gateway priority answer");
+    assert.equal(response.stopReason, "stop");
+    assert.equal(fetchCalls, 0);
+    assert.deepEqual(
+      streamEvents.map((event) => event.state),
+      ["started", "delta", "final"],
+    );
+  } finally {
+    process.env.GATEWAY_URL = previousGatewayUrl;
+    if (previousFetchDescriptor) {
+      Object.defineProperty(globalThis, "fetch", previousFetchDescriptor);
+    } else {
+      delete (globalThis as { fetch?: unknown }).fetch;
+    }
+    if (previousWebSocketDescriptor) {
+      Object.defineProperty(globalThis, "WebSocket", previousWebSocketDescriptor);
+    } else {
+      delete (globalThis as { WebSocket?: unknown }).WebSocket;
+    }
   }
 });
 

@@ -17,11 +17,14 @@ const COLLABORATION_RECENT_SUMMARY_MAX_ITEMS = 6;
 const COLLABORATION_RECENT_SUMMARY_MAX_TOTAL_CHARS = 1200;
 const COLLABORATION_RECENT_SUMMARY_ITEM_MAX_CHARS = 220;
 const COLLABORATION_RECENT_SUMMARY_LOOKBACK_EVENTS = 40;
+const COLLABORATION_ABORT_PRESTART_MAX_ATTEMPTS = 4;
+const COLLABORATION_ABORT_PRESTART_RETRY_DELAY_MS = 350;
 
 let collaborationTaskStoreWriteChain = Promise.resolve();
 
 function createCollaborationChatHelpers(deps) {
   const {
+    abortCollaborationSessionRun,
     buildCollaborationAttachmentSummary,
     buildSessionDetailHref,
     createRequestValidationError,
@@ -68,6 +71,11 @@ function createCollaborationChatHelpers(deps) {
       taskId: void 0,
       taskTitle: void 0,
       stage: void 0,
+      sessionKey: void 0,
+      runId: void 0,
+      streamStarted: false,
+      streamStartedAt: void 0,
+      lastStreamState: void 0,
     };
     collaborationActiveTurns.set(turnId, handle);
     return handle;
@@ -97,6 +105,145 @@ function createCollaborationChatHelpers(deps) {
       handle.abortController?.signal?.aborted === true ||
       currentCollaborationRoomAbortGeneration(handle.roomId) > Number(handle.abortGeneration || 0)
     );
+  }
+
+  function normalizeCollaborationTurnRunId(value) {
+    const trimmed = String(value || "").trim();
+    return trimmed || void 0;
+  }
+
+  function hasCollaborationTurnStreamStarted(handle) {
+    return handle?.streamStarted === true || Boolean(normalizeCollaborationTurnRunId(handle?.runId));
+  }
+
+  function buildCollaborationActiveTurnStreamPatch(handle, input) {
+    const patch = {};
+    const sessionKey = String(input?.sessionKey || "").trim();
+    if (sessionKey) {
+      patch.sessionKey = sessionKey;
+    }
+    const runId = normalizeCollaborationTurnRunId(input?.runId);
+    if (runId) {
+      patch.runId = runId;
+    }
+    const state = String(input?.state || "").trim().toLowerCase();
+    if (state) {
+      patch.lastStreamState = state;
+    }
+    const streamStarted =
+      hasCollaborationTurnStreamStarted(handle) ||
+      Boolean(runId) ||
+      state === "started" ||
+      state === "delta" ||
+      state === "final";
+    if (streamStarted) {
+      patch.streamStarted = true;
+      if (!handle?.streamStartedAt) {
+        patch.streamStartedAt = new Date().toISOString();
+      }
+    }
+    return patch;
+  }
+
+  function shouldAcceptPrestartCollaborationAbortMiss(handle) {
+    return Boolean(handle?.abortController?.signal?.aborted) && !hasCollaborationTurnStreamStarted(handle);
+  }
+
+  function selectPreferredAbortTargetHandle(currentHandle, nextHandle) {
+    if (!currentHandle) {
+      return nextHandle;
+    }
+    if (!nextHandle) {
+      return currentHandle;
+    }
+    if (!hasCollaborationTurnStreamStarted(currentHandle) && hasCollaborationTurnStreamStarted(nextHandle)) {
+      return nextHandle;
+    }
+    if (!normalizeCollaborationTurnRunId(currentHandle.runId) && normalizeCollaborationTurnRunId(nextHandle.runId)) {
+      return nextHandle;
+    }
+    return currentHandle;
+  }
+
+  function buildCollaborationAbortTargets(handles) {
+    const bySessionKey = new Map();
+    for (const handle of handles || []) {
+      const sessionKey = String(handle?.sessionKey || "").trim();
+      if (!sessionKey) {
+        continue;
+      }
+      const key = sessionKey.toLowerCase();
+      const current = bySessionKey.get(key);
+      if (!current) {
+        bySessionKey.set(key, { sessionKey, handle });
+        continue;
+      }
+      current.handle = selectPreferredAbortTargetHandle(current.handle, handle);
+      if (current.handle === handle) {
+        current.sessionKey = sessionKey;
+      }
+    }
+    return [...bySessionKey.values()];
+  }
+
+  async function sleep(ms) {
+    const timeoutMs = Math.max(0, Number(ms) || 0);
+    if (!timeoutMs) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, timeoutMs));
+  }
+
+  async function abortCollaborationActiveTurn(handle) {
+    const sessionKey = String(handle?.sessionKey || "").trim();
+    if (!sessionKey) {
+      return {
+        ok: true,
+        sessionKey,
+      };
+    }
+    if (typeof abortCollaborationSessionRun !== "function") {
+      return {
+        ok: false,
+        sessionKey,
+        message: "No upstream abort transport is configured for collaboration room termination.",
+      };
+    }
+    const maxAttempts = shouldAcceptPrestartCollaborationAbortMiss(handle)
+      ? COLLABORATION_ABORT_PRESTART_MAX_ATTEMPTS
+      : 1;
+    let lastResult = void 0;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      lastResult = await abortCollaborationSessionRun(
+        sessionKey,
+        normalizeCollaborationTurnRunId(handle?.runId),
+      );
+      if (!lastResult || lastResult.aborted !== false) {
+        return {
+          ok: true,
+          sessionKey,
+          result: lastResult,
+        };
+      }
+      if (!shouldAcceptPrestartCollaborationAbortMiss(handle) || attempt >= maxAttempts) {
+        break;
+      }
+      await sleep(COLLABORATION_ABORT_PRESTART_RETRY_DELAY_MS);
+    }
+    if (lastResult && lastResult.aborted === false && shouldAcceptPrestartCollaborationAbortMiss(handle)) {
+      return {
+        ok: true,
+        sessionKey,
+        result: lastResult,
+        acceptedPrestartCancellation: true,
+      };
+    }
+    return {
+      ok: false,
+      sessionKey,
+      message: "Upstream gateway reported no active run to abort.",
+      result: lastResult,
+    };
   }
 
   async function createCollaborationRoomMessage(payload, toolClient, directory, defaultLanguage) {
@@ -215,6 +362,7 @@ function createCollaborationChatHelpers(deps) {
       (handle) => String(handle.roomId || "").trim() === roomId,
     );
     const activeAgentIds = uniqueCompactStrings(activeTurns.map((handle) => handle.agentId));
+    const activeAbortTargets = buildCollaborationAbortTargets(activeTurns);
     for (const handle of activeTurns) {
       try {
         handle.abortController.abort(
@@ -232,6 +380,56 @@ function createCollaborationChatHelpers(deps) {
           agentId: handle.agentId,
         });
       }
+    }
+    const abortFailures = [];
+    if (activeAbortTargets.length > 0) {
+      const abortResults = await Promise.allSettled(
+        activeAbortTargets.map(async (target) => {
+          const result = await abortCollaborationActiveTurn(target.handle);
+          if (!result?.ok) {
+            throw new Error(result?.message || "Unknown abort failure.");
+          }
+          return target.sessionKey;
+        }),
+      );
+      abortResults.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          return;
+        }
+        abortFailures.push({
+          sessionKey: activeAbortTargets[index]?.sessionKey || "",
+          message: result.reason instanceof Error ? result.reason.message : String(result.reason || "Unknown abort failure."),
+        });
+      });
+    }
+    if (abortFailures.length > 0) {
+      const failureMessage = `Failed to stop ${abortFailures.length} upstream collaboration session(s). OpenClaw may still continue replying in this room.`;
+      /*
+      const failureMessage = pickUiText(
+        language,
+        `Failed to stop ${abortFailures.length} upstream collaboration session(s). OpenClaw may still continue replying in this room.`,
+        `鏈兘鍋滄 ${abortFailures.length} 涓笂娓稿崗浣滀細璇濄€侽penClaw 浠嶅彲鑳戒細鍦ㄨ鎴块棿缁х画鍥炲銆俙,
+      );
+      */
+      const failureDetail = abortFailures
+        .map((item) => `${item.sessionKey}: ${item.message}`)
+        .join(" | ");
+      await import_collaboration_room
+        .appendCollaborationRoomEvents(roomId, [
+          {
+            eventId: randomUUID(),
+            type: "system_note",
+            authorRole: "system",
+            agentId: directory.primaryAgentId,
+            message: failureMessage,
+            detail: failureDetail || failureMessage,
+          },
+        ])
+        .catch(() => void 0);
+      throw createRequestValidationError(
+        failureDetail ? `${failureMessage} ${failureDetail}` : failureMessage,
+        409,
+      );
     }
     const roomState = await import_collaboration_room.loadCollaborationRoom(roomId);
     const projectStore = await import_project_store.loadProjectStore().catch(() => ({ projects: [] }));
@@ -2584,6 +2782,14 @@ function createCollaborationChatHelpers(deps) {
         agentId: input.targetAgentId,
       });
     const handleLiveStreamEvent = (event) => {
+      updateCollaborationActiveTurn(
+        activeTurn,
+        buildCollaborationActiveTurnStreamPatch(activeTurn, {
+          sessionKey: event?.sessionKey || activeTurn.sessionKey || liveDraftSessionKey,
+          runId: event?.runId,
+          state: event?.state,
+        }),
+      );
       if (isCollaborationTurnCancelled(activeTurn)) {
         return;
       }
@@ -2630,6 +2836,7 @@ function createCollaborationChatHelpers(deps) {
       taskId: dispatchRecord.taskId,
       taskTitle: dispatchRecord.title,
       stage: dispatchRecord.stage,
+      sessionKey: binding?.sessionKey || liveDraftSessionKey,
     });
     await upsertCollaborationTaskRecord({
       projectId: projectContext.project.projectId,
@@ -2676,10 +2883,20 @@ function createCollaborationChatHelpers(deps) {
       onStreamEvent: handleLiveStreamEvent,
       signal: activeTurn.abortController.signal,
     });
+    updateCollaborationActiveTurn(
+      activeTurn,
+      buildCollaborationActiveTurnStreamPatch(activeTurn, {
+        sessionKey: nextResponse.sessionKey ?? binding?.sessionKey ?? liveDraftSessionKey,
+        runId: nextResponse.runId,
+      }),
+    );
     if (isCollaborationTurnCancelled(activeTurn)) {
       return;
     }
     if (nextResponse.sessionId) {
+      updateCollaborationActiveTurn(activeTurn, {
+        sessionKey: nextResponse.sessionKey ?? binding?.sessionKey ?? liveDraftSessionKey,
+      });
       await import_collaboration_room.setCollaborationSessionBinding(
         input.roomId,
         input.targetAgentId,
@@ -2721,12 +2938,24 @@ function createCollaborationChatHelpers(deps) {
           onStreamEvent: handleLiveStreamEvent,
           signal: activeTurn.abortController.signal,
         });
+        updateCollaborationActiveTurn(
+          activeTurn,
+          buildCollaborationActiveTurnStreamPatch(activeTurn, {
+            sessionKey:
+              resumedResponse.sessionKey ?? nextResponse.sessionKey ?? binding?.sessionKey ?? liveDraftSessionKey,
+            runId: resumedResponse.runId ?? nextResponse.runId,
+          }),
+        );
         if (isCollaborationTurnCancelled(activeTurn)) {
           return;
         }
         interruptedDurationMs += resumedResponse.durationMs;
         interruptedOutputs.push(describeCollaborationAgentTurnOutput(resumedResponse, stageResultFallback));
         if (resumedResponse.sessionId) {
+          updateCollaborationActiveTurn(activeTurn, {
+            sessionKey:
+              resumedResponse.sessionKey ?? nextResponse.sessionKey ?? binding?.sessionKey ?? liveDraftSessionKey,
+          });
           await import_collaboration_room.setCollaborationSessionBinding(
             input.roomId,
             input.targetAgentId,

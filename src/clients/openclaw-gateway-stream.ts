@@ -1,5 +1,14 @@
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  randomUUID,
+  sign,
+} from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import type { AgentTurnStreamEvent } from "../contracts/openclaw-tools";
 import { resolveOpenClawConfigPath } from "../runtime/current-agent-catalog";
 
@@ -18,6 +27,7 @@ const CONTROL_CENTER_OPERATOR_SCOPES = [
   "operator.read",
   "operator.write",
 ] as const;
+const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 interface OpenClawGatewayStreamRequest {
   agentId: string;
@@ -26,6 +36,12 @@ interface OpenClawGatewayStreamRequest {
   timeoutSeconds: number;
   onStreamEvent?: (event: AgentTurnStreamEvent) => void | Promise<void>;
   signal?: AbortSignal;
+}
+
+export interface OpenClawGatewayAbortRequest {
+  sessionKey: string;
+  runId?: string;
+  timeoutMs?: number;
 }
 
 export interface OpenClawGatewayStreamResult {
@@ -37,10 +53,31 @@ export interface OpenClawGatewayStreamResult {
   rawPayload?: Record<string, unknown>;
 }
 
+export interface OpenClawGatewayAbortResult {
+  ok: boolean;
+  aborted: boolean;
+  runIds: string[];
+  rawPayload?: Record<string, unknown>;
+}
+
 interface GatewayConnectionConfig {
+  openClawHomeDir: string;
   url: string;
   token?: string;
   password?: string;
+  deviceToken?: string;
+  deviceIdentity?: GatewayDeviceIdentity;
+}
+
+interface GatewayDeviceIdentity {
+  deviceId: string;
+  publicKeyPem: string;
+  privateKeyPem: string;
+}
+
+interface GatewayStoredDeviceAuthToken {
+  token: string;
+  scopes: string[];
 }
 
 interface GatewayWebSocketLike {
@@ -206,27 +243,12 @@ export async function streamOpenClawGatewayAgentTurn(
       return;
     }
     connectSent = true;
+    const connectParams = buildGatewayConnectParams(connection, nonce);
     sendFrame({
       type: "req",
       id: connectRequestId,
       method: "connect",
-      params: {
-        minProtocol: GATEWAY_PROTOCOL_VERSION,
-        maxProtocol: GATEWAY_PROTOCOL_VERSION,
-        client: {
-          id: CONTROL_CENTER_CLIENT_ID,
-          displayName: CONTROL_CENTER_CLIENT_DISPLAY_NAME,
-          version: CONTROL_CENTER_CLIENT_VERSION,
-          platform: process.platform,
-          mode: CONTROL_CENTER_CLIENT_MODE,
-        },
-        role: CONTROL_CENTER_OPERATOR_ROLE,
-        scopes: [...CONTROL_CENTER_OPERATOR_SCOPES],
-        auth: {
-          ...(connection.token ? { token: connection.token } : {}),
-          ...(connection.password ? { password: connection.password } : {}),
-        },
-      },
+      params: connectParams,
     });
   };
 
@@ -238,6 +260,7 @@ export async function streamOpenClawGatewayAgentTurn(
       rejectOnce(new GatewayStreamStartError(resolveGatewayFrameErrorMessage(frame, "Gateway connect failed.")));
       return;
     }
+    persistGatewayConnectAuthToken(connection, asObject(asObject(frame.payload)?.auth)).catch(() => void 0);
     if (chatSendSent) {
       return;
     }
@@ -467,6 +490,166 @@ export async function streamOpenClawGatewayAgentTurn(
   }
 }
 
+export async function abortOpenClawGatewayChatRun(
+  request: OpenClawGatewayAbortRequest,
+): Promise<OpenClawGatewayAbortResult> {
+  const sessionKey = asString(request.sessionKey)?.trim();
+  if (!sessionKey) {
+    throw new GatewayStreamStartError("Gateway chat.abort requires a sessionKey.");
+  }
+
+  const connection = await resolveGatewayConnectionConfig();
+  const WebSocketCtor = resolveWebSocketCtor();
+  const socket = new WebSocketCtor(connection.url);
+  const connectRequestId = randomUUID();
+  const abortRequestId = randomUUID();
+  const timeoutMs = Math.max(1_000, asNumber(request.timeoutMs) ?? GATEWAY_CONNECT_TIMEOUT_MS);
+
+  let settled = false;
+  let connectSent = false;
+  let abortSent = false;
+  let timer: NodeJS.Timeout | undefined;
+
+  const cleanup = (): void => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    try {
+      socket.close();
+    } catch {
+      // Ignore close races.
+    }
+  };
+
+  let resolvePromise!: (value: OpenClawGatewayAbortResult) => void;
+  let rejectPromise!: (reason?: unknown) => void;
+  const done = new Promise<OpenClawGatewayAbortResult>((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+
+  const resolveOnce = (value: OpenClawGatewayAbortResult): void => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    cleanup();
+    resolvePromise(value);
+  };
+
+  const rejectOnce = (error: Error): void => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    cleanup();
+    rejectPromise(error);
+  };
+
+  const sendFrame = (frame: Record<string, unknown>): void => {
+    socket.send(JSON.stringify(frame));
+  };
+
+  const handleConnectChallenge = (frame: Record<string, unknown>): void => {
+    const nonce = asString(asObject(frame.payload)?.nonce)?.trim();
+    if (!nonce) {
+      rejectOnce(new GatewayStreamStartError("Gateway connect challenge missing nonce."));
+      return;
+    }
+    if (connectSent) {
+      return;
+    }
+    connectSent = true;
+    const connectParams = buildGatewayConnectParams(connection, nonce);
+    sendFrame({
+      type: "req",
+      id: connectRequestId,
+      method: "connect",
+      params: connectParams,
+    });
+  };
+
+  const handleConnectResponse = (frame: Record<string, unknown>): void => {
+    if (frame.id !== connectRequestId) {
+      return;
+    }
+    if (frame.ok !== true) {
+      rejectOnce(new GatewayStreamStartError(resolveGatewayFrameErrorMessage(frame, "Gateway connect failed.")));
+      return;
+    }
+    persistGatewayConnectAuthToken(connection, asObject(asObject(frame.payload)?.auth)).catch(() => void 0);
+    if (abortSent) {
+      return;
+    }
+    abortSent = true;
+    sendFrame({
+      type: "req",
+      id: abortRequestId,
+      method: "chat.abort",
+      params: {
+        sessionKey,
+        ...(request.runId ? { runId: request.runId } : {}),
+      },
+    });
+  };
+
+  const handleAbortResponse = (frame: Record<string, unknown>): void => {
+    if (frame.id !== abortRequestId) {
+      return;
+    }
+    if (frame.ok !== true) {
+      rejectOnce(new GatewayStreamStartError(resolveGatewayFrameErrorMessage(frame, "Gateway chat.abort failed.")));
+      return;
+    }
+    const payload = asObject(frame.payload);
+    const runIds = asStringArray(payload?.runIds);
+    resolveOnce({
+      ok: true,
+      aborted: asBoolean(payload?.aborted) === true || runIds.length > 0,
+      runIds,
+      rawPayload: payload,
+    });
+  };
+
+  const handleClose = (event?: { code?: number; reason?: string }): void => {
+    if (settled) {
+      return;
+    }
+    rejectOnce(new GatewayStreamStartError(formatGatewayCloseReason(event)));
+  };
+
+  bindWebSocketEvent(socket, "message", (event) => {
+    const raw = normalizeWebSocketEventData(event);
+    if (!raw) {
+      return;
+    }
+    const parsed = parseJsonRecord(raw);
+    if (!parsed) {
+      return;
+    }
+    if (asString(parsed.event) === "connect.challenge") {
+      handleConnectChallenge(parsed);
+      return;
+    }
+    handleConnectResponse(parsed);
+    handleAbortResponse(parsed);
+  });
+  bindWebSocketEvent(socket, "close", (event) => {
+    handleClose(event as { code?: number; reason?: string });
+  });
+  bindWebSocketEvent(socket, "error", () => {
+    handleClose();
+  });
+
+  timer = setTimeout(() => {
+    rejectOnce(new GatewayStreamStartError("Timed out while sending the upstream gateway chat.abort request."));
+  }, timeoutMs);
+  timer.unref?.();
+
+  return await done;
+}
+
 function resolveAbortSignalMessage(signal?: AbortSignal): string {
   const reason = signal?.reason;
   if (typeof reason === "string" && reason.trim()) {
@@ -479,6 +662,7 @@ function resolveAbortSignalMessage(signal?: AbortSignal): string {
 }
 
 async function resolveGatewayConnectionConfig(): Promise<GatewayConnectionConfig> {
+  const openClawHomeDir = resolveGatewayOpenClawHomeDir();
   const config = await readGatewayConfigSnapshot();
   const gateway = asObject(config?.gateway);
   const remote = asObject(gateway?.remote);
@@ -509,11 +693,19 @@ async function resolveGatewayConnectionConfig(): Promise<GatewayConnectionConfig
   const configPassword = isRemoteMode
     ? readCredential(remote?.password) || readCredential(gatewayAuth?.password)
     : readCredential(gatewayAuth?.password) || readCredential(remote?.password);
+  const deviceIdentity = await loadOrCreateGatewayDeviceIdentity(openClawHomeDir).catch(() => undefined);
+  const storedDeviceToken = await loadGatewayStoredDeviceAuthToken({
+    openClawHomeDir,
+    deviceId: deviceIdentity?.deviceId,
+  }).catch(() => undefined);
 
   return {
+    openClawHomeDir,
     url,
     token: envToken || configToken,
     password: envPassword || configPassword,
+    deviceToken: storedDeviceToken?.token,
+    deviceIdentity,
   };
 }
 
@@ -786,6 +978,289 @@ function normalizeGatewayWebSocketUrl(input: string): string {
   }
 }
 
+function resolveGatewayOpenClawHomeDir(): string {
+  const explicitHome = normalizeConfiguredPath(process.env.OPENCLAW_HOME);
+  if (explicitHome) {
+    return explicitHome;
+  }
+  const configuredPath = normalizeConfiguredPath(resolveOpenClawConfigPath());
+  if (configuredPath && isAbsolute(configuredPath)) {
+    return dirname(configuredPath);
+  }
+  return join(homedir(), ".openclaw");
+}
+
+function normalizeConfiguredPath(input: unknown): string | undefined {
+  if (typeof input !== "string") {
+    return undefined;
+  }
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "undefined" || lowered === "null") {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function buildGatewayConnectParams(
+  connection: GatewayConnectionConfig,
+  nonce: string,
+): Record<string, unknown> {
+  const authToken = connection.token || connection.deviceToken;
+  return {
+    minProtocol: GATEWAY_PROTOCOL_VERSION,
+    maxProtocol: GATEWAY_PROTOCOL_VERSION,
+    client: {
+      id: CONTROL_CENTER_CLIENT_ID,
+      displayName: CONTROL_CENTER_CLIENT_DISPLAY_NAME,
+      version: CONTROL_CENTER_CLIENT_VERSION,
+      platform: process.platform,
+      mode: CONTROL_CENTER_CLIENT_MODE,
+    },
+    role: CONTROL_CENTER_OPERATOR_ROLE,
+    scopes: [...CONTROL_CENTER_OPERATOR_SCOPES],
+    auth: {
+      ...(authToken ? { token: authToken } : {}),
+      ...(connection.password ? { password: connection.password } : {}),
+    },
+    ...(connection.deviceIdentity
+      ? {
+          device: buildGatewaySignedDevice({
+            deviceIdentity: connection.deviceIdentity,
+            nonce,
+            token: authToken,
+          }),
+        }
+      : {}),
+  };
+}
+
+function buildGatewaySignedDevice(input: {
+  deviceIdentity: GatewayDeviceIdentity;
+  nonce: string;
+  token?: string;
+}): Record<string, unknown> {
+  const signedAtMs = Date.now();
+  const payload = buildGatewayDeviceAuthPayloadV3({
+    deviceId: input.deviceIdentity.deviceId,
+    clientId: CONTROL_CENTER_CLIENT_ID,
+    clientMode: CONTROL_CENTER_CLIENT_MODE,
+    role: CONTROL_CENTER_OPERATOR_ROLE,
+    scopes: [...CONTROL_CENTER_OPERATOR_SCOPES],
+    signedAtMs,
+    token: input.token,
+    nonce: input.nonce,
+    platform: process.platform,
+    deviceFamily: "",
+  });
+  return {
+    id: input.deviceIdentity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(input.deviceIdentity.publicKeyPem),
+    signature: base64UrlEncode(
+      sign(null, Buffer.from(payload, "utf8"), createPrivateKey(input.deviceIdentity.privateKeyPem)),
+    ),
+    signedAt: signedAtMs,
+    nonce: input.nonce,
+  };
+}
+
+function buildGatewayDeviceAuthPayloadV3(input: {
+  deviceId: string;
+  clientId: string;
+  clientMode: string;
+  role: string;
+  scopes: readonly string[];
+  signedAtMs: number;
+  token?: string;
+  nonce: string;
+  platform?: string;
+  deviceFamily?: string;
+}): string {
+  return [
+    "v3",
+    input.deviceId,
+    input.clientId,
+    input.clientMode,
+    input.role,
+    input.scopes.join(","),
+    String(input.signedAtMs),
+    input.token ?? "",
+    input.nonce,
+    normalizeGatewayDeviceMetadata(input.platform),
+    normalizeGatewayDeviceMetadata(input.deviceFamily),
+  ].join("|");
+}
+
+function normalizeGatewayDeviceMetadata(input: unknown): string {
+  return typeof input === "string" ? input.replace(/[|\r\n]+/g, " ").trim() : "";
+}
+
+function base64UrlEncode(input: Buffer): string {
+  return input.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+}
+
+function publicKeyRawBase64UrlFromPem(publicKeyPem: string): string {
+  const key = createPublicKey(publicKeyPem);
+  const spki = key.export({ type: "spki", format: "der" }) as Buffer;
+  if (
+    spki.length === ED25519_SPKI_PREFIX.length + 32 &&
+    spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
+  ) {
+    return base64UrlEncode(spki.subarray(ED25519_SPKI_PREFIX.length));
+  }
+  return base64UrlEncode(spki);
+}
+
+function deriveGatewayDeviceId(publicKeyPem: string): string {
+  const key = createPublicKey(publicKeyPem);
+  const spki = key.export({ type: "spki", format: "der" }) as Buffer;
+  const raw =
+    spki.length === ED25519_SPKI_PREFIX.length + 32 &&
+    spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
+      ? spki.subarray(ED25519_SPKI_PREFIX.length)
+      : spki;
+  return createHash("sha256").update(raw).digest("hex");
+}
+
+async function loadOrCreateGatewayDeviceIdentity(
+  openClawHomeDir: string,
+): Promise<GatewayDeviceIdentity | undefined> {
+  const identityPath = join(openClawHomeDir, "identity", "device.json");
+  const parsed = parseJsonRecord(await safeReadTextFile(identityPath));
+  const existing = asGatewayDeviceIdentity(parsed);
+  if (existing) {
+    const derivedId = deriveGatewayDeviceId(existing.publicKeyPem);
+    if (derivedId === existing.deviceId) {
+      return existing;
+    }
+    const repairedIdentity = {
+      ...existing,
+      deviceId: derivedId,
+    };
+    await mkdir(dirname(identityPath), { recursive: true });
+    await writeFile(
+      identityPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          ...repairedIdentity,
+          createdAtMs: Date.now(),
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    return repairedIdentity;
+  }
+
+  const generated = generateKeyPairSync("ed25519");
+  const publicKeyPem = generated.publicKey.export({ type: "spki", format: "pem" }).toString();
+  const privateKeyPem = generated.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const deviceId = deriveGatewayDeviceId(publicKeyPem);
+  await mkdir(dirname(identityPath), { recursive: true });
+  await writeFile(
+    identityPath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        deviceId,
+        publicKeyPem,
+        privateKeyPem,
+        createdAtMs: Date.now(),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return {
+    deviceId,
+    publicKeyPem,
+    privateKeyPem,
+  };
+}
+
+async function loadGatewayStoredDeviceAuthToken(input: {
+  openClawHomeDir: string;
+  deviceId?: string;
+}): Promise<GatewayStoredDeviceAuthToken | undefined> {
+  if (!input.deviceId) {
+    return undefined;
+  }
+  const store = parseJsonRecord(
+    await safeReadTextFile(join(input.openClawHomeDir, "identity", "device-auth.json")),
+  );
+  const tokens = asObject(store?.tokens);
+  const operator = asObject(tokens?.operator);
+  const token = asString(operator?.token)?.trim();
+  if (
+    asNumber(store?.version) !== 1 ||
+    asString(store?.deviceId)?.trim() !== input.deviceId ||
+    !token
+  ) {
+    return undefined;
+  }
+  return {
+    token,
+    scopes: asStringArray(operator?.scopes),
+  };
+}
+
+async function persistGatewayConnectAuthToken(
+  connection: GatewayConnectionConfig,
+  auth: Record<string, unknown> | undefined,
+): Promise<void> {
+  const deviceIdentity = connection.deviceIdentity;
+  const deviceToken = asString(auth?.deviceToken)?.trim();
+  if (!deviceIdentity || !deviceToken) {
+    return;
+  }
+  const scopes = asStringArray(auth?.scopes);
+  const storePath = join(connection.openClawHomeDir, "identity", "device-auth.json");
+  const nextStore = {
+    version: 1,
+    deviceId: deviceIdentity.deviceId,
+    tokens: {
+      operator: {
+        token: deviceToken,
+        role: CONTROL_CENTER_OPERATOR_ROLE,
+        scopes,
+        updatedAtMs: Date.now(),
+      },
+    },
+  };
+  await mkdir(dirname(storePath), { recursive: true });
+  await writeFile(storePath, `${JSON.stringify(nextStore, null, 2)}\n`, "utf8");
+}
+
+async function safeReadTextFile(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function asGatewayDeviceIdentity(
+  input: Record<string, unknown> | undefined,
+): GatewayDeviceIdentity | undefined {
+  const deviceId = asString(input?.deviceId)?.trim();
+  const publicKeyPem = asString(input?.publicKeyPem);
+  const privateKeyPem = asString(input?.privateKeyPem);
+  if (!deviceId || !publicKeyPem || !privateKeyPem) {
+    return undefined;
+  }
+  return {
+    deviceId,
+    publicKeyPem,
+    privateKeyPem,
+  };
+}
+
 function readEnvString(names: string[]): string | undefined {
   for (const name of names) {
     const value = process.env[name]?.trim();
@@ -816,4 +1291,11 @@ function asNumber(input: unknown): number | undefined {
 
 function asBoolean(input: unknown): boolean | undefined {
   return typeof input === "boolean" ? input : undefined;
+}
+
+function asStringArray(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  return input.filter((value): value is string => typeof value === "string" && value.trim() !== "");
 }

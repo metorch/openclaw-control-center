@@ -24,6 +24,7 @@ const import_node_fs = require("node:fs");
 const import_promises = require("node:fs/promises");
 const import_node_os = require("node:os");
 const import_node_path = require("node:path");
+const import_openclaw_gateway_stream = require("../clients/openclaw-gateway-stream");
 const import_config = require("../config");
 const import_openclaw_mappers = require("../mappers/openclaw-mappers");
 const import_api_docs = require("../runtime/api-docs");
@@ -161,6 +162,9 @@ const collaborationRoomHelpers = createCollaborationRoomHelpers({
     toSortableMs
 });
 const collaborationChatHelpers = createCollaborationChatHelpers({
+    abortCollaborationSessionRun: async (sessionKey, runId) => {
+        return await import_openclaw_gateway_stream.abortOpenClawGatewayChatRun({ sessionKey, runId, timeoutMs: 5000 });
+    },
     buildCollaborationAttachmentSummary: (attachment) => collaborationRoomHelpers.buildCollaborationAttachmentSummary(attachment),
     buildSessionDetailHref,
     createRequestValidationError: (message, statusCode) => new RequestValidationError(message, statusCode),
