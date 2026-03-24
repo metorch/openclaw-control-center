@@ -8,6 +8,102 @@ OpenClaw 的安全优先、本地优先控制中心。
 
 语言： [English](README.en.md) | **中文**
 
+## AI 员工系统扩展与接手入口
+
+如果你接手的是“基于本项目改出来的 AI 员工系统”，请先读这一节，再继续看后面的标准项目说明。
+详细工程交接请看：
+
+- [docs/ai-employee-system-handoff-2026-03-24.md](docs/ai-employee-system-handoff-2026-03-24.md)
+
+### 这套 AI 员工系统现在的真实定位
+
+它已经不只是一个 OpenClaw 控制中心页面，而是一个运行在 OpenClaw 之上的本地 AI 员工系统。
+当前固定下来的核心语义是：
+
+- `main` 就是 Jarvis。
+- 新建对话应视为新建一个协作 room，而不是 main 私聊容器。
+- 右下角协作群聊是当前 room 的共享时间线，不是 Jarvis 单聊镜像。
+- 员工上下文走受控注入，不允许无边界扫描全历史/全房间/全仓库。
+- Jarvis 等用户确认时是受控等待态，不是 stalled，也不是 completed。
+
+### 这些地方绝对不能改错
+
+- 不要删除、隐藏、弱化右下角协作群聊。
+- 不要把协作群聊退化成只显示 Jarvis 的主聊天镜像。
+- 不要把新建对话重新做成 main 私聊模式。
+- 不要放开员工无边界扫描全历史、全房间、全仓库。
+- 不要把 `waitingFor:user_confirmation` 自动记成 approved deliverable。
+- 不要只终止本地 UI，而不向上游真正发 `chat.abort`。
+
+### 当前最重要的代码入口
+
+- `src/ui/server-collaboration-chat.ts`
+  - 派工、prompt 注入、stage result、fanout、terminate
+- `src/ui/server-collaboration-room.ts`
+  - room 视图、transcript 合并、共享时间线
+- `src/runtime/collaboration-room.ts`
+  - 协作 room 的 canonical store
+- `src/runtime/collaboration-project-memory.ts`
+  - 项目记忆 scaffold、`PROJECT.md`、`open-tasks.json`、`stage-log.jsonl`
+- `src/runtime/heart-rate-monitor.ts`
+  - 心跳/恢复机制
+- `src/clients/openclaw-live-client.ts`
+  - gateway stream、`/v1/responses`、fallback 模型切换
+- `src/clients/openclaw-gateway-stream.ts`
+  - `connect.challenge`、`chat.send`、`chat.abort`
+
+### 当前已经固定的协作链路
+
+用户发到当前 room 的消息会：
+
+1. 写入 room event。
+2. 默认先路由给 Jarvis，或按显式 mention 路由。
+3. 由 `buildCollaborationAgentPromptV2(...)` 生成受控协作 prompt。
+4. 注入 `projectSummary`、`recentCollaborationSummary`、`contextRefs`、附件摘录和项目记忆路径。
+5. 上游 OpenClaw 执行后，把 Jarvis 和 worker 的可见回复都回流到同一个共享时间线。
+
+### 当前流式的真实状态
+
+当前群聊的“流式”来自：
+
+- 上游 gateway stream 或 `/v1/responses`
+- 服务端 live draft
+- `GET /api/collaboration/room/stream` 的 SSE 快照流
+
+这已经能提供共享时间线里的接近流式体验，但它还不是最终形态的 token 级直通 UI。
+如果后续继续推进真正流式，优先方向应是让上游 OpenClaw 暴露稳定的 session/event stream 或 token callback，而不是继续用更激进的轮询硬伪装。
+
+### 启动与验证
+
+常用命令：
+
+```powershell
+npm run build
+npm test
+npm run dev:ui
+node --import tsx --test test/openclaw-gateway-stream.test.ts test/openclaw-live-client-agent-turn.test.ts test/server-collaboration-chat.test.ts test/collaboration-room.test.ts
+```
+
+当前常用端口：
+
+- OpenClaw gateway: `18789`
+- AI 员工系统 UI: `4310`
+
+### 当前已确认基线
+
+截至 2026-03-24：
+
+- OpenClaw 已升级到 `v2026.3.23`
+- gateway 运行时已切到新版本
+- 协作房间 SSE 正常
+- 共享时间线仍能同时看到 Jarvis 与 worker 回复
+- 上游 abort 已接入 `chat.abort`
+- 员工卡片主模型/fallback 模型链路已验证
+
+最近关键代码提交：
+
+- `0378272` `Stabilize collaboration streaming and abort flow`
+
 ## 这个项目是做什么的
 - 给 OpenClaw 提供一个本地控制中心，集中看系统是否稳定、谁在工作、哪些任务卡住了、今天花了多少。
 - 面向非技术用户，重点是“看得懂、看得准”，不是暴露原始后端 payload。
