@@ -1785,6 +1785,186 @@ test("local collaboration rooms with empty timelines still accept room-scoped tr
   }
 });
 
+test("local collaboration rooms ignore unrelated recovery windows appended after a valid room-scoped transcript reply", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-room-local-polluted-transcript-"));
+
+  try {
+    const output = await runCollaborationRoomModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const roomHelpersMod = unwrap(await import(${JSON.stringify(serverCollaborationRoomModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const { mkdir, writeFile } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+
+        const helpers = roomHelpersMod.createCollaborationRoomHelpers({
+          buildCollaborationRoomApiEvent: (event) => ({
+            ...event,
+            label: event.type,
+            detail: event.detail || event.message || "",
+            targetDisplayNames: [],
+            fallbackDisplayName: undefined,
+            attachments: [],
+            messageHtml: undefined,
+            detailHtml: undefined,
+            relatedSessionHref: undefined,
+            syncControlMessage: false,
+          }),
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message) => new Error(message),
+          deriveAgentAnimalIdentity: () => ({ accent: "#0f766e", imageHref: "" }),
+          getOpenClawHomeDir: () => process.cwd(),
+          getSearchLimitMax: () => 20,
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          humanizeOperatorLabel: (value) => value,
+          loadCachedStaffRecentActivity: async () => new Map(),
+          normalizeAgentIdCandidate: (value) => {
+            const trimmed = String(value ?? "").trim().toLowerCase();
+            return trimmed ? trimmed : undefined;
+          },
+          normalizeSessionHistoryMessages: (history) =>
+            Array.isArray(history?.json?.history)
+              ? history.json.history
+                  .filter((entry) => entry?.type === "message" && typeof entry?.message?.role === "string")
+                  .map((entry) => ({
+                    role: entry.message.role,
+                    content: Array.isArray(entry.message.content)
+                      ? entry.message.content.map((item) => item?.text || "").join(" ").trim()
+                      : "",
+                    timestamp: entry.timestamp,
+                    kind: "message",
+                    sourceSessionKey: entry.sourceSessionKey,
+                    author: entry.author,
+                  }))
+              : [],
+          normalizeLookupKey: (value) => String(value ?? "").trim().toLowerCase(),
+          pickLatestSessionActivityTimestamp: (...values) => values.find(Boolean),
+          pickUiText: (_language, english) => english,
+          resolveConfiguredWorkspaceRoot: () => "",
+          resolveStaffStatusDotTone: () => "idle",
+          safeTruncate: (value, max = Number.MAX_SAFE_INTEGER) => String(value ?? "").slice(0, max),
+          staffCurrentWorkLabel: () => ({ label: "Current task", value: "Idle" }),
+          staffStatusDotLabel: () => "Idle",
+          toSortableMs: (value) => {
+            const parsed = Date.parse(value ?? "");
+            return Number.isNaN(parsed) ? 0 : parsed;
+          },
+        });
+
+        const roomId = "77888888-7777-4777-8777-777777777777";
+        const workspaceRoot = join(process.cwd(), "workspace");
+        const sessionsDir = join(process.cwd(), "agents", "main", "sessions");
+        await collaborationRoom.createCollaborationRoom({
+          roomId,
+          title: "Polluted transcript room",
+          titleMode: "manual",
+          projectId: "proj-room-clean",
+        });
+        await mkdir(sessionsDir, { recursive: true });
+        await writeFile(
+          join(sessionsDir, roomId + ".jsonl"),
+          [
+            JSON.stringify({
+              type: "session",
+              version: 3,
+              id: roomId,
+              timestamp: "2026-03-25T14:22:00.000Z",
+              cwd: workspaceRoot,
+            }),
+            JSON.stringify({
+              type: "message",
+              timestamp: "2026-03-25T14:22:01.000Z",
+              message: {
+                role: "user",
+                content: [
+                  { type: "text", text: "<openclaw_coordination>" },
+                  { type: "text", text: "roomId: 77888888-7777-4777-8777-777777777777" },
+                  { type: "text", text: "projectId: proj-room-clean" },
+                  { type: "text", text: "taskId: task-room" },
+                  { type: "text", text: "</openclaw_coordination>" },
+                  { type: "text", text: "" },
+                  { type: "text", text: "User request:" },
+                  { type: "text", text: "Please stay in this room only." },
+                ],
+                timestamp: "2026-03-25T14:22:01.000Z",
+              },
+            }),
+            JSON.stringify({
+              type: "message",
+              timestamp: "2026-03-25T14:22:10.000Z",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "[[reply_to_current]] Clean room reply." }],
+                timestamp: "2026-03-25T14:22:10.000Z",
+              },
+            }),
+            JSON.stringify({
+              type: "message",
+              timestamp: "2026-03-25T14:24:00.000Z",
+              message: {
+                role: "user",
+                content: [
+                  { type: "text", text: "[[internal_wake_resume]]" },
+                  { type: "text", text: "Current task: Investigate cron failures from another room." },
+                  { type: "text", text: "Project: proj-other-room" },
+                ],
+                timestamp: "2026-03-25T14:24:00.000Z",
+              },
+            }),
+            JSON.stringify({
+              type: "message",
+              timestamp: "2026-03-25T14:24:18.000Z",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "[[reply_to_current]] Unrelated recovery reply from another room." }],
+                timestamp: "2026-03-25T14:24:18.000Z",
+              },
+            }),
+          ].join("\\n"),
+          "utf8",
+        );
+
+        const directory = {
+          primaryAgentId: "main",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            {
+              agentId: "main",
+              displayName: "Jarvis",
+              aliases: ["main", "jarvis"],
+              primary: true,
+              identity: { accent: "#0f766e", imageHref: "" },
+            },
+          ],
+        };
+        const roomView = await helpers.buildCollaborationRoomApiView({
+          roomId,
+          language: "en",
+          afterSequence: 0,
+          limit: 20,
+          readSequence: 0,
+          directory,
+          primaryAgentId: directory.primaryAgentId,
+          primaryDisplayName: directory.primaryDisplayName,
+        });
+        process.stdout.write(JSON.stringify({
+          roomId: roomView.roomId,
+          eventTypes: roomView.events.map((event) => event.type),
+          messages: roomView.events.map((event) => event.message || null),
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.roomId, "77888888-7777-4777-8777-777777777777");
+    assert.deepEqual(parsed.eventTypes, ["user_message", "agent_reply"]);
+    assert.deepEqual(parsed.messages, ["User request: Please stay in this room only.", "Clean room reply."]);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("stale collaboration receipts with attached deliverables do not degrade to a red stale state", () => {
   const helpers = createRoomHelpersForSmoke();
   const executionState = helpers.deriveCollaborationExecutionStateForSmoke({
@@ -2427,6 +2607,330 @@ test("live session backfill projects the latest room-scoped worker reply into th
   assert.equal(liveEvents[0]?.relatedSessionKey, "agent:qa:thread:collab-room-alpha");
 });
 
+test("live session backfill continues past a legacy auto-resume prompt and surfaces the later final room reply", async () => {
+  const helpers = createRoomHelpersForSmoke({
+    normalizeSessionHistoryMessages: (response: { messages?: unknown[] }, limit: number) =>
+      Array.isArray(response?.messages) ? response.messages.slice(-limit) : [],
+  });
+
+  const sessionKey = "agent:main:thread:collab-room-resume";
+  const shortReply = "I am checking the recent scheduler runs now.";
+  const finalReply = "I checked the scheduler history and found the real failure pattern.";
+  const liveEvents = await helpers.buildCollaborationLiveSessionBackfillEvents({
+    client: {
+      sessionsHistory: async () => ({
+        messages: [
+          {
+            role: "user",
+            kind: "message",
+            timestamp: "2026-03-25T07:29:22.016Z",
+            content: [
+              "<openclaw_coordination>",
+              "roomId: room-resume",
+              "projectId: proj-resume",
+              "taskId: task-main",
+              "</openclaw_coordination>",
+              "",
+              "User request:",
+              "Please self-check the scheduler.",
+            ].join("\n"),
+          },
+          {
+            role: "assistant",
+            kind: "message",
+            timestamp: "2026-03-25T07:31:18.957Z",
+            content: `[[reply_to_current]] ${shortReply}`,
+          },
+          {
+            role: "assistant",
+            kind: "message",
+            timestamp: "2026-03-25T07:32:03.502Z",
+            content: [{ type: "thinking", thinking: "tool activity interrupted" }],
+            stopReason: "aborted",
+          },
+          {
+            role: "user",
+            kind: "message",
+            timestamp: "2026-03-25T07:32:08.127Z",
+            content: [
+              "Jarvis 刚才这一轮在工具执行后被中断了。",
+              "请继续当前会话，不要重头开始，也不要重复已经完成的工作。",
+              "如果文件已经写好，直接复用现有产物，不要重新生成。",
+              "现在请补发最终给用户看的回复；如果这项任务需要隐藏文件尾注或 <stage_result> 结果包，也一并补齐。",
+            ].join("\n"),
+          },
+          {
+            role: "assistant",
+            kind: "message",
+            timestamp: "2026-03-25T07:33:01.923Z",
+            content: [
+              `[[reply_to_current]] ${finalReply}`,
+              "",
+              '<stage_result>{"taskId":"task-main","projectId":"proj-resume","agentId":"main","resultState":"in_progress","summary":"Recovered final answer","artifacts":[],"completionChecklist":[],"blockers":[],"nextSuggestion":"","reportedAt":"2026-03-25T07:33:01.923Z"}</stage_result>',
+            ].join("\n"),
+          },
+        ],
+      }),
+    },
+    state: {
+      events: [
+        {
+          sequence: 1,
+          eventId: "dispatch-main",
+          type: "dispatch_started",
+          createdAt: "2026-03-25T07:29:12.935Z",
+          authorRole: "system",
+          agentId: "main",
+          relatedSessionKey: sessionKey,
+        },
+      ],
+      sessionBindings: [],
+    },
+    roomId: "room-resume",
+    directory: {
+      entries: [
+        {
+          agentId: "main",
+          displayName: "Jarvis",
+          aliases: buildMentionAliases("main", "Jarvis"),
+        },
+      ],
+    },
+    transcriptEvents: [],
+    visibleTimeline: [
+      {
+        sequence: 2,
+        eventId: "local-short-reply",
+        type: "agent_reply",
+        createdAt: "2026-03-25T07:31:18.957Z",
+        authorRole: "agent",
+        agentId: "main",
+        agentDisplayName: "Jarvis",
+        label: "Jarvis replied",
+        message: shortReply,
+        detail: "",
+        targetAgentIds: [],
+        targetDisplayNames: [],
+        attachmentIds: [],
+        attachments: [],
+        relatedSessionKey: sessionKey,
+      },
+    ],
+    primaryAgentId: "main",
+    primaryDisplayName: "Jarvis",
+    language: "zh",
+    limit: 20,
+    baseSequence: 2,
+  });
+
+  assert.equal(liveEvents.length, 1);
+  assert.equal(liveEvents[0]?.message, finalReply);
+  assert.equal(liveEvents[0]?.relatedSessionKey, sessionKey);
+  assert.equal(liveEvents[0]?.liveSessionBackfill, true);
+});
+
+test("live session backfill ignores unrelated recovery windows appended after the room reply", async () => {
+  const helpers = createRoomHelpersForSmoke({
+    normalizeSessionHistoryMessages: (response: { messages?: unknown[] }, limit: number) =>
+      Array.isArray(response?.messages) ? response.messages.slice(-limit) : [],
+  });
+
+  const sessionKey = "agent:main:thread:collab-room-clean";
+  const liveEvents = await helpers.buildCollaborationLiveSessionBackfillEvents({
+    client: {
+      sessionsHistory: async () => ({
+        messages: [
+          {
+            role: "user",
+            kind: "message",
+            timestamp: "2026-03-25T07:29:22.016Z",
+            content: [
+              "<openclaw_coordination>",
+              "roomId: room-clean",
+              "projectId: proj-room-clean",
+              "taskId: task-room-clean",
+              "</openclaw_coordination>",
+              "",
+              "User request:",
+              "Please stay in this room only.",
+            ].join("\n"),
+          },
+          {
+            role: "assistant",
+            kind: "message",
+            timestamp: "2026-03-25T07:31:18.957Z",
+            content: "[[reply_to_current]] Clean room reply.",
+          },
+          {
+            role: "user",
+            kind: "message",
+            timestamp: "2026-03-25T07:35:08.127Z",
+            content: [
+              "[[internal_wake_resume]]",
+              "Current task: Investigate cron failures from another room.",
+              "Project: proj-other-room",
+            ].join("\n"),
+          },
+          {
+            role: "assistant",
+            kind: "message",
+            timestamp: "2026-03-25T07:36:01.923Z",
+            content: "[[reply_to_current]] Unrelated recovery reply from another room.",
+          },
+        ],
+      }),
+    },
+    state: {
+      projectId: "proj-room-clean",
+      events: [
+        {
+          sequence: 1,
+          eventId: "dispatch-main",
+          type: "dispatch_started",
+          createdAt: "2026-03-25T07:29:12.935Z",
+          authorRole: "system",
+          agentId: "main",
+          relatedSessionKey: sessionKey,
+        },
+        {
+          sequence: 2,
+          eventId: "user-request",
+          type: "user_message",
+          createdAt: "2026-03-25T07:29:22.016Z",
+          authorRole: "user",
+          message: "Please stay in this room only.",
+        },
+      ],
+      dispatchRecords: [
+        {
+          taskId: "task-room-clean",
+          projectId: "proj-room-clean",
+          title: "Please stay in this room only.",
+          goal: "Please stay in this room only.",
+          createdAt: "2026-03-25T07:29:12.935Z",
+          createdBy: "jarvis",
+        },
+      ],
+      sessionBindings: [
+        {
+          agentId: "main",
+          sessionId: "session-room-clean",
+          sessionKey,
+          updatedAt: "2026-03-25T07:29:12.935Z",
+        },
+      ],
+    },
+    roomId: "room-clean",
+    directory: {
+      entries: [
+        {
+          agentId: "main",
+          displayName: "Jarvis",
+          aliases: buildMentionAliases("main", "Jarvis"),
+        },
+      ],
+    },
+    transcriptEvents: [],
+    visibleTimeline: [
+      {
+        sequence: 2,
+        eventId: "local-clean-reply",
+        type: "agent_reply",
+        createdAt: "2026-03-25T07:31:18.957Z",
+        authorRole: "agent",
+        agentId: "main",
+        agentDisplayName: "Jarvis",
+        label: "Jarvis replied",
+        message: "Clean room reply.",
+        detail: "",
+        targetAgentIds: [],
+        targetDisplayNames: [],
+        attachmentIds: [],
+        attachments: [],
+        relatedSessionKey: sessionKey,
+      },
+    ],
+    primaryAgentId: "main",
+    primaryDisplayName: "Jarvis",
+    language: "en",
+    limit: 20,
+    baseSequence: 2,
+  });
+
+  assert.equal(liveEvents.length, 0);
+});
+
+test("room-scoped transcript filtering keeps the room window open across legacy auto-resume prompts", () => {
+  const helpers = createRoomHelpersForSmoke();
+  const messages = [
+    {
+      role: "user",
+      kind: "message",
+      content: [
+        "<openclaw_coordination>",
+        "roomId: room-resume",
+        "</openclaw_coordination>",
+        "",
+        "User request:",
+        "Please self-check the scheduler.",
+      ].join("\n"),
+    },
+    {
+      role: "assistant",
+      kind: "message",
+      content: "[[reply_to_current]] I am checking the recent scheduler runs now.",
+    },
+    {
+      role: "user",
+      kind: "message",
+      content: [
+        "Jarvis 刚才这一轮在工具执行后被中断了。",
+        "请继续当前会话，不要重头开始，也不要重复已经完成的工作。",
+        "如果文件已经写好，直接复用现有产物，不要重新生成。",
+        "现在请补发最终给用户看的回复；如果这项任务需要隐藏文件尾注或 <stage_result> 结果包，也一并补齐。",
+      ].join("\n"),
+    },
+    {
+      role: "assistant",
+      kind: "message",
+      content: "[[reply_to_current]] I checked the scheduler history and found the real failure pattern.",
+    },
+    {
+      role: "user",
+      kind: "message",
+      content: "Start a brand new unrelated turn.",
+    },
+    {
+      role: "assistant",
+      kind: "message",
+      content: "[[reply_to_current]] This later answer belongs to the new turn.",
+    },
+  ];
+
+  const filtered = helpers.filterRoomScopedTranscriptMessages(messages, "room-resume");
+
+  assert.deepEqual(
+    filtered.map((message: { role?: string; content?: string }) => ({
+      role: message.role,
+      content: message.content,
+    })),
+    [
+      {
+        role: "user",
+        content: messages[0].content,
+      },
+      {
+        role: "assistant",
+        content: messages[1].content,
+      },
+      {
+        role: "assistant",
+        content: messages[3].content,
+      },
+    ],
+  );
+});
+
 test("live session backfill prefers raw session history so multiline markdown is not flattened or polluted by stage_result remnants", async () => {
   const helpers = createRoomHelpersForSmoke({
     normalizeSessionHistoryMessages: (response: { messages?: unknown[] }, limit: number) =>
@@ -2786,6 +3290,53 @@ test("transcript sync-control reply deduplicates against later canonical local r
   );
 });
 
+test("transcript merge collapses a truncated local reply into the fuller same-session backfill reply", () => {
+  const helpers = createRoomHelpersForSmoke();
+  const fullReply = [
+    "Checklist completed.",
+    "",
+    "1. Verified the scheduler state.",
+    "2. Confirmed the failing timestamps.",
+    "3. Summarized the smallest safe next steps.",
+  ].join("\n");
+  const localReply = {
+    sequence: 1,
+    eventId: "local-jarvis",
+    type: "agent_reply",
+    createdAt: "2026-03-25T09:02:58.035Z",
+    authorRole: "agent",
+    agentId: "jarvis",
+    agentDisplayName: "Jarvis",
+    label: "Jarvis replied",
+    message: fullReply.slice(0, 120),
+    detail: "",
+    targetAgentIds: [],
+    targetDisplayNames: [],
+    attachmentIds: [],
+    attachments: [],
+    relatedSessionKey: "agent:jarvis:thread:collab-room-long",
+  };
+  const transcriptReply = {
+    ...localReply,
+    eventId: "live-session-jarvis",
+    createdAt: "2026-03-25T09:03:03.668Z",
+    message: fullReply,
+    messageHtml: "<p>full reply</p>",
+    liveSessionBackfill: true,
+  };
+
+  const merged = helpers.mergeCollaborationRoomApiEvents({
+    lastLocalSequence: 1,
+    localEvents: [localReply],
+    transcriptEvents: [transcriptReply],
+  });
+
+  assert.equal(merged.events.length, 1);
+  assert.equal(merged.events[0]?.eventId, "local-jarvis");
+  assert.equal(merged.events[0]?.message, fullReply);
+  assert.equal(merged.events[0]?.messageHtml, "<p>full reply</p>");
+});
+
 test("transcript merge upgrades flattened local agent replies when transcript preserves structured formatting", () => {
   const helpers = createRoomHelpersForSmoke();
   const localReply = {
@@ -2886,6 +3437,57 @@ test("room api view upgrades flattened local agent replies from the current room
   assert.deepEqual(historyCalls, [{ sessionKey: "agent:jarvis:thread:collab-room-wrap", limit: 40 }]);
   assert.equal(upgraded[0]?.message, "Plan ready.\n1. Verify the config.\n2. Restart the room stream.");
   assert.match(String(upgraded[0]?.messageHtml || ""), /chat-md-list/);
+});
+
+test("room api view upgrades long structured local replies when session history has the full same-turn text", async () => {
+  const helpers = createRoomHelpersForSmoke();
+  const fullReply = [
+    "Checklist completed.",
+    "",
+    "## Findings",
+    "- Scheduler is enabled.",
+    "- The latest failures were delivery errors, not missing schedules.",
+    "- The safest next step is to inspect the session recovery path.",
+  ].join("\n");
+  const localReply = {
+    sequence: 1,
+    eventId: "local-jarvis",
+    type: "agent_reply",
+    createdAt: "2026-03-25T09:02:58.035Z",
+    authorRole: "agent",
+    agentId: "jarvis",
+    agentDisplayName: "Jarvis",
+    label: "Jarvis replied",
+    message: fullReply.slice(0, 130),
+    messageHtml: "<p>truncated</p>",
+    relatedSessionKey: "agent:jarvis:thread:collab-room-long",
+  };
+
+  const upgraded = await helpers.upgradeCollaborationApiEventsFromSessionHistory({
+    client: {
+      sessionsHistory: async () => ({
+        json: {
+          history: [
+            {
+              type: "message",
+              message: {
+                role: "assistant",
+                content: fullReply,
+              },
+            },
+          ],
+        },
+        rawText: "",
+      }),
+    },
+    events: [localReply],
+    roomId: "room-long",
+    language: "en",
+  });
+
+  assert.match(String(upgraded[0]?.message || ""), /^Checklist completed\.\n/);
+  assert.match(String(upgraded[0]?.message || ""), /The safest next step is to inspect the session recovery path\./);
+  assert.notEqual(upgraded[0]?.messageHtml, "<p>truncated</p>");
 });
 
 test("transcript backfill preserves the actual agent identity when author metadata points at another employee", () => {

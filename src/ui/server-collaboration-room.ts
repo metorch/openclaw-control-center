@@ -746,11 +746,24 @@ function createCollaborationRoomHelpers(deps) {
     if (!normalized) {
       return false;
     }
+    const looksLikeLegacyInterruptedResumePrompt =
+      (
+        normalized.includes("the previous turn for") &&
+        normalized.includes("interrupted after tool activity") &&
+        normalized.includes("continue the same session without restarting the task")
+      ) ||
+      (
+        normalized.includes("请继续当前会话") &&
+        normalized.includes("不要重头开始") &&
+        normalized.includes("不要重复已经完成的工作") &&
+        normalized.includes("现在请补发最终给用户看的回复")
+      );
     return (
       isCollaborationRelayPromptMessage(value) ||
       normalized.includes("[[internal_wake_resume]]") ||
       normalized.includes("internal recovery wake.") ||
       normalized.includes("continue where you left off. the previous model attempt failed or timed out.") ||
+      looksLikeLegacyInterruptedResumePrompt ||
       (
         normalized.includes("heart rate monitor recovery check.") &&
         normalized.includes("current stage:") &&
@@ -847,6 +860,28 @@ function createCollaborationRoomHelpers(deps) {
     );
   }
 
+  function shouldPreferExpandedCollaborationDisplayText(candidate, current) {
+    const candidateText = String(candidate || "").trim();
+    if (!candidateText) {
+      return false;
+    }
+    const currentText = String(current || "").trim();
+    if (!currentText) {
+      return true;
+    }
+    const candidateNormalized = normalizeComparableCollaborationDisplayText(candidateText);
+    const currentNormalized = normalizeComparableCollaborationDisplayText(currentText);
+    if (!candidateNormalized || !currentNormalized) {
+      return false;
+    }
+    return (
+      (candidateNormalized === currentNormalized ||
+        candidateNormalized.includes(currentNormalized) ||
+        currentNormalized.includes(candidateNormalized)) &&
+      candidateText.length >= currentText.length + 40
+    );
+  }
+
   function areCollaborationEventAttachmentSemanticsCompatible(left, right) {
     if (!left || !right) {
       return true;
@@ -854,27 +889,62 @@ function createCollaborationRoomHelpers(deps) {
     return left === right;
   }
 
+  function isContainedCollaborationSyncMessageMatch(left, right) {
+    const leftText = String(left || "").trim();
+    const rightText = String(right || "").trim();
+    if (!leftText || !rightText) {
+      return false;
+    }
+    if (leftText === rightText) {
+      return true;
+    }
+    if (Math.min(leftText.length, rightText.length) < 80) {
+      return false;
+    }
+    return leftText.includes(rightText) || rightText.includes(leftText);
+  }
+
   function findMatchingCollaborationSyncEvent(event, signatures, thresholdMs = 2e4) {
     const signature = buildCollaborationEventSyncSignature(event);
     if (!signature) {
       return void 0;
     }
+    const message = normalizeCollaborationEventSyncText(
+      sanitizeCollaborationDisplayText(event.message, "en", "", 12000),
+    );
+    const actorKey = normalizeLookupKey(event.authorRole === "agent" ? event.agentId ?? "" : event.authorRole);
+    const eventTypeKey = normalizeLookupKey(event.type);
+    const relatedSessionKey = normalizeLookupKey(event.relatedSessionKey);
     const timestamp = toSortableMs(event.createdAt);
     const attachmentSemanticKey = buildCollaborationEventAttachmentSemanticKey(event);
     const known = signatures.get(signature);
     const effectiveThresholdMs = event?.syncControlMessage ? Math.max(thresholdMs, 6e4) : thresholdMs;
-    if (!known || known.length === 0) {
-      return void 0;
-    }
-    if (timestamp <= 0) {
-      return known.find((value) =>
+    if (known && known.length > 0 && timestamp <= 0) {
+      const directMatch = known.find((value) =>
         areCollaborationEventAttachmentSemanticsCompatible(attachmentSemanticKey, value.attachmentSemanticKey),
       );
+      if (directMatch) {
+        return directMatch;
+      }
     }
-    return known.find(
+    if (known && known.length > 0) {
+      const directMatch = known.find(
+        (value) =>
+          Math.abs(value.timestamp - timestamp) <= effectiveThresholdMs &&
+          areCollaborationEventAttachmentSemanticsCompatible(attachmentSemanticKey, value.attachmentSemanticKey),
+      );
+      if (directMatch) {
+        return directMatch;
+      }
+    }
+    return [...signatures.values()].flat().find(
       (value) =>
-        Math.abs(value.timestamp - timestamp) <= effectiveThresholdMs &&
-        areCollaborationEventAttachmentSemanticsCompatible(attachmentSemanticKey, value.attachmentSemanticKey),
+        value.eventTypeKey === eventTypeKey &&
+        value.actorKey === actorKey &&
+        (!relatedSessionKey || !value.relatedSessionKey || value.relatedSessionKey === relatedSessionKey) &&
+        (timestamp <= 0 || value.timestamp <= 0 || Math.abs(value.timestamp - timestamp) <= effectiveThresholdMs) &&
+        areCollaborationEventAttachmentSemanticsCompatible(attachmentSemanticKey, value.attachmentSemanticKey) &&
+        isContainedCollaborationSyncMessageMatch(message, value.message),
     );
   }
 
@@ -889,8 +959,22 @@ function createCollaborationRoomHelpers(deps) {
     }
     const timestamp = toSortableMs(event.createdAt);
     const attachmentSemanticKey = buildCollaborationEventAttachmentSemanticKey(event);
+    const message = normalizeCollaborationEventSyncText(
+      sanitizeCollaborationDisplayText(event.message, "en", "", 12000),
+    );
+    const actorKey = normalizeLookupKey(event.authorRole === "agent" ? event.agentId ?? "" : event.authorRole);
+    const eventTypeKey = normalizeLookupKey(event.type);
+    const relatedSessionKey = normalizeLookupKey(event.relatedSessionKey);
     const next = signatures.get(signature) ?? [];
-    next.push({ timestamp, attachmentSemanticKey, ...(metadata || {}) });
+    next.push({
+      timestamp,
+      attachmentSemanticKey,
+      message,
+      actorKey,
+      eventTypeKey,
+      relatedSessionKey,
+      ...(metadata || {}),
+    });
     signatures.set(signature, next);
   }
 
@@ -902,11 +986,17 @@ function createCollaborationRoomHelpers(deps) {
       return localEvent;
     }
     const merged = { ...localEvent };
-    if (shouldPreferStructuredCollaborationDisplayText(transcriptEvent.message, localEvent.message)) {
+    if (
+      shouldPreferStructuredCollaborationDisplayText(transcriptEvent.message, localEvent.message) ||
+      shouldPreferExpandedCollaborationDisplayText(transcriptEvent.message, localEvent.message)
+    ) {
       merged.message = transcriptEvent.message;
       merged.messageHtml = transcriptEvent.messageHtml ?? merged.messageHtml;
     }
-    if (shouldPreferStructuredCollaborationDisplayText(transcriptEvent.detail, localEvent.detail)) {
+    if (
+      shouldPreferStructuredCollaborationDisplayText(transcriptEvent.detail, localEvent.detail) ||
+      shouldPreferExpandedCollaborationDisplayText(transcriptEvent.detail, localEvent.detail)
+    ) {
       merged.detail = transcriptEvent.detail;
       merged.detailHtml = transcriptEvent.detailHtml ?? merged.detailHtml;
     }
@@ -1143,6 +1233,165 @@ function createCollaborationRoomHelpers(deps) {
     );
   }
 
+  function escapeCollaborationPromptFieldPattern(value) {
+    return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function extractCollaborationPromptField(value, fieldNames) {
+    const source = String(value || "");
+    if (!source.trim() || !Array.isArray(fieldNames)) {
+      return "";
+    }
+    for (const fieldName of fieldNames) {
+      const pattern = new RegExp(
+        `${escapeCollaborationPromptFieldPattern(fieldName)}\\s*:\\s*([\\s\\S]*?)(?=(?:\\n\\s*|\\s+)(?:[A-Za-z][A-Za-z ]{2,40})\\s*:|$)`,
+        "i",
+      );
+      const resolved = pattern.exec(source)?.[1]?.trim() || "";
+      if (resolved) {
+        return resolved;
+      }
+    }
+    return "";
+  }
+
+  function buildCollaborationRoomScopeContext(input) {
+    const state = input?.state;
+    const sessionKeys = new Set();
+    const taskIds = new Set();
+    const taskTexts = new Set();
+    const collectTaskText = (value) => {
+      const normalized = normalizeComparableCollaborationReplyText(value).slice(0, 1_200);
+      if (normalized) {
+        taskTexts.add(normalized);
+      }
+    };
+
+    for (const binding of state?.sessionBindings ?? []) {
+      const normalizedSessionKey = normalizeLookupKey(binding?.sessionKey);
+      if (normalizedSessionKey) {
+        sessionKeys.add(normalizedSessionKey);
+      }
+    }
+
+    for (const dispatch of state?.dispatchRecords ?? []) {
+      const normalizedTaskId = normalizeLookupKey(dispatch?.taskId);
+      if (normalizedTaskId) {
+        taskIds.add(normalizedTaskId);
+      }
+      collectTaskText(dispatch?.title);
+      collectTaskText(dispatch?.goal);
+    }
+
+    for (const receipt of state?.taskReceipts ?? []) {
+      const normalizedTaskId = normalizeLookupKey(receipt?.taskId);
+      if (normalizedTaskId) {
+        taskIds.add(normalizedTaskId);
+      }
+      collectTaskText(receipt?.taskTitle);
+      collectTaskText(receipt?.summary);
+      collectTaskText(receipt?.recentOutput);
+    }
+
+    for (const event of state?.events ?? []) {
+      if (event?.type === "user_message") {
+        collectTaskText(event?.message);
+      }
+    }
+
+    return {
+      roomId: String(input?.roomId || "").trim(),
+      projectId: normalizeLookupKey(input?.projectId),
+      sessionKeys: [...sessionKeys],
+      taskIds: [...taskIds],
+      taskTexts: [...taskTexts],
+    };
+  }
+
+  function matchesCollaborationRoomScopeTask(currentTask, taskTexts) {
+    const normalizedCurrentTask = normalizeComparableCollaborationReplyText(currentTask);
+    if (!normalizedCurrentTask) {
+      return false;
+    }
+    for (const taskText of Array.isArray(taskTexts) ? taskTexts : []) {
+      const normalizedTaskText = normalizeComparableCollaborationReplyText(taskText);
+      if (!normalizedTaskText) {
+        continue;
+      }
+      if (
+        normalizedTaskText === normalizedCurrentTask ||
+        normalizedTaskText.includes(normalizedCurrentTask) ||
+        normalizedCurrentTask.includes(normalizedTaskText)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isRoomRelevantCollaborationInternalPrompt(value, roomContext, options) {
+    if (!isCollaborationInternalPromptMessage(value)) {
+      return false;
+    }
+
+    const normalizedRoomId = normalizeLookupKey(extractCollaborationPromptField(value, ["roomId"]));
+    const expectedRoomId = normalizeLookupKey(roomContext?.roomId);
+    if (normalizedRoomId) {
+      return Boolean(expectedRoomId && normalizedRoomId === expectedRoomId);
+    }
+
+    const rawSessionBinding = extractCollaborationPromptField(value, ["sessionBinding", "sessionKey"]);
+    const normalizedSessionBinding = normalizeLookupKey(rawSessionBinding.split(/\s+/)[0]);
+    const knownSessionKeys = Array.isArray(roomContext?.sessionKeys) ? roomContext.sessionKeys : [];
+    if (normalizedSessionBinding) {
+      const matchesSession = knownSessionKeys.some((sessionKey) => sessionKey === normalizedSessionBinding);
+      if (matchesSession) {
+        return true;
+      }
+      if (knownSessionKeys.length > 0) {
+        return false;
+      }
+    }
+
+    const normalizedProjectId = normalizeLookupKey(
+      extractCollaborationPromptField(value, ["projectId", "Project"]),
+    );
+    const expectedProjectId = normalizeLookupKey(roomContext?.projectId);
+    if (normalizedProjectId) {
+      if (expectedProjectId && normalizedProjectId !== expectedProjectId) {
+        return false;
+      }
+      if (expectedProjectId && normalizedProjectId === expectedProjectId) {
+        return true;
+      }
+    }
+
+    const normalizedTaskId = normalizeLookupKey(extractCollaborationPromptField(value, ["taskId"]));
+    const knownTaskIds = Array.isArray(roomContext?.taskIds) ? roomContext.taskIds : [];
+    if (normalizedTaskId) {
+      const matchesTaskId = knownTaskIds.some((taskId) => taskId === normalizedTaskId);
+      if (matchesTaskId) {
+        return true;
+      }
+      if (knownTaskIds.length > 0) {
+        return false;
+      }
+    }
+
+    const currentTask = extractCollaborationPromptField(value, ["Current task"]);
+    if (currentTask) {
+      const matchesTaskText = matchesCollaborationRoomScopeTask(currentTask, roomContext?.taskTexts);
+      if (matchesTaskText) {
+        return true;
+      }
+      if (expectedProjectId || knownTaskIds.length > 0) {
+        return false;
+      }
+    }
+
+    return options?.allowLegacyContinuation === true;
+  }
+
   function collectRoomRelevantSessionCandidates(input) {
     const candidates = new Map();
     const activeAgentKeys = new Set();
@@ -1212,7 +1461,11 @@ function createCollaborationRoomHelpers(deps) {
   }
 
   function extractLatestRoomScopedSessionReply(input) {
-    const messages = Array.isArray(input.messages) ? input.messages : [];
+    const messages = filterRoomScopedTranscriptMessages(
+      Array.isArray(input.messages) ? input.messages : [],
+      input.roomId,
+      input.roomContext,
+    );
     let latest = null;
     for (let index = 0; index < messages.length; index += 1) {
       const message = messages[index];
@@ -1261,7 +1514,7 @@ function createCollaborationRoomHelpers(deps) {
     return latest;
   }
 
-  function filterRoomScopedTranscriptMessages(messages, roomId) {
+  function filterRoomScopedTranscriptMessages(messages, roomId, roomContext) {
     const normalizedMessages = Array.isArray(messages) ? messages : [];
     const filtered = [];
     let insideRoomScopedWindow = false;
@@ -1269,10 +1522,24 @@ function createCollaborationRoomHelpers(deps) {
     for (const message of normalizedMessages) {
       const role = normalizeLookupKey(message?.role);
       if (role === "user") {
-        insideRoomScopedWindow = isRoomScopedCoordinationPrompt(message?.content, roomId);
-        if (insideRoomScopedWindow) {
+        const promptText = extractSessionHistoryMessageText(message);
+        if (isRoomScopedCoordinationPrompt(promptText, roomId)) {
+          insideRoomScopedWindow = true;
           filtered.push(message);
+          continue;
         }
+        if (insideRoomScopedWindow && isCollaborationInternalPromptMessage(promptText)) {
+          insideRoomScopedWindow = isRoomRelevantCollaborationInternalPrompt(
+            promptText,
+            {
+              ...(roomContext || {}),
+              roomId,
+            },
+            { allowLegacyContinuation: true },
+          );
+          continue;
+        }
+        insideRoomScopedWindow = false;
         continue;
       }
       if (!insideRoomScopedWindow) {
@@ -1318,13 +1585,24 @@ function createCollaborationRoomHelpers(deps) {
     const recoveredNormalized = normalizeComparableCollaborationReplyText(recoveredText);
     const currentStructured = looksStructuredCollaborationReplyText(currentText);
     const recoveredStructured = looksStructuredCollaborationReplyText(recoveredText);
-    return Boolean(
+    if (
       recoveredStructured &&
-        !currentStructured &&
-        (recoveredNormalized === currentNormalized ||
-          recoveredNormalized.includes(currentNormalized) ||
-          currentNormalized.includes(recoveredNormalized)),
-    );
+      !currentStructured &&
+      (recoveredNormalized === currentNormalized ||
+        recoveredNormalized.includes(currentNormalized) ||
+        currentNormalized.includes(recoveredNormalized))
+    ) {
+      return true;
+    }
+    if (
+      (recoveredNormalized === currentNormalized ||
+        recoveredNormalized.includes(currentNormalized) ||
+        currentNormalized.includes(recoveredNormalized)) &&
+      recoveredText.length >= currentText.length + 40
+    ) {
+      return true;
+    }
+    return false;
   }
 
   function parseCollaborationSessionHistoryRecord(input) {
@@ -1486,7 +1764,7 @@ function createCollaborationRoomHelpers(deps) {
 
   function resolveStructuredLocalReplyFromSessionHistory(input) {
     const currentMessage = String(input.event?.message || "").trim();
-    if (!currentMessage || looksStructuredCollaborationReplyText(currentMessage)) {
+    if (!currentMessage) {
       return "";
     }
     let bestMatch = "";
@@ -1566,6 +1844,13 @@ function createCollaborationRoomHelpers(deps) {
     if (!input.client || typeof input.client.sessionsHistory !== "function") {
       return [];
     }
+    const roomScopeContext =
+      input.roomScopeContext ??
+      buildCollaborationRoomScopeContext({
+        roomId: input.roomId,
+        projectId: input.state?.projectId,
+        state: input.state,
+      });
     const sessionCandidates = collectRoomRelevantSessionCandidates(input);
     if (sessionCandidates.length === 0) {
       return [];
@@ -1618,6 +1903,7 @@ function createCollaborationRoomHelpers(deps) {
       const latestWindow = extractLatestRoomScopedSessionReply({
         messages: item.messages,
         roomId: input.roomId,
+        roomContext: roomScopeContext,
         agentId: item.candidate.agentId,
         sessionKey: item.candidate.sessionKey,
         language: input.language,
@@ -1945,6 +2231,11 @@ function createCollaborationRoomHelpers(deps) {
       selectedRoom,
       state,
     });
+    const roomScopeContext = buildCollaborationRoomScopeContext({
+      roomId: effectiveRoomId,
+      projectId: project?.projectId ?? state.projectId ?? selectedRoom?.projectId,
+      state,
+    });
     const effectiveLimit = Math.max(1, Math.min(getSearchLimitMax(), input.limit));
     const attachmentsById = new Map(state.attachments.map((item) => [item.attachmentId, item]));
     const taskStore = await import_task_store.loadTaskStore();
@@ -1962,7 +2253,7 @@ function createCollaborationRoomHelpers(deps) {
     const requireRoomScopedTranscriptBackfill = selectedRoom?.hasLocalRoom === true;
     const transcriptMessages =
       requireRoomScopedTranscriptBackfill
-        ? filterRoomScopedTranscriptMessages(normalizedTranscriptMessages, effectiveRoomId)
+        ? filterRoomScopedTranscriptMessages(normalizedTranscriptMessages, effectiveRoomId, roomScopeContext)
         : normalizedTranscriptMessages;
     const transcriptEvents =
       transcriptMessages.length > 0
@@ -2018,6 +2309,7 @@ function createCollaborationRoomHelpers(deps) {
       language: input.language,
       limit: effectiveLimit,
       baseSequence: effectiveLastSequence + liveDraftEvents.length,
+      roomScopeContext,
     });
     const pendingDraftEvents = buildCollaborationPendingDraftEvents({
       state,

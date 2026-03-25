@@ -252,6 +252,81 @@ test("Jarvis user-confirmation detection stays scoped to primary direct checkpoi
   );
 });
 
+test("interrupted collaboration resume prompts carry the internal wake marker", () => {
+  const helper = buildHelper();
+  const prompt = helper.buildInterruptedCollaborationResumePrompt({
+    language: "en",
+    directory: {
+      entries: [{ agentId: "main", displayName: "Jarvis", aliases: ["jarvis", "main"] }],
+    },
+    targetAgentId: "main",
+  });
+
+  assert.match(prompt, /^\[\[internal_wake_resume\]\]/);
+  assert.match(prompt, /Do not treat this as a new user request\./);
+});
+
+test("turn output recovery pulls the full reply and stage_result from session history when the direct reply was truncated", async () => {
+  const helper = buildHelper();
+  const fullReply = [
+    "Checklist completed.",
+    "",
+    "<stage_result>",
+    JSON.stringify({
+      taskId: "task-stage-result",
+      projectId: "proj-stage-result",
+      agentId: "main",
+      resultState: "awaiting_review",
+      summary: "Recovered the full stage result from session history.",
+      artifacts: [{ location: "C:\\Users\\demo\\artifact.md" }],
+      completionChecklist: ["Reply delivered"],
+      blockers: [],
+      nextSuggestion: "",
+      reportedAt: "2026-03-25T09:12:00.000Z",
+    }),
+    "</stage_result>",
+  ].join("\n");
+  const truncatedReply = fullReply.slice(0, 120);
+
+  const output = await helper.resolveCollaborationAgentTurnOutput({
+    response: {
+      replyText: truncatedReply,
+      rawText: truncatedReply,
+      rawJson: {},
+    },
+    stageResultFallback: {
+      taskId: "task-stage-result",
+      projectId: "proj-stage-result",
+      agentId: "main",
+      reportedAt: "2026-03-25T09:12:00.000Z",
+    },
+    sessionKey: "agent:main:thread:collab-stage-result",
+    toolClient: {
+      sessionsHistory: async () => ({
+        json: {
+          history: [
+            {
+              type: "message",
+              message: {
+                role: "assistant",
+                timestamp: "2026-03-25T09:12:00.000Z",
+                content: fullReply,
+                stopReason: "stop",
+              },
+            },
+          ],
+        },
+        rawText: "",
+      }),
+    },
+  });
+
+  assert.equal(output.replyText, "Checklist completed.");
+  assert.equal(output.replyTextSource, "session_history");
+  assert.equal(output.parsedStageResult.envelope?.summary, "Recovered the full stage result from session history.");
+  assert.deepEqual(output.rawPaths, ["C:\\Users\\demo\\artifact.md"]);
+});
+
 test("live draft text keeps accumulated visible content when the stream only sends deltas", () => {
   const helper = buildHelper();
 
@@ -1484,6 +1559,436 @@ test("stream_read_error interruptions resume automatically without writing a fai
     assert.equal(parsed.roomEventTypes.includes("dispatch_failed"), false);
     assert.equal(parsed.roomEventTypes.includes("agent_reply"), true);
     assert(parsed.roomEventMessages.some((message) => /Final recovered answer after stream read retry/i.test(message)));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("recoverable provider overload waits for a delayed session-history final reply instead of writing a failed room event", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-chat-delayed-history-recovery-"));
+
+  try {
+    const output = await runCollaborationChatModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const chatMod = unwrap(await import(${JSON.stringify(collaborationChatModuleHref)}));
+        const openclawChatRooms = unwrap(await import(${JSON.stringify(openclawChatRoomsModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const { join } = await import("node:path");
+
+        let turnCalls = 0;
+        let historyCalls = 0;
+        const helpers = chatMod.createCollaborationChatHelpers({
+          buildCollaborationAttachmentSummary: () => "",
+          buildSessionDetailHref: () => "",
+          collaborationRecoverableFailureTiming: {
+            watchTimeoutMs: 250,
+            pollIntervalMs: 20,
+            idleBeforeResumeMs: 1000,
+            historyLimit: 20,
+            maxResumeAttempts: 1,
+          },
+          createRequestValidationError: (message, statusCode = 400) => {
+            const error = new Error(message);
+            error.statusCode = statusCode;
+            return error;
+          },
+          describeCollaborationRoomEvent: () => ({ label: "", detail: "" }),
+          formatBytesCompact: () => "",
+          formatCollaborationDuration: (value) => String(value || 0) + "ms",
+          getOpenClawHomeDir: () => process.cwd(),
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          isUiLanguage: (value) => value === "en" || value === "zh",
+          normalizeCollaborationAttachmentIds: (input) => Array.isArray(input) ? input : [],
+          normalizeCollaborationRoomIdPayload: async (value) => value,
+          normalizeLookupKey: (value) => String(value || "").trim().toLowerCase(),
+          optionalBoundedString: (value) => typeof value === "string" ? value : undefined,
+          pickUiText: (language, english, chinese) => language === "zh" ? chinese : english,
+          resolveCollaborationParticipantName: (directory, agentId) =>
+            directory.entries.find((entry) => String(entry.agentId || "").toLowerCase() === String(agentId || "").toLowerCase())?.displayName || agentId,
+          sanitizeCollaborationDisplayText: (value) => String(value || "").trim(),
+          safeTruncate: (value, maxLength) => String(value || "").slice(0, maxLength),
+          toCollaborationApiAttachment: (attachment) => attachment,
+        });
+
+        const workspaceRoot = join(process.cwd(), "workspace");
+        const transcriptRoom = await openclawChatRooms.createOpenClawChatRoom({
+          agentId: "jarvis",
+          workspaceRoot,
+          openclawHomeDir: process.cwd(),
+          title: "Delayed history recovery",
+        });
+        await collaborationRoom.saveCollaborationRoom(
+          collaborationRoom.defaultCollaborationRoomState({
+            roomId: transcriptRoom.roomId,
+            title: "Delayed history recovery",
+            titleMode: "manual",
+          }),
+        );
+
+        const directory = {
+          primaryAgentId: "jarvis",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            { agentId: "jarvis", displayName: "Jarvis", aliases: ["jarvis"], workspaceRoot },
+          ],
+        };
+
+        const fullReply = [
+          "[[reply_to_current]]Recovered final reply after delayed session history polling.",
+          "",
+          '<stage_result>{"taskId":"collab-recovery","projectId":"proj-recovery","agentId":"jarvis","resultState":"awaiting_review","summary":"Recovered after delayed history polling.","artifacts":[],"completionChecklist":["Reply delivered"],"blockers":[],"nextSuggestion":"","reportedAt":"2026-03-25T09:30:00.000Z"}</stage_result>',
+        ].join("\\n");
+
+        const toolClient = {
+          agentTurn: async (request) => {
+            turnCalls += 1;
+            return {
+              ok: false,
+              replyText: "",
+              rawText: "The AI service is temporarily overloaded. Please try again in a moment.",
+              rawJson: {},
+              durationMs: 25,
+              sessionId: "session-jarvis",
+              sessionKey: request.sessionKey || "agent:jarvis:thread:collab-delayed-history",
+              failureReason: "The AI service is temporarily overloaded. Please try again in a moment.",
+              errorMessage: "The AI service is temporarily overloaded. Please try again in a moment.",
+              incomplete: false,
+            };
+          },
+          sessionsHistory: async () => {
+            historyCalls += 1;
+            if (historyCalls < 3) {
+              return { json: { history: [] }, rawText: "" };
+            }
+            return {
+              json: {
+                history: [
+                  {
+                    type: "message",
+                    message: {
+                      role: "assistant",
+                      timestamp: "2026-03-25T09:30:00.000Z",
+                      content: fullReply,
+                      stopReason: "stop",
+                    },
+                  },
+                ],
+              },
+              rawText: "",
+            };
+          },
+        };
+
+        await helpers.createCollaborationRoomMessage(
+          {
+            roomId: transcriptRoom.roomId,
+            text: "@jarvis please keep watching the bound session if the provider overloads briefly.",
+          },
+          toolClient,
+          directory,
+          "en",
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        const roomState = await collaborationRoom.loadCollaborationRoom(transcriptRoom.roomId);
+        process.stdout.write(JSON.stringify({
+          turnCalls,
+          historyCalls,
+          roomEventTypes: roomState.events.map((event) => event.type),
+          roomEventMessages: roomState.events.map((event) => event.message || event.detail || ""),
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output) as {
+      turnCalls: number;
+      historyCalls: number;
+      roomEventTypes: string[];
+      roomEventMessages: string[];
+    };
+
+    assert.equal(parsed.turnCalls, 1);
+    assert.ok(parsed.historyCalls >= 3);
+    assert.equal(parsed.roomEventTypes.includes("dispatch_failed"), false);
+    assert.equal(parsed.roomEventTypes.includes("agent_reply"), true);
+    assert(parsed.roomEventMessages.some((message) => /Recovered final reply after delayed session history polling/i.test(message)));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("fresh-room long multi-turn recovery keeps one visible reply per turn without dispatch_failed bleed-through", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-chat-long-multiturn-recovery-"));
+
+  try {
+    const output = await runCollaborationChatModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const chatMod = unwrap(await import(${JSON.stringify(collaborationChatModuleHref)}));
+        const openclawChatRooms = unwrap(await import(${JSON.stringify(openclawChatRoomsModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const { join } = await import("node:path");
+
+        let turnCalls = 0;
+        let historyCalls = 0;
+        let dispatchedTurns = 0;
+        const longBlock = "Platform notes stay room-scoped and multiline. ".repeat(10).trim();
+        const replies = [
+          [
+            "[[reply_to_current]]Turn 1 delivered.",
+            "",
+            "## Turn 1",
+            "- Scope confirmed",
+            "- " + longBlock,
+            "",
+            '<stage_result resultState="awaiting_review">',
+            "  <summary>Turn 1 delivered.</summary>",
+            "</stage_result>",
+          ].join("\\n"),
+          [
+            "[[reply_to_current]]Turn 2 delivered with follow-up details.",
+            "",
+            "## Turn 2",
+            "1. Bound session still intact.",
+            "2. " + longBlock,
+            "",
+            '<stage_result resultState="awaiting_review">',
+            "  <summary>Turn 2 delivered.</summary>",
+            "</stage_result>",
+          ].join("\\n"),
+          [
+            "[[reply_to_current]]Turn 3 recovered after delayed history final.",
+            "",
+            "## Turn 3",
+            "- Recovery came from the same bound session.",
+            "- " + longBlock,
+            "",
+            '<stage_result resultState="awaiting_review">',
+            "  <summary>Turn 3 recovered after delayed history final.</summary>",
+            "</stage_result>",
+          ].join("\\n"),
+        ];
+
+        const helpers = chatMod.createCollaborationChatHelpers({
+          buildCollaborationAttachmentSummary: () => "",
+          buildSessionDetailHref: () => "",
+          collaborationRecoverableFailureTiming: {
+            watchTimeoutMs: 300,
+            pollIntervalMs: 20,
+            idleBeforeResumeMs: 1000,
+            historyLimit: 30,
+            maxResumeAttempts: 1,
+          },
+          createRequestValidationError: (message, statusCode = 400) => {
+            const error = new Error(message);
+            error.statusCode = statusCode;
+            return error;
+          },
+          describeCollaborationRoomEvent: () => ({ label: "", detail: "" }),
+          formatBytesCompact: () => "",
+          formatCollaborationDuration: (value) => String(value || 0) + "ms",
+          getOpenClawHomeDir: () => process.cwd(),
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          isUiLanguage: (value) => value === "en" || value === "zh",
+          normalizeCollaborationAttachmentIds: (input) => Array.isArray(input) ? input : [],
+          normalizeCollaborationRoomIdPayload: async (value) => value,
+          normalizeLookupKey: (value) => String(value || "").trim().toLowerCase(),
+          optionalBoundedString: (value) => typeof value === "string" ? value : undefined,
+          pickUiText: (language, english, chinese) => language === "zh" ? chinese : english,
+          resolveCollaborationParticipantName: (directory, agentId) =>
+            directory.entries.find((entry) => String(entry.agentId || "").toLowerCase() === String(agentId || "").toLowerCase())?.displayName || agentId,
+          sanitizeCollaborationDisplayText: (value) => String(value || "").trim(),
+          safeTruncate: (value, maxLength) => String(value || "").slice(0, maxLength),
+          toCollaborationApiAttachment: (attachment) => attachment,
+        });
+
+        const workspaceRoot = join(process.cwd(), "workspace");
+        const transcriptRoom = await openclawChatRooms.createOpenClawChatRoom({
+          agentId: "jarvis",
+          workspaceRoot,
+          openclawHomeDir: process.cwd(),
+          title: "Fresh multi-turn recovery",
+        });
+        await collaborationRoom.saveCollaborationRoom(
+          collaborationRoom.defaultCollaborationRoomState({
+            roomId: transcriptRoom.roomId,
+            title: "Fresh multi-turn recovery",
+            titleMode: "manual",
+          }),
+        );
+
+        const directory = {
+          primaryAgentId: "jarvis",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            { agentId: "jarvis", displayName: "Jarvis", aliases: ["jarvis"], workspaceRoot },
+          ],
+        };
+
+        const toolClient = {
+          agentTurn: async (request) => {
+            turnCalls += 1;
+            dispatchedTurns += 1;
+            const sessionKey = request.sessionKey || "agent:jarvis:thread:collab-long-multiturn";
+            if (dispatchedTurns < 3) {
+              const replyText = replies[dispatchedTurns - 1];
+              return {
+                ok: true,
+                replyText,
+                rawText: replyText,
+                rawJson: {},
+                durationMs: 25,
+                sessionId: "session-jarvis",
+                sessionKey,
+              };
+            }
+            return {
+              ok: false,
+              replyText: "",
+              rawText: "The AI service is temporarily overloaded. Please try again in a moment.",
+              rawJson: {},
+              durationMs: 25,
+              sessionId: "session-jarvis",
+              sessionKey,
+              failureReason: "The AI service is temporarily overloaded. Please try again in a moment.",
+              errorMessage: "The AI service is temporarily overloaded. Please try again in a moment.",
+              incomplete: false,
+            };
+          },
+          sessionsHistory: async () => {
+            historyCalls += 1;
+            if (dispatchedTurns < 3 || historyCalls < 3) {
+              return {
+                json: {
+                  history: [
+                    {
+                      type: "message",
+                      message: {
+                        role: "assistant",
+                        timestamp: "2026-03-25T08:30:00.000Z",
+                        content: replies[0],
+                        stopReason: "stop",
+                      },
+                    },
+                    {
+                      type: "message",
+                      message: {
+                        role: "assistant",
+                        timestamp: "2026-03-25T08:40:00.000Z",
+                        content: replies[1],
+                        stopReason: "stop",
+                      },
+                    },
+                  ],
+                },
+                rawText: "",
+              };
+            }
+            return {
+              json: {
+                history: [
+                  {
+                    type: "message",
+                    message: {
+                      role: "assistant",
+                      timestamp: "2026-03-25T08:30:00.000Z",
+                      content: replies[0],
+                      stopReason: "stop",
+                    },
+                  },
+                  {
+                    type: "message",
+                    message: {
+                      role: "assistant",
+                      timestamp: "2026-03-25T08:40:00.000Z",
+                      content: replies[1],
+                      stopReason: "stop",
+                    },
+                  },
+                  {
+                    type: "message",
+                    message: {
+                      role: "assistant",
+                      timestamp: "2026-03-25T08:50:00.000Z",
+                      content: replies[2],
+                      stopReason: "stop",
+                    },
+                  },
+                ],
+              },
+              rawText: "",
+            };
+          },
+        };
+
+        const createdTurn1 = await helpers.createCollaborationRoomMessage(
+          { roomId: transcriptRoom.roomId, text: "@jarvis turn 1 please keep the room timeline structured." },
+          toolClient,
+          directory,
+          "en",
+        );
+        await new Promise((resolve) => setTimeout(resolve, 350));
+
+        const createdTurn2 = await helpers.createCollaborationRoomMessage(
+          { roomId: transcriptRoom.roomId, text: "@jarvis turn 2 please continue in the same room and session." },
+          toolClient,
+          directory,
+          "en",
+        );
+        await new Promise((resolve) => setTimeout(resolve, 350));
+
+        const createdTurn3 = await helpers.createCollaborationRoomMessage(
+          { roomId: transcriptRoom.roomId, text: "@jarvis turn 3 please survive a delayed gateway final." },
+          toolClient,
+          directory,
+          "en",
+        );
+        await new Promise((resolve) => setTimeout(resolve, 700));
+
+        const roomState = await collaborationRoom.loadCollaborationRoom(transcriptRoom.roomId);
+        const agentReplies = roomState.events
+          .filter((event) => event.type === "agent_reply")
+          .map((event) => ({
+            sourceEventId: event.sourceEventId || "",
+            message: event.message || "",
+          }));
+
+        process.stdout.write(JSON.stringify({
+          turnCalls,
+          historyCalls,
+          userEventIds: [createdTurn1.eventId, createdTurn2.eventId, createdTurn3.eventId],
+          replySourceEventIds: agentReplies.map((event) => event.sourceEventId),
+          replyMessages: agentReplies.map((event) => event.message),
+          roomEventTypes: roomState.events.map((event) => event.type),
+          failedReceiptCount: roomState.taskReceipts.filter((receipt) => receipt.lastResultState === "failed").length,
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output) as {
+      turnCalls: number;
+      historyCalls: number;
+      userEventIds: string[];
+      replySourceEventIds: string[];
+      replyMessages: string[];
+      roomEventTypes: string[];
+      failedReceiptCount: number;
+    };
+
+    assert.equal(parsed.turnCalls, 3);
+    assert.ok(parsed.historyCalls >= 3);
+    assert.equal(parsed.roomEventTypes.includes("dispatch_failed"), false);
+    assert.deepEqual(parsed.replySourceEventIds, parsed.userEventIds);
+    assert.equal(new Set(parsed.replySourceEventIds).size, 3);
+    assert.equal(
+      parsed.replyMessages.filter((message) => /Turn 3 recovered after delayed history final/i.test(message)).length,
+      1,
+    );
+    assert.equal(parsed.failedReceiptCount, 0);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }

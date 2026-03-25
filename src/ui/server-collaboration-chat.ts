@@ -1,4 +1,4 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 
 const { randomUUID } = require("node:crypto");
 const { stat } = require("node:fs/promises");
@@ -19,6 +19,12 @@ const COLLABORATION_RECENT_SUMMARY_ITEM_MAX_CHARS = 220;
 const COLLABORATION_RECENT_SUMMARY_LOOKBACK_EVENTS = 40;
 const COLLABORATION_ABORT_PRESTART_MAX_ATTEMPTS = 4;
 const COLLABORATION_ABORT_PRESTART_RETRY_DELAY_MS = 350;
+const COLLABORATION_FULL_REPLY_MAX_LENGTH = 12000;
+const COLLABORATION_RECOVERABLE_FAILURE_WATCH_TIMEOUT_MS = 120000;
+const COLLABORATION_RECOVERABLE_FAILURE_POLL_INTERVAL_MS = 3000;
+const COLLABORATION_RECOVERABLE_FAILURE_IDLE_BEFORE_RESUME_MS = 20000;
+const COLLABORATION_RECOVERABLE_FAILURE_HISTORY_LIMIT = 60;
+const COLLABORATION_RECOVERABLE_FAILURE_MAX_RESUME_ATTEMPTS = 1;
 
 let collaborationTaskStoreWriteChain = Promise.resolve();
 
@@ -27,6 +33,7 @@ function createCollaborationChatHelpers(deps) {
     abortCollaborationSessionRun,
     buildCollaborationAttachmentSummary,
     buildSessionDetailHref,
+    collaborationRecoverableFailureTiming,
     createRequestValidationError,
     describeCollaborationRoomEvent,
     formatBytesCompact,
@@ -46,6 +53,69 @@ function createCollaborationChatHelpers(deps) {
   } = deps;
   const collaborationActiveTurns = new Map();
   const collaborationRoomAbortGenerations = new Map();
+  const collaborationRecoverableFailureJobs = new Map();
+  const normalizedRecoverableFailureTiming = normalizeCollaborationRecoverableFailureTiming(
+    collaborationRecoverableFailureTiming,
+  );
+
+  function normalizeCollaborationRecoverableFailureTiming(input) {
+    const source = input && typeof input === "object" ? input : {};
+    const normalizePositiveInteger = (value, fallback) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric) || numeric <= 0) {
+        return fallback;
+      }
+      return Math.max(1, Math.trunc(numeric));
+    };
+    return {
+      watchTimeoutMs: normalizePositiveInteger(
+        source.watchTimeoutMs,
+        COLLABORATION_RECOVERABLE_FAILURE_WATCH_TIMEOUT_MS,
+      ),
+      pollIntervalMs: normalizePositiveInteger(
+        source.pollIntervalMs,
+        COLLABORATION_RECOVERABLE_FAILURE_POLL_INTERVAL_MS,
+      ),
+      idleBeforeResumeMs: normalizePositiveInteger(
+        source.idleBeforeResumeMs,
+        COLLABORATION_RECOVERABLE_FAILURE_IDLE_BEFORE_RESUME_MS,
+      ),
+      historyLimit: normalizePositiveInteger(
+        source.historyLimit,
+        COLLABORATION_RECOVERABLE_FAILURE_HISTORY_LIMIT,
+      ),
+      maxResumeAttempts: normalizePositiveInteger(
+        source.maxResumeAttempts,
+        COLLABORATION_RECOVERABLE_FAILURE_MAX_RESUME_ATTEMPTS,
+      ),
+    };
+  }
+
+  function buildCollaborationRecoverableFailureJobKey(input) {
+    return [
+      String(input.roomId || "").trim().toLowerCase(),
+      String(input.sourceEventId || "").trim().toLowerCase(),
+      String(input.agentId || "").trim().toLowerCase(),
+    ].join("|");
+  }
+
+  function queueCollaborationRecoverableFailureJob(input, task) {
+    const jobKey = buildCollaborationRecoverableFailureJobKey(input);
+    if (!jobKey.replace(/\|/g, "")) {
+      return false;
+    }
+    if (collaborationRecoverableFailureJobs.has(jobKey)) {
+      return false;
+    }
+    const running = Promise.resolve()
+      .then(task)
+      .catch(() => void 0)
+      .finally(() => {
+        collaborationRecoverableFailureJobs.delete(jobKey);
+      });
+    collaborationRecoverableFailureJobs.set(jobKey, running);
+    return true;
+  }
 
   function currentCollaborationRoomAbortGeneration(roomId) {
     const normalizedRoomId = String(roomId || "").trim();
@@ -369,7 +439,7 @@ function createCollaborationChatHelpers(deps) {
           pickUiText(
             language,
             "Stopped current room work from the collaboration chat.",
-            "已从协作群聊终止当前房间工作。",
+            "Stopped current room work from the collaboration chat.",
           ),
         );
       } catch {}
@@ -408,7 +478,7 @@ function createCollaborationChatHelpers(deps) {
       const failureMessage = pickUiText(
         language,
         `Failed to stop ${abortFailures.length} upstream collaboration session(s). OpenClaw may still continue replying in this room.`,
-        `鏈兘鍋滄 ${abortFailures.length} 涓笂娓稿崗浣滀細璇濄€侽penClaw 浠嶅彲鑳戒細鍦ㄨ鎴块棿缁х画鍥炲銆俙,
+        `Failed to stop ${abortFailures.length} upstream collaboration session(s). OpenClaw may still continue replying in this room.`,
       );
       */
       const failureDetail = abortFailures
@@ -439,12 +509,12 @@ function createCollaborationChatHelpers(deps) {
     const stopMessage = pickUiText(
       language,
       "Stopped the current in-progress work from the collaboration chat.",
-      "已从协作群聊终止当前进行中的工作。",
+      "Stopped the current in-progress work from the collaboration chat.",
     );
     const stopBlocker = pickUiText(
       language,
       "Stopped by the user from the collaboration chat.",
-      "已由用户在协作群聊中终止。",
+      "Stopped by the user from the collaboration chat.",
     );
     const blockedTaskMap = new Map();
     for (const receipt of roomState.taskReceipts || []) {
@@ -506,7 +576,7 @@ function createCollaborationChatHelpers(deps) {
               ? pickUiText(
                   language,
                   `Stopped active turns for ${activeAgentIds.map((agentId) => resolveCollaborationParticipantName(directory, agentId)).join(", ")}.`,
-                  `已终止以下员工的进行中任务：${activeAgentIds.map((agentId) => resolveCollaborationParticipantName(directory, agentId)).join("、")}。`,
+                  `Stopped active turns for ${activeAgentIds.map((agentId) => resolveCollaborationParticipantName(directory, agentId)).join(", ")}.`,
                 )
               : stopMessage,
         },
@@ -526,12 +596,12 @@ function createCollaborationChatHelpers(deps) {
         ? pickUiText(
             language,
             `Stopped ${Math.max(activeTurns.length, blockedTasks.length)} in-progress item(s) in this room.`,
-            `已终止当前房间内 ${Math.max(activeTurns.length, blockedTasks.length)} 项进行中的工作。`,
+            `Stopped ${Math.max(activeTurns.length, blockedTasks.length)} in-progress item(s) in this room.`,
           )
         : pickUiText(
             language,
             "No active room work needed to be stopped.",
-            "当前房间没有需要终止的进行中工作。",
+            "No active room work needed to be stopped.",
           );
     return {
       roomId,
@@ -615,12 +685,12 @@ function createCollaborationChatHelpers(deps) {
             ? pickUiText(
                 input.language,
                 `Queued for ${participantName} from ${routedByName}'s coordination reply.`,
-                `已根据 ${routedByName} 的协同安排，把任务排队给 ${participantName}。`,
+                `Queued for ${participantName} from ${routedByName}'s coordination reply.`,
               )
             : pickUiText(
                 input.language,
                 `Queued for ${participantName}.`,
-                `已排队给 ${participantName}。`,
+                `Queued for ${participantName}.`,
               ),
         };
       }),
@@ -644,9 +714,9 @@ function createCollaborationChatHelpers(deps) {
       return false;
     }
     const actionablePattern =
-      /(please|pls|kindly|should|must|can you|could you|need(?:s)? to|reply\b|respond\b|check\b|verify\b|review\b|inspect\b|investigate\b|draft\b|summari[sz]e\b|look into\b|handle\b|take\b|sync\b|coordinate\b|follow up\b|回复|确认|检查|核对|验证|评审|查看|处理|跟进|补充|整理|起草|麻烦|请|回复一个)/iu;
+      /(please|pls|kindly|should|must|can you|could you|need(?:s)? to|reply\b|respond\b|check\b|verify\b|review\b|inspect\b|investigate\b|draft\b|summari[sz]e\b|look into\b|handle\b|take\b|sync\b|coordinate\b|follow up\b|回复|确认|检查|核对|验证|评审|查看|处理|跟进|补充|整理|起草|麻烦|请回复一下)/iu;
     const statusPattern =
-      /(reported\b|replied\b|feedback\b|done\b|completed\b|finished\b|complete\b|summary\b|summarizing\b|pending\b|still pending\b|latest worker updates\b|已反馈|已回复|都已反馈|已完成|完成了|汇总|最终|进度|反馈情况|还缺)/iu;
+      /(reported\b|replied\b|feedback\b|done\b|completed\b|finished\b|complete\b|summary\b|summarizing\b|pending\b|still pending\b|latest worker updates\b|已反馈|已回复|都已反馈|已完成|完成了|汇总|最新进度|反馈情况|还缺)/iu;
     return actionablePattern.test(normalized) && !statusPattern.test(normalized);
   }
 
@@ -724,20 +794,20 @@ function createCollaborationChatHelpers(deps) {
     const targetedInstruction = String(input.targetedInstructionText || "").trim();
     if (originalRequest && coordinatorInstruction) {
       return [
-        pickUiText(input.language, "Original user request (context only):", "原始用户请求（仅作上下文）："),
+        pickUiText(input.language, "Original user request (context only):", "鍘熷鐢ㄦ埛璇锋眰锛堜粎浣滀笂涓嬫枃锛夛細"),
         originalRequest,
         "",
         pickUiText(
           input.language,
           `${input.coordinatorName} assigned follow-up for you:`,
-          `${input.coordinatorName} 分配给你的后续动作：`,
+          `${input.coordinatorName} 鍒嗛厤缁欎綘鐨勫悗缁姩浣滐細`,
         ),
         targetedInstruction || coordinatorInstruction,
         "",
         pickUiText(
           input.language,
           "Do only this assigned follow-up unless the coordinator explicitly asks you to redo the whole user request.",
-          "除非协调者明确要求你重做整个用户请求，否则只执行这里分配给你的这一小段后续动作。",
+          "Do only this assigned follow-up unless the coordinator explicitly asks you to redo the whole user request.",
         ),
       ].join("\n");
     }
@@ -864,7 +934,7 @@ function createCollaborationChatHelpers(deps) {
           180,
         ) ||
         summarizeCollaborationUiText(event.detail, "", 180) ||
-        pickUiText(input.language, "updated", "已更新");
+        pickUiText(input.language, "updated", "updated");
       return {
         agentId,
         line: `- ${participantName}: ${summary}`,
@@ -913,13 +983,13 @@ function createCollaborationChatHelpers(deps) {
     const requestMessageOverride = [
       baseRequest,
       "",
-      pickUiText(input.language, "Latest worker updates:", "最新员工更新："),
+      pickUiText(input.language, "Latest worker updates:", "鏈€鏂板憳宸ユ洿鏂帮細"),
       ...workerOutcomes.map((item) => item.line),
       "",
       pickUiText(
         input.language,
         `Continue as ${input.directory.primaryDisplayName} in this same room. If all requested workers have reported, summarize for the user now. Otherwise state exactly who is still pending instead of claiming completion.`,
-        `继续以 ${input.directory.primaryDisplayName} 的身份在这个房间内推进。如果所有指定员工都已反馈，现在就向用户汇总；否则明确说明还缺谁，不要提前宣称已完成。`,
+        `Continue as ${input.directory.primaryDisplayName} in this same room. If all requested workers have reported, summarize for the user now. Otherwise state exactly who is still pending instead of claiming completion.`,
       ),
     ]
       .filter(Boolean)
@@ -1013,7 +1083,7 @@ function createCollaborationChatHelpers(deps) {
           detail: pickUiText(
             input.language,
             `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} replied in ${formatCollaborationDuration(response.durationMs)}.`,
-            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 已回复，用时 ${formatCollaborationDuration(response.durationMs)}。`,
+            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} replied in ${formatCollaborationDuration(response.durationMs)}.`,
           ),
         },
       ]);
@@ -1038,7 +1108,7 @@ function createCollaborationChatHelpers(deps) {
         detail: pickUiText(
           input.language,
           `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed: ${failureSummary}`,
-          `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 分发失败：${failureSummary}`,
+          `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 鍒嗗彂澶辫触锛?{failureSummary}`,
         ),
       },
     ]);
@@ -1062,12 +1132,12 @@ function createCollaborationChatHelpers(deps) {
           ? pickUiText(
               input.language,
               `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so ${input.directory.primaryDisplayName} remains the active fallback on this route.`,
-              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 失败，${input.directory.primaryDisplayName} 将继续作为这条链路上的兜底主控。`,
+              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so ${input.directory.primaryDisplayName} remains the active fallback on this route.`,
             )
           : pickUiText(
               input.language,
               `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so the turn is being handed to ${input.directory.primaryDisplayName}.`,
-              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 失败，当前消息将回退交给 ${input.directory.primaryDisplayName}。`,
+              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so the turn is being handed to ${input.directory.primaryDisplayName}.`,
             ),
       },
     ]);
@@ -1275,7 +1345,7 @@ function createCollaborationChatHelpers(deps) {
     return text.trim();
   }
 
-  function extractVisibleCollaborationTurnReplyText(response, maxLength = 2e3) {
+  function extractVisibleCollaborationTurnReplyText(response, maxLength = COLLABORATION_FULL_REPLY_MAX_LENGTH) {
     const primary = String(response?.replyText || "").trim();
     if (primary && !import_collaboration_agent_artifacts.isMachineOnlyCollaborationText(primary)) {
       return safeTruncate(primary, maxLength);
@@ -1366,7 +1436,7 @@ function createCollaborationChatHelpers(deps) {
     }
   }
 
-  function extractVisibleAssistantReplyTextFromSessionHistoryMessage(message) {
+  function extractRawAssistantReplyTextFromSessionHistoryMessage(message) {
     if (!message || typeof message !== "object") {
       return "";
     }
@@ -1383,15 +1453,44 @@ function createCollaborationChatHelpers(deps) {
       (typeof message.content === "string" ? message.content : void 0) ||
       ""
     ).trim();
+    return directReplyText;
+  }
+
+  function extractVisibleAssistantReplyTextFromSessionHistoryMessage(message) {
+    const directReplyText = extractRawAssistantReplyTextFromSessionHistoryMessage(message);
     return import_collaboration_agent_artifacts.isMachineOnlyCollaborationText(directReplyText)
       ? ""
       : directReplyText;
   }
 
-  function extractLatestAssistantReplyTextFromSessionHistory(history) {
+  function normalizeCollaborationAssistantStopReason(value) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z]+/g, "");
+  }
+
+  function isInterruptedCollaborationAssistantStopReason(stopReason) {
+    const normalized = normalizeCollaborationAssistantStopReason(stopReason);
+    return (
+      normalized === "aborted" ||
+      normalized === "interrupted" ||
+      normalized === "cancelled" ||
+      normalized === "canceled" ||
+      normalized === "tooluse" ||
+      normalized === "toolcall"
+    );
+  }
+
+  function extractLatestAssistantReplyFromSessionHistory(history, startedAtMs = 0) {
     const records = extractCollaborationSessionHistoryRecords(history);
-    let latestReplyText = "";
+    let latest = void 0;
+    let latestActivityMs = 0;
     for (const record of records) {
+      const recordTimestampMs = Date.parse(String(record?.timestamp || record?.message?.timestamp || ""));
+      if (recordTimestampMs > 0 && (!startedAtMs || recordTimestampMs + 1000 >= startedAtMs)) {
+        latestActivityMs = Math.max(latestActivityMs, recordTimestampMs);
+      }
       if (String(record?.type || "").trim().toLowerCase() !== "message") {
         continue;
       }
@@ -1402,12 +1501,39 @@ function createCollaborationChatHelpers(deps) {
       if (String(message.role || "").trim().toLowerCase() !== "assistant") {
         continue;
       }
-      const replyText = extractVisibleAssistantReplyTextFromSessionHistoryMessage(message);
-      if (replyText) {
-        latestReplyText = replyText;
+      const rawReplyText = extractRawAssistantReplyTextFromSessionHistoryMessage(message);
+      const replyText = import_collaboration_agent_artifacts.isMachineOnlyCollaborationText(rawReplyText)
+        ? ""
+        : rawReplyText;
+      if (!replyText) {
+        continue;
       }
+      const timestampMs = Date.parse(String(message.timestamp || record.timestamp || ""));
+      const hasCurrentTurnMarker = /\[\[reply_to_current(?:[^\]]*)\]\]/i.test(rawReplyText);
+      if (startedAtMs && timestampMs > 0 && timestampMs + 1000 < startedAtMs && !hasCurrentTurnMarker) {
+        continue;
+      }
+      latest = {
+        replyText,
+        timestampMs,
+        stopReason: String(message.stopReason ?? record.stopReason ?? "").trim(),
+        errorMessage: String(message.errorMessage ?? record.errorMessage ?? "").trim(),
+        hasCurrentTurnMarker,
+        incomplete:
+          isInterruptedCollaborationAssistantStopReason(message.stopReason ?? record.stopReason) ||
+          /request was aborted|turn was aborted|was aborted|cancelled|canceled/i.test(
+            String(message.errorMessage ?? record.errorMessage ?? ""),
+          ),
+      };
     }
-    return latestReplyText;
+    return {
+      latestReply: latest,
+      latestActivityMs,
+    };
+  }
+
+  function extractLatestAssistantReplyTextFromSessionHistory(history) {
+    return extractLatestAssistantReplyFromSessionHistory(history).latestReply?.replyText || "";
   }
 
   function normalizeComparableCollaborationReplyText(value) {
@@ -1448,6 +1574,16 @@ function createCollaborationChatHelpers(deps) {
       (recoveredNormalized === currentNormalized ||
         recoveredNormalized.includes(currentNormalized) ||
         currentNormalized.includes(recoveredNormalized))
+    ) {
+      return true;
+    }
+    if (
+      recoveredNormalized &&
+      currentNormalized &&
+      (recoveredNormalized === currentNormalized ||
+        recoveredNormalized.includes(currentNormalized) ||
+        currentNormalized.includes(recoveredNormalized)) &&
+      recoveredText.length >= currentText.length + 40
     ) {
       return true;
     }
@@ -1620,13 +1756,13 @@ function createCollaborationChatHelpers(deps) {
   }
 
   function isMeaningfulCollaborationSystemNote(text) {
-    return /(blocked?|blocker|failed?|error|fallback|interrupted|stuck|locked|retry|rejected|timeout|not found|阻塞|失败|错误|回退|中断|卡住|锁定|重试|未通过|超时)/i.test(
+    return /(blocked?|blocker|failed?|error|fallback|interrupted|stuck|locked|retry|rejected|timeout|not found|闃诲|澶辫触|閿欒|鍥為€€|涓柇|鍗′綇|閿佸畾|閲嶈瘯|鏈€氳繃|瓒呮椂)/i.test(
       String(text || ""),
     );
   }
 
   function isMeaningfulReplyMentionDispatch(detailText) {
-    return /(coordination reply|coordination instruction|协同安排|协调指令)/i.test(String(detailText || ""));
+    return /(coordination reply|coordination instruction|鍗忓悓瀹夋帓|鍗忚皟鎸囦护)/i.test(String(detailText || ""));
   }
 
   function isMeaningfulCollaborationReplySummary(text) {
@@ -1648,7 +1784,7 @@ function createCollaborationChatHelpers(deps) {
       return resolveMaybeCollaborationParticipantName(input.directory, input.event.agentId);
     }
     if (input.event.authorRole === "user") {
-      return pickUiText(input.language, "User", "用户");
+      return pickUiText(input.language, "User", "鐢ㄦ埛");
     }
     if (
       (input.event.type === "dispatch_started" ||
@@ -1658,7 +1794,7 @@ function createCollaborationChatHelpers(deps) {
     ) {
       return resolveMaybeCollaborationParticipantName(input.directory, input.event.agentId);
     }
-    return pickUiText(input.language, "System", "系统");
+    return pickUiText(input.language, "System", "绯荤粺");
   }
 
   function buildRecentCollaborationSummaryCandidate(input) {
@@ -1815,7 +1951,7 @@ function createCollaborationChatHelpers(deps) {
     return pickUiText(
       input.language,
       "Please handle this request based on the attachments.",
-      "请根据附件处理这条请求。",
+      "Please handle this request based on the attachments.",
     );
   }
 
@@ -1849,7 +1985,34 @@ function createCollaborationChatHelpers(deps) {
     if (normalized.includes("an error occurred while processing your request")) {
       return true;
     }
+    if (normalized.includes("the ai service is temporarily overloaded")) {
+      return true;
+    }
+    if (normalized.includes("the ai service is temporarily unavailable")) {
+      return true;
+    }
+    if (normalized.includes("gateway chat stream timed out before a final event arrived")) {
+      return true;
+    }
+    if (normalized.includes("gateway timeout") || normalized.includes("bad gateway") || normalized.includes("upstream")) {
+      return true;
+    }
     return normalized.includes("help.openai.com") && normalized.includes("request id");
+  }
+
+  function isRecoverableCollaborationFailureResponse(response) {
+    if (response?.incomplete || isInterruptedCollaborationAgentTurn(response)) {
+      return true;
+    }
+    const normalized = [response?.failureReason, response?.errorMessage, response?.rawText, response?.replyText]
+      .filter((value) => typeof value === "string" && value.trim() !== "")
+      .join("\n")
+      .trim()
+      .toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    return isRetryableUpstreamProviderFailureText(normalized);
   }
 
   function summarizeCollaborationFailure(input) {
@@ -1862,49 +2025,49 @@ function createCollaborationChatHelpers(deps) {
       return pickUiText(
         input.language,
         "The upstream model service hit an internal error. You can retry this turn.",
-        "上游模型服务发生内部错误，可以重试这一轮。",
+        "The upstream model service hit an internal error. You can retry this turn.",
       );
     }
     if (/unknown option '--session-key'/i.test(normalized)) {
       return pickUiText(
         input.language,
         "Session resume failed because this OpenClaw CLI does not support --session-key.",
-        "会话续接失败：当前 OpenClaw CLI 不支持 --session-key。",
+        "Session resume failed because this OpenClaw CLI does not support --session-key.",
       );
     }
     if (/spawn openclaw .*enoent/i.test(normalized)) {
       return pickUiText(
         input.language,
         "Agent dispatch failed because the OpenClaw CLI executable was not found.",
-        "分发失败：没有找到 OpenClaw CLI 可执行文件。",
+        "Agent dispatch failed because the OpenClaw CLI executable was not found.",
       );
     }
     if (/gateway not connected/i.test(normalized) && /(session file locked|resource busy|ebusy|locked)/i.test(normalized)) {
       return pickUiText(
         input.language,
         "The gateway was disconnected, and the embedded fallback then hit a locked session file.",
-        "网关未连接，而且嵌入式回退随后又遇到了会话文件锁定。",
+        "The gateway was disconnected, and the embedded fallback then hit a locked session file.",
       );
     }
     if (/gateway not connected/i.test(normalized)) {
       return pickUiText(
         input.language,
         "Agent dispatch failed because the gateway is not connected.",
-        "分发失败：当前网关未连接。",
+        "Agent dispatch failed because the gateway is not connected.",
       );
     }
     if (/(session file locked|resource busy|ebusy|locked)/i.test(normalized)) {
       return pickUiText(
         input.language,
         "Agent dispatch failed because the session file is locked.",
-        "分发失败：会话文件当前被锁定。",
+        "Agent dispatch failed because the session file is locked.",
       );
     }
     if (/(request was aborted|\baborted\b)/i.test(normalized)) {
       return pickUiText(
         input.language,
         "The agent turn was interrupted before the final reply was delivered.",
-        "Agent 回合在最终回复发出前被中断了。",
+        "The agent turn was interrupted before the final reply was delivered.",
       );
     }
     const signalLine = normalized
@@ -1924,9 +2087,9 @@ function createCollaborationChatHelpers(deps) {
       .find((line) => !isLikelyRelayPromptText(line));
     return summarizeCollaborationUiText(
       signalLine || normalized,
-      pickUiText(input.language, "Unknown agent failure.", "未知的执行失败。"),
+      pickUiText(input.language, "Unknown agent failure.", "Unknown agent failure."),
       260,
-    ) || pickUiText(input.language, "Unknown agent failure.", "未知的执行失败。");
+    ) || pickUiText(input.language, "Unknown agent failure.", "Unknown agent failure.");
   }
 
   function isInterruptedCollaborationAgentTurn(response) {
@@ -1969,16 +2132,19 @@ function createCollaborationChatHelpers(deps) {
     return pickUiText(
       input.language,
       [
+        "[[internal_wake_resume]]",
         `The previous turn for ${actor} was interrupted after tool activity.`,
         "Continue the same session without restarting the task or repeating finished work.",
+        "Do not treat this as a new user request.",
         "If any files were already written, keep them and use those existing artifacts.",
         "Send the final user-facing reply now, and include the hidden file footer and <stage_result> block if they are required for this task.",
       ].join("\n"),
       [
-        `${actor} 刚才这一轮在工具执行后被中断了。`,
-        "请继续当前会话，不要重头开始，也不要重复已经完成的工作。",
-        "如果文件已经写好，直接复用现有产物，不要重新生成。",
-        "现在请补发最终给用户看的回复；如果这项任务需要隐藏文件尾注或 <stage_result> 结果包，也一并补齐。",
+        "[[internal_wake_resume]]",
+        `${actor} just had this turn interrupted after tool activity.`,
+        "Continue the same session without restarting the task or repeating finished work.",
+        "If any files were already written, keep them and use those existing artifacts.",
+        "Send the final user-facing reply now, and include the hidden file footer and <stage_result> block if they are required for this task.",
       ].join("\n"),
     );
   }
@@ -1990,13 +2156,14 @@ function createCollaborationChatHelpers(deps) {
         ? `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} finished tool work but the reply was still interrupted after an automatic resume attempt.`
         : `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} finished tool work but the reply was interrupted before delivery.`,
       input.attemptedResume
-        ? `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 在工具执行后已自动续接一次，但最终回复仍然被中断。`
-        : `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 已完成工具执行，但最终回复在发出前被中断。`,
+        ? `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} finished tool work but the reply was still interrupted after an automatic resume attempt.`
+        : `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} finished tool work but the reply was interrupted before delivery.`,
     );
   }
 
-  function describeCollaborationAgentTurnOutput(response, stageResultFallback) {
-    const fallbackReplyText = extractVisibleCollaborationTurnReplyText(response);
+  function describeCollaborationAgentTurnOutput(response, stageResultFallback, options) {
+    const replyTextOverride = String(options?.replyTextOverride || "").trim();
+    const fallbackReplyText = replyTextOverride || extractVisibleCollaborationTurnReplyText(response);
     const parsedArtifacts = import_collaboration_agent_artifacts.parseCollaborationAgentArtifacts(fallbackReplyText);
     const parsedStageResult = stageResultFallback
       ? import_collaboration_stage_results.parseStageResultEnvelopeFromReply(
@@ -2062,21 +2229,28 @@ function createCollaborationChatHelpers(deps) {
         sessionKey,
         limit: 40,
       });
-      const recoveredReplyText = safeTruncate(
-        extractLatestAssistantReplyTextFromSessionHistory(history),
-        2e3,
-      );
-      if (
-        shouldPreferRecoveredCollaborationReplyText(
-          described.replyText,
-          recoveredReplyText,
-          described.replyTextSource === "stage_summary",
-        )
-      ) {
+      const recoveredReplyText = extractLatestAssistantReplyTextFromSessionHistory(history);
+      if (recoveredReplyText) {
+        const recovered = describeCollaborationAgentTurnOutput(input.response, input.stageResultFallback, {
+          replyTextOverride: recoveredReplyText,
+        });
+        const shouldPreferRecoveredReply =
+          Boolean(recovered.parsedStageResult?.envelope && !described.parsedStageResult?.envelope) ||
+          shouldPreferRecoveredCollaborationReplyText(
+            described.replyText,
+            recovered.replyText,
+            described.replyTextSource === "stage_summary",
+          );
         return {
-          ...described,
-          replyText: recoveredReplyText,
-          replyTextSource: "session_history",
+          ...(shouldPreferRecoveredReply ? recovered : described),
+          parsedStageResult:
+            recovered.parsedStageResult?.envelope ? recovered.parsedStageResult : described.parsedStageResult,
+          rawPaths: uniqueCompactStrings([...(described.rawPaths || []), ...(recovered.rawPaths || [])]),
+          replyText:
+            shouldPreferRecoveredReply || !described.replyText
+              ? recovered.replyText || described.replyText
+              : described.replyText,
+          replyTextSource: shouldPreferRecoveredReply ? "session_history" : described.replyTextSource,
         };
       }
     } catch {
@@ -2108,7 +2282,7 @@ function createCollaborationChatHelpers(deps) {
     if (!project) {
       const fallbackTitle =
         String(roomState.title || "").trim() ||
-        pickUiText(input.language, "Collaboration project", "协作项目");
+        pickUiText(input.language, "Collaboration project", "鍗忎綔椤圭洰");
       const duplicateByTitle = projectStore.projects.find(
         (item) => normalizeLookupKey(item.title) === normalizeLookupKey(fallbackTitle),
       );
@@ -2380,7 +2554,7 @@ function createCollaborationChatHelpers(deps) {
     return pickUiText(
       language,
       "Write the visible user-facing reply in the same language as the user's latest message. Do not switch to another language just because tool output or system notes use it.",
-      "可见的用户回复必须跟用户最近一条消息保持同一种语言。不要因为工具输出或系统说明是另一种语言，就把正式回复切成别的语言。",
+      "Write the visible user-facing reply in the same language as the user's latest message. Do not switch to another language just because tool output or system notes use it.",
     );
   }
 
@@ -2391,7 +2565,7 @@ function createCollaborationChatHelpers(deps) {
     return pickUiText(
       language,
       "This workspace uses Windows PowerShell. Use PowerShell syntax, call curl.exe instead of the PowerShell curl alias, and do not use bash-only operators like &&.",
-      "当前工作区使用 Windows PowerShell。请使用 PowerShell 语法；如果需要 curl，请调用 curl.exe，不要用 PowerShell 的 curl 别名；也不要使用 && 这类 bash/CMD 风格的连接符。",
+      "This workspace uses Windows PowerShell. Use PowerShell syntax, call curl.exe instead of the PowerShell curl alias, and do not use bash-only operators like &&.",
     );
   }
 
@@ -2464,13 +2638,13 @@ function createCollaborationChatHelpers(deps) {
       stage: "delivery",
       ownerAgentId: input.targetAgentId,
       title,
-      goal: requestText || pickUiText(input.language, "Handle the attachment-only request.", "处理附件请求。"),
+      goal: requestText || pickUiText(input.language, "Handle the attachment-only request.", "Handle the attachment-only request."),
       definitionOfDone: [
-        pickUiText(input.language, "Provide a concrete user-facing update.", "给出面向用户的明确反馈。"),
+        pickUiText(input.language, "Provide a concrete user-facing update.", "Provide a concrete user-facing update."),
         pickUiText(
           input.language,
           "Emit a <stage_result> envelope when the phase reaches a reviewable checkpoint.",
-          "当阶段达到可审核节点时输出 <stage_result> 结果包。",
+          "Emit a <stage_result> envelope when the phase reaches a reviewable checkpoint.",
         ),
       ],
       requiredContextRefs: [
@@ -2541,9 +2715,9 @@ function createCollaborationChatHelpers(deps) {
     }
     return (
       normalized.includes("user-facing update") ||
-      normalized.includes("面向用户") ||
+      normalized.includes("闈㈠悜鐢ㄦ埛") ||
       normalized.includes("stage_result") ||
-      normalized.includes("结果包")
+      normalized.includes("stage_result")
     );
   }
 
@@ -2576,7 +2750,7 @@ function createCollaborationChatHelpers(deps) {
     if (!normalized) {
       return false;
     }
-    return /(?:working on|in progress|not ready|draft|partial|unfinished|todo|pending|still working|continue working|need more work|needs more work|follow-up needed|blocker|blocked|failed|failure|unable|cannot|can't|missing|review first|verify first|进行中|未完成|草稿|部分完成|待继续|还在处理|仍在处理|还没好|未就绪|待办|阻塞|失败|无法|缺少|先审核|先验证)/i.test(
+    return /(?:working on|in progress|not ready|draft|partial|unfinished|todo|pending|still working|continue working|need more work|needs more work|follow-up needed|blocker|blocked|failed|failure|unable|cannot|can't|missing|review first|verify first|进行中|未完成|草稿|部分完成|待继续|还在处理|仍在处理|还没好|未就绪|待办|阻塞|失败|无法|缺少|先评审|先验证)/i.test(
       normalized,
     );
   }
@@ -2592,11 +2766,11 @@ function createCollaborationChatHelpers(deps) {
     const hasReadOnlyIntent =
       /(?:\bverify\b|\breview\b|\binspect\b|\baudit\b|\bcheck\b|\bvalidate\b|\banaly[sz]e\b|\bassess\b|\bexamine\b|\bconfirm\b|\btest\b|\bpass\s*\/\s*fail\b|\bpass-or-fail\b|\bpass or fail\b|\bread-only\b|\breply with\b.*\bpass\b.*\bfail\b|\b(?:reply|respond)\b.*\bonly\b)/i.test(
         text,
-      );
+      ) || /(?:验证|核对|检查|审核|评审|复查|确认|分析|只需回复|仅需回复|仅回复|只回复|通过\/不通过|通过或不通过|不要修改|无需修改|不用修改|只给结论|仅给结论|只看结论)/.test(text);
     const hasArtifactActionIntent =
       /(?:\bcreate\b|\bgenerate\b|\bbuild\b|\bmake\b|\bwrite\b|\bdraft\b|\bprepare\b|\bproduce\b|\bexport\b|\battach\b|\bupload\b|\bsend\b|\bshare\b|\bdeliver\b|\breturn\b|\bfix\b|\bupdate\b|\bedit\b|\bmodify\b|\brewrite\b|\brevise\b|\bpatch\b|\bimplement\b|\brender\b|\bsave\b.{0,20}\bas\b)/i.test(
         normalizedText,
-      );
+      ) || /(?:创建|生成|构建|制作|做成|导出|附上|上传|发送|分享|交付|产出|写成|整理成|输出|修复|修改|更新|改写|重写|补齐|实现|保存成|保存为)/.test(normalizedText);
     return hasReadOnlyIntent && !hasArtifactActionIntent;
   }
 
@@ -2651,7 +2825,7 @@ function createCollaborationChatHelpers(deps) {
       pickUiText(
         input.language,
         "Generated the requested artifact in the current collaboration project.",
-        "已在当前协作项目中生成所需产物。",
+        "Generated the requested artifact in the current collaboration project.",
       );
     return {
       taskId: input.dispatchRecord.taskId,
@@ -2800,7 +2974,7 @@ function createCollaborationChatHelpers(deps) {
           detail: pickUiText(
             input.language,
             `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} reported a blocker.`,
-            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 上报了阻塞。`,
+            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} reported a blocker.`,
           ),
         },
       ]);
@@ -2828,7 +3002,7 @@ function createCollaborationChatHelpers(deps) {
           detail: pickUiText(
             input.language,
             `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} marked the stage as failed.`,
-            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 将当前阶段标记为失败。`,
+            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} marked the stage as failed.`,
           ),
         },
       ]);
@@ -2925,7 +3099,7 @@ function createCollaborationChatHelpers(deps) {
           detail: pickUiText(
             input.language,
             `Jarvis approved ${input.dispatchRecord.title}.`,
-            `Jarvis 已审核通过：${input.dispatchRecord.title}。`,
+            `Jarvis approved ${input.dispatchRecord.title}.`,
           ),
         },
       ]);
@@ -2966,12 +3140,285 @@ function createCollaborationChatHelpers(deps) {
         detail: pickUiText(
           input.language,
           `Jarvis requested more work before approving ${input.dispatchRecord.title}.`,
-          `Jarvis 要求补充后再审核：${input.dispatchRecord.title}。`,
+          `Jarvis requested more work before approving ${input.dispatchRecord.title}.`,
         ),
       },
     ]);
     const nextState = await import_collaboration_room.loadCollaborationRoom(input.roomId);
     await syncProjectOpenTasksForRoom(input.project.projectId, input.project.title, nextState);
+  }
+
+  async function persistSuccessfulCollaborationAgentOutput(input) {
+    const replyAttachments = await collectCollaborationAgentReplyAttachments({
+      roomId: input.roomId,
+      workspaceRoot: input.workspaceRoot,
+      projectFiles: input.projectFiles,
+      targetAgentId: input.targetAgentId,
+      rawPaths: input.rawPaths,
+    });
+    if (typeof input.cancelCheck === "function" && input.cancelCheck()) {
+      return {
+        cancelled: true,
+        replyAttachments,
+        replyEvent: void 0,
+      };
+    }
+    const replyEvents =
+      input.replyText || replyAttachments.length > 0
+        ? await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
+            {
+              eventId: randomUUID(),
+              type: "agent_reply",
+              authorRole: "agent",
+              agentId: input.targetAgentId,
+              sourceEventId: input.sourceEvent.eventId,
+              message: input.replyText || void 0,
+              attachmentIds: replyAttachments.map((attachment) => attachment.attachmentId),
+              relatedSessionId: input.sessionId,
+              relatedSessionKey: input.sessionKey,
+              detail: buildCollaborationAgentReplyDetail({
+                language: input.language,
+                directory: input.directory,
+                agentId: input.targetAgentId,
+                durationMs: input.durationMs,
+                attachments: replyAttachments,
+              }),
+            },
+          ])
+        : [];
+    const replyEvent = replyEvents.at(-1);
+    if (typeof input.cancelCheck === "function" && input.cancelCheck()) {
+      return {
+        cancelled: true,
+        replyAttachments,
+        replyEvent,
+      };
+    }
+    await persistCollaborationStageResult({
+      roomId: input.roomId,
+      sourceEvent: input.sourceEvent,
+      targetAgentId: input.targetAgentId,
+      directory: input.directory,
+      language: input.language,
+      project: input.project,
+      dispatchRecord: input.dispatchRecord,
+      envelope: input.envelope,
+      replyAttachments,
+      replyText: input.replyText,
+      workspaceRoot: input.workspaceRoot,
+      projectFiles: input.projectFiles,
+      currentRouteAgentIds: input.currentRouteAgentIds,
+      reportedAt: input.reportedAt ?? input.envelope?.reportedAt ?? new Date().toISOString(),
+    });
+    if (replyEvent) {
+      await maybeDispatchCollaborationReplyMentions({
+        roomId: input.roomId,
+        sourceEvent: input.sourceEvent,
+        replyEvent,
+        replyText: input.replyText,
+        attachmentRecords: input.attachmentRecords,
+        replyAttachments,
+        currentRouteAgentIds: input.currentRouteAgentIds,
+        parentRequestText: input.requestMessageOverride || input.sourceEvent.message,
+        toolClient: input.toolClient,
+        directory: input.directory,
+        language: input.language,
+      });
+      await maybeDispatchCollaborationCoordinatorReviewAfterWorkerReply({
+        roomId: input.roomId,
+        sourceEvent: input.sourceEvent,
+        replyEvent,
+        replyText: input.replyText,
+        attachmentRecords: input.attachmentRecords,
+        replyAttachments,
+        currentRouteAgentIds: input.currentRouteAgentIds,
+        requestMessageOverride: input.requestMessageOverride,
+        toolClient: input.toolClient,
+        directory: input.directory,
+        language: input.language,
+      });
+    }
+    return {
+      cancelled: false,
+      replyAttachments,
+      replyEvent,
+    };
+  }
+
+  async function finalizeRecoverableCollaborationFailureAsFailed(input) {
+    const failureSummary = summarizeCollaborationFailure({
+      language: input.language,
+      failureReason: input.response.failureReason,
+      rawText: input.response.rawText,
+    });
+    const failedReplyAttachments = await collectCollaborationAgentReplyAttachments({
+      roomId: input.roomId,
+      workspaceRoot: input.workspaceRoot,
+      projectFiles: input.projectFiles,
+      targetAgentId: input.targetAgentId,
+      rawPaths: input.output.rawPaths,
+    });
+    await import_collaboration_room.upsertCollaborationTaskReceipt(input.roomId, {
+      taskId: input.dispatchRecord.taskId,
+      projectId: input.project.projectId,
+      lastResultState: "failed",
+      lastReportedAt: new Date().toISOString(),
+      lastReportedBy: input.targetAgentId,
+      taskTitle: input.dispatchRecord.title,
+      stage: input.dispatchRecord.stage,
+      summary: failureSummary,
+      recentOutput: failureSummary,
+    });
+    if (failedReplyAttachments.length > 0) {
+      await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
+        {
+          eventId: randomUUID(),
+          type: "system_note",
+          authorRole: "system",
+          agentId: input.targetAgentId,
+          sourceEventId: input.sourceEvent.eventId,
+          attachmentIds: failedReplyAttachments.map((attachment) => attachment.attachmentId),
+          detail: pickUiText(
+            input.language,
+            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} generated file attachments before the reply ended unexpectedly.`,
+            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} generated file attachments before the reply ended unexpectedly.`,
+          ),
+        },
+      ]);
+    }
+    await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
+      {
+        eventId: randomUUID(),
+        type: "dispatch_failed",
+        authorRole: "system",
+        agentId: input.targetAgentId,
+        sourceEventId: input.sourceEvent.eventId,
+        targetAgentIds: [input.targetAgentId],
+        relatedSessionId: input.response.sessionId ?? input.binding?.sessionId,
+        relatedSessionKey: input.response.sessionKey ?? input.binding?.sessionKey,
+        failureReason: failureSummary,
+        detail: pickUiText(
+          input.language,
+          `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed: ${failureSummary}`,
+          `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed: ${failureSummary}`,
+        ),
+      },
+    ]);
+    const nextState = await import_collaboration_room.loadCollaborationRoom(input.roomId);
+    await syncProjectOpenTasksForRoom(input.project.projectId, input.project.title, nextState);
+  }
+
+  async function watchRecoverableCollaborationFailure(input) {
+    const deadline = Date.now() + normalizedRecoverableFailureTiming.watchTimeoutMs;
+    let resumeAttempts = 0;
+    let latestInterruptedReply = "";
+    while (Date.now() < deadline) {
+      if (
+        currentCollaborationRoomAbortGeneration(input.roomId) > Number(input.abortGeneration || 0)
+      ) {
+        return;
+      }
+      let history;
+      try {
+        history = await input.toolClient.sessionsHistory({
+          sessionKey: input.sessionKey,
+          limit: normalizedRecoverableFailureTiming.historyLimit,
+        });
+      } catch {
+        history = void 0;
+      }
+      if (history) {
+        const historyState = extractLatestAssistantReplyFromSessionHistory(history, input.startedAtMs);
+        const latestReply = historyState.latestReply;
+        if (latestReply?.replyText) {
+          const recoveredOutput = describeCollaborationAgentTurnOutput(
+            input.response,
+            input.stageResultFallback,
+            { replyTextOverride: latestReply.replyText },
+          );
+          if (!latestReply.incomplete) {
+            await persistSuccessfulCollaborationAgentOutput({
+              ...input,
+              replyText: recoveredOutput.replyText,
+              rawPaths: recoveredOutput.rawPaths,
+              envelope: recoveredOutput.parsedStageResult?.envelope,
+              durationMs: input.response.durationMs,
+              sessionId: input.response.sessionId ?? input.binding?.sessionId,
+              sessionKey: input.sessionKey,
+            });
+            return;
+          }
+          latestInterruptedReply = recoveredOutput.replyText || latestInterruptedReply;
+          const idleMs = historyState.latestActivityMs > 0 ? Date.now() - historyState.latestActivityMs : 0;
+          if (
+            resumeAttempts < normalizedRecoverableFailureTiming.maxResumeAttempts &&
+            idleMs >= normalizedRecoverableFailureTiming.idleBeforeResumeMs
+          ) {
+            resumeAttempts += 1;
+            const resumedResponse = await input.toolClient.agentTurn({
+              agentId: input.targetAgentId,
+              sessionId: input.response.sessionId ?? input.binding?.sessionId,
+              sessionKey: input.sessionKey,
+              message: buildInterruptedCollaborationResumePrompt({
+                language: input.language,
+                directory: input.directory,
+                targetAgentId: input.targetAgentId,
+              }),
+              timeoutSeconds: 60,
+              preferGatewayStream: true,
+            });
+            const resumedOutput = await resolveCollaborationAgentTurnOutput({
+              response: resumedResponse,
+              stageResultFallback: input.stageResultFallback,
+              toolClient: input.toolClient,
+              sessionKey: resumedResponse.sessionKey ?? input.sessionKey,
+            });
+            if (resumedResponse.ok && !isInterruptedCollaborationAgentTurn(resumedResponse)) {
+              if (resumedResponse.sessionId) {
+                await import_collaboration_room.setCollaborationSessionBinding(
+                  input.roomId,
+                  input.targetAgentId,
+                  resumedResponse.sessionId,
+                  resumedResponse.sessionKey ?? input.sessionKey,
+                );
+              }
+              await persistSuccessfulCollaborationAgentOutput({
+                ...input,
+                replyText: resumedOutput.replyText,
+                rawPaths: resumedOutput.rawPaths,
+                envelope: resumedOutput.parsedStageResult?.envelope,
+                durationMs: (input.response.durationMs || 0) + (resumedResponse.durationMs || 0),
+                sessionId: resumedResponse.sessionId ?? input.response.sessionId ?? input.binding?.sessionId,
+                sessionKey: resumedResponse.sessionKey ?? input.sessionKey,
+              });
+              return;
+            }
+          }
+        }
+      }
+      await sleep(normalizedRecoverableFailureTiming.pollIntervalMs);
+    }
+    if (latestInterruptedReply) {
+      await import_collaboration_room.upsertCollaborationTaskReceipt(input.roomId, {
+        taskId: input.dispatchRecord.taskId,
+        projectId: input.project.projectId,
+        lastResultState: "in_progress",
+        lastReportedAt: new Date().toISOString(),
+        lastReportedBy: input.targetAgentId,
+        taskTitle: input.dispatchRecord.title,
+        stage: input.dispatchRecord.stage,
+        summary:
+          summarizeCollaborationUiText(latestInterruptedReply, input.dispatchRecord.goal, 260) ||
+          summarizeCollaborationUiText(input.dispatchRecord.goal, "", 260),
+        recentOutput:
+          summarizeCollaborationUiText(latestInterruptedReply, input.dispatchRecord.goal, 260) ||
+          summarizeCollaborationUiText(input.dispatchRecord.goal, "", 260),
+      });
+      const nextState = await import_collaboration_room.loadCollaborationRoom(input.roomId);
+      await syncProjectOpenTasksForRoom(input.project.projectId, input.project.title, nextState);
+      return;
+    }
+    await finalizeRecoverableCollaborationFailureAsFailed(input);
   }
 
   async function dispatchCollaborationTurnToAgentV2(input) {
@@ -3229,13 +3676,6 @@ function createCollaborationChatHelpers(deps) {
           .map((output) => output.replyText)
           .find((value) => typeof value === "string" && value.trim() !== "") ||
         safeTruncate(resumedResponse.rawText.trim(), 2e3);
-      const interruptedReplyAttachments = await collectCollaborationAgentReplyAttachments({
-        roomId: input.roomId,
-        workspaceRoot,
-        projectFiles: projectContext.memory.files,
-        targetAgentId: input.targetAgentId,
-        rawPaths: interruptedRawPaths,
-      });
       if (isCollaborationTurnCancelled(activeTurn)) {
         return;
       }
@@ -3244,31 +3684,7 @@ function createCollaborationChatHelpers(deps) {
           interruptedCurrentOutput.replyText ||
           interruptedReplyText ||
           safeTruncate(resumedResponse.rawText.trim(), 2e3);
-        const finalizedReplyEvents = await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
-          {
-            eventId: randomUUID(),
-            type: "agent_reply",
-            authorRole: "agent",
-            agentId: input.targetAgentId,
-            sourceEventId: input.sourceEvent.eventId,
-            message: finalizedReplyText || void 0,
-            attachmentIds: interruptedReplyAttachments.map((attachment) => attachment.attachmentId),
-            relatedSessionId: resumedResponse.sessionId ?? nextResponse.sessionId ?? binding?.sessionId,
-            relatedSessionKey: resumedResponse.sessionKey ?? nextResponse.sessionKey ?? binding?.sessionKey,
-            detail: buildCollaborationAgentReplyDetail({
-              language: input.language,
-              directory: input.directory,
-              agentId: input.targetAgentId,
-              durationMs: interruptedDurationMs,
-              attachments: interruptedReplyAttachments,
-            }),
-          },
-        ]);
-        const finalizedReplyEvent = finalizedReplyEvents.at(-1);
-        if (isCollaborationTurnCancelled(activeTurn)) {
-          return;
-        }
-        await persistCollaborationStageResult({
+        await persistSuccessfulCollaborationAgentOutput({
           roomId: input.roomId,
           sourceEvent: input.sourceEvent,
           targetAgentId: input.targetAgentId,
@@ -3276,44 +3692,30 @@ function createCollaborationChatHelpers(deps) {
           language: input.language,
           project: projectContext.project,
           dispatchRecord,
-          envelope: interruptedStageResult,
-          replyAttachments: interruptedReplyAttachments,
-          replyText: finalizedReplyText,
           workspaceRoot,
           projectFiles: projectContext.memory.files,
           currentRouteAgentIds: input.targetAgentIds,
+          attachmentRecords: input.attachmentRecords,
+          toolClient: input.toolClient,
+          requestMessageOverride: input.requestMessageOverride,
+          replyText: finalizedReplyText,
+          rawPaths: interruptedRawPaths,
+          envelope: interruptedStageResult,
+          durationMs: interruptedDurationMs,
+          sessionId: resumedResponse.sessionId ?? nextResponse.sessionId ?? binding?.sessionId,
+          sessionKey: resumedResponse.sessionKey ?? nextResponse.sessionKey ?? binding?.sessionKey,
           reportedAt: interruptedStageResult?.reportedAt ?? new Date().toISOString(),
+          cancelCheck: () => isCollaborationTurnCancelled(activeTurn),
         });
-        if (finalizedReplyEvent) {
-          await maybeDispatchCollaborationReplyMentions({
-            roomId: input.roomId,
-            sourceEvent: input.sourceEvent,
-            replyEvent: finalizedReplyEvent,
-            replyText: finalizedReplyText,
-            attachmentRecords: input.attachmentRecords,
-            replyAttachments: interruptedReplyAttachments,
-            currentRouteAgentIds: input.targetAgentIds,
-            parentRequestText: input.requestMessageOverride || input.sourceEvent.message,
-            toolClient: input.toolClient,
-            directory: input.directory,
-            language: input.language,
-          });
-          await maybeDispatchCollaborationCoordinatorReviewAfterWorkerReply({
-            roomId: input.roomId,
-            sourceEvent: input.sourceEvent,
-            replyEvent: finalizedReplyEvent,
-            replyText: finalizedReplyText,
-            attachmentRecords: input.attachmentRecords,
-            replyAttachments: interruptedReplyAttachments,
-            currentRouteAgentIds: input.targetAgentIds,
-            requestMessageOverride: input.requestMessageOverride,
-            toolClient: input.toolClient,
-            directory: input.directory,
-            language: input.language,
-          });
-        }
         return;
       }
+      const interruptedReplyAttachments = await collectCollaborationAgentReplyAttachments({
+        roomId: input.roomId,
+        workspaceRoot,
+        projectFiles: projectContext.memory.files,
+        targetAgentId: input.targetAgentId,
+        rawPaths: interruptedRawPaths,
+      });
       const interruptedFailureSummary = summarizeInterruptedCollaborationTurn({
         language: input.language,
         directory: input.directory,
@@ -3382,88 +3784,87 @@ function createCollaborationChatHelpers(deps) {
       sessionKey: nextResponse.sessionKey ?? binding?.sessionKey,
     });
     if (nextResponse.ok) {
-      const nextReplyAttachments = await collectCollaborationAgentReplyAttachments({
-        roomId: input.roomId,
-        workspaceRoot,
-        projectFiles: projectContext.memory.files,
-        targetAgentId: input.targetAgentId,
-        rawPaths: nextResponseOutput.rawPaths,
-      });
-      if (isCollaborationTurnCancelled(activeTurn)) {
-        return;
-      }
-      const nextReplyText = nextResponseOutput.replyText;
-      const nextReplyEvents =
-        nextReplyText || nextReplyAttachments.length > 0
-          ? await import_collaboration_room.appendCollaborationRoomEvents(input.roomId, [
-              {
-                eventId: randomUUID(),
-                type: "agent_reply",
-                authorRole: "agent",
-                agentId: input.targetAgentId,
-                sourceEventId: input.sourceEvent.eventId,
-                message: nextReplyText || void 0,
-                attachmentIds: nextReplyAttachments.map((attachment) => attachment.attachmentId),
-                relatedSessionId: nextResponse.sessionId ?? binding?.sessionId,
-                relatedSessionKey: nextResponse.sessionKey ?? binding?.sessionKey,
-                detail: buildCollaborationAgentReplyDetail({
-                  language: input.language,
-                  directory: input.directory,
-                  agentId: input.targetAgentId,
-                  durationMs: nextResponse.durationMs,
-                  attachments: nextReplyAttachments,
-                }),
-              },
-            ])
-          : [];
-      const nextReplyEvent = nextReplyEvents.at(-1);
-      if (isCollaborationTurnCancelled(activeTurn)) {
-        return;
-      }
-      await persistCollaborationStageResult({
+      await persistSuccessfulCollaborationAgentOutput({
         roomId: input.roomId,
         sourceEvent: input.sourceEvent,
         targetAgentId: input.targetAgentId,
         directory: input.directory,
-          language: input.language,
-          project: projectContext.project,
-          dispatchRecord,
-          envelope: nextResponseOutput.parsedStageResult.envelope,
-          replyAttachments: nextReplyAttachments,
-          replyText: nextReplyText,
-          workspaceRoot,
-          projectFiles: projectContext.memory.files,
-          currentRouteAgentIds: input.targetAgentIds,
-          reportedAt: nextResponseOutput.parsedStageResult.envelope?.reportedAt ?? new Date().toISOString(),
-        });
-      if (nextReplyEvent) {
-        await maybeDispatchCollaborationReplyMentions({
+        language: input.language,
+        project: projectContext.project,
+        dispatchRecord,
+        workspaceRoot,
+        projectFiles: projectContext.memory.files,
+        currentRouteAgentIds: input.targetAgentIds,
+        attachmentRecords: input.attachmentRecords,
+        toolClient: input.toolClient,
+        requestMessageOverride: input.requestMessageOverride,
+        replyText: nextResponseOutput.replyText,
+        rawPaths: nextResponseOutput.rawPaths,
+        envelope: nextResponseOutput.parsedStageResult.envelope,
+        durationMs: nextResponse.durationMs,
+        sessionId: nextResponse.sessionId ?? binding?.sessionId,
+        sessionKey: nextResponse.sessionKey ?? binding?.sessionKey,
+        reportedAt: nextResponseOutput.parsedStageResult.envelope?.reportedAt ?? new Date().toISOString(),
+        cancelCheck: () => isCollaborationTurnCancelled(activeTurn),
+      });
+      return;
+    }
+    if (
+      nextResponse.sessionKey &&
+      input.toolClient?.sessionsHistory &&
+      isRecoverableCollaborationFailureResponse(nextResponse)
+    ) {
+      await import_collaboration_room.upsertCollaborationTaskReceipt(input.roomId, {
+        taskId: dispatchRecord.taskId,
+        projectId: projectContext.project.projectId,
+        lastResultState: "in_progress",
+        lastReportedAt: new Date().toISOString(),
+        lastReportedBy: input.targetAgentId,
+        taskTitle: dispatchRecord.title,
+        stage: dispatchRecord.stage,
+        summary:
+          summarizeCollaborationUiText(nextResponseOutput.replyText, dispatchRecord.goal, 260) ||
+          summarizeCollaborationUiText(dispatchRecord.goal, "", 260),
+        recentOutput:
+          summarizeCollaborationUiText(nextResponseOutput.replyText, dispatchRecord.goal, 260) ||
+          summarizeCollaborationUiText(dispatchRecord.goal, "", 260),
+      });
+      await syncProjectOpenTasksForRoom(
+        projectContext.project.projectId,
+        projectContext.project.title,
+        await import_collaboration_room.loadCollaborationRoom(input.roomId),
+      );
+      queueCollaborationRecoverableFailureJob(
+        {
           roomId: input.roomId,
-          sourceEvent: input.sourceEvent,
-          replyEvent: nextReplyEvent,
-          replyText: nextReplyText,
-          attachmentRecords: input.attachmentRecords,
-          replyAttachments: nextReplyAttachments,
-          currentRouteAgentIds: input.targetAgentIds,
-          parentRequestText: input.requestMessageOverride || input.sourceEvent.message,
-          toolClient: input.toolClient,
-          directory: input.directory,
-          language: input.language,
-        });
-        await maybeDispatchCollaborationCoordinatorReviewAfterWorkerReply({
-          roomId: input.roomId,
-          sourceEvent: input.sourceEvent,
-          replyEvent: nextReplyEvent,
-          replyText: nextReplyText,
-          attachmentRecords: input.attachmentRecords,
-          replyAttachments: nextReplyAttachments,
-          currentRouteAgentIds: input.targetAgentIds,
-          requestMessageOverride: input.requestMessageOverride,
-          toolClient: input.toolClient,
-          directory: input.directory,
-          language: input.language,
-        });
-      }
+          sourceEventId: input.sourceEvent.eventId,
+          agentId: input.targetAgentId,
+        },
+        async () => {
+          await watchRecoverableCollaborationFailure({
+            roomId: input.roomId,
+            sourceEvent: input.sourceEvent,
+            targetAgentId: input.targetAgentId,
+            directory: input.directory,
+            language: input.language,
+            project: projectContext.project,
+            dispatchRecord,
+            workspaceRoot,
+            projectFiles: projectContext.memory.files,
+            currentRouteAgentIds: input.targetAgentIds,
+            attachmentRecords: input.attachmentRecords,
+            toolClient: input.toolClient,
+            requestMessageOverride: input.requestMessageOverride,
+            response: nextResponse,
+            output: nextResponseOutput,
+            binding,
+            sessionKey: nextResponse.sessionKey ?? binding?.sessionKey,
+            stageResultFallback,
+            abortGeneration: activeTurn.abortGeneration,
+            startedAtMs: Date.parse(activeTurn.startedAt || new Date().toISOString()),
+          });
+        },
+      );
       return;
     }
     const nextFailedReplyAttachments = await collectCollaborationAgentReplyAttachments({
@@ -3504,7 +3905,7 @@ function createCollaborationChatHelpers(deps) {
           detail: pickUiText(
             input.language,
             `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} generated file attachments before the reply ended unexpectedly.`,
-            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 在异常结束前已经生成了文件附件。`,
+            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} generated file attachments before the reply ended unexpectedly.`,
           ),
         },
       ]);
@@ -3523,7 +3924,7 @@ function createCollaborationChatHelpers(deps) {
         detail: pickUiText(
           input.language,
           `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed: ${nextFailureSummary}`,
-          `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 分发失败：${nextFailureSummary}`,
+          `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 鍒嗗彂澶辫触锛?{nextFailureSummary}`,
         ),
       },
     ]);
@@ -3552,12 +3953,12 @@ function createCollaborationChatHelpers(deps) {
           ? pickUiText(
               input.language,
               `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so ${input.directory.primaryDisplayName} stays on the route as the active fallback.`,
-              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 失败后，${input.directory.primaryDisplayName} 继续作为当前回退主控。`,
+              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so ${input.directory.primaryDisplayName} stays on the route as the active fallback.`,
             )
           : pickUiText(
               input.language,
               `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so the turn is being handed to ${input.directory.primaryDisplayName}.`,
-              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 失败后，当前轮次转交给 ${input.directory.primaryDisplayName}。`,
+              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so the turn is being handed to ${input.directory.primaryDisplayName}.`,
             ),
       },
     ]);
@@ -3602,7 +4003,7 @@ function createCollaborationChatHelpers(deps) {
           detail: pickUiText(
             input.language,
             `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} generated file attachments before the reply ended unexpectedly.`,
-            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 在回复异常结束前已经生成了附件文件。`,
+            `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} generated file attachments before the reply ended unexpectedly.`,
           ),
         },
       ]);
@@ -3621,7 +4022,7 @@ function createCollaborationChatHelpers(deps) {
         detail: pickUiText(
           input.language,
           `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed: ${failureSummary}`,
-          `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 分发失败：${response.failureReason ?? "未知错误"}`,
+          `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 鍒嗗彂澶辫触锛?{response.failureReason ?? "鏈煡閿欒"}`,
         ),
       },
     ]);
@@ -3645,12 +4046,12 @@ function createCollaborationChatHelpers(deps) {
           ? pickUiText(
               input.language,
               `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so ${input.directory.primaryDisplayName} stays on the route as the active fallback.`,
-              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 失败后，${input.directory.primaryDisplayName} 会继续作为这条链路上的兜底主控。`,
+              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so ${input.directory.primaryDisplayName} stays on the route as the active fallback.`,
             )
           : pickUiText(
               input.language,
               `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so the turn is being handed to ${input.directory.primaryDisplayName}.`,
-              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} 失败后，当前消息会自动转交给 ${input.directory.primaryDisplayName}。`,
+              `${resolveCollaborationParticipantName(input.directory, input.targetAgentId)} failed, so the turn is being handed to ${input.directory.primaryDisplayName}.`,
             ),
       },
     ]);
@@ -3838,9 +4239,9 @@ function createCollaborationChatHelpers(deps) {
     }
     const markers = [
       /coordination instruction:\s*/gi,
-      /\u534f\u8c03\u6307\u4ee4[:：]\s*/g,
+      /\u534f\u8c03\u6307\u4ee4[:\uff1a]\s*/g,
       /assigned follow-up for you:\s*/gi,
-      /\u5206\u914d\u7ed9\u4f60\u7684\u540e\u7eed\u52a8\u4f5c[:：]\s*/g,
+      /\u5206\u914d\u7ed9\u4f60\u7684\u540e\u7eed\u52a8\u4f5c[:\uff1a]\s*/g,
     ];
     let instructionStart = -1;
     for (const pattern of markers) {
@@ -3869,27 +4270,27 @@ function createCollaborationChatHelpers(deps) {
         " ",
       )
       .replace(
-        /(?:不需要|无需|不用|不要|别)[^。！？\n]{0,80}/g,
+        /(?:不需要|无需|不用|不要)[^。！？\n]{0,80}/g,
         " ",
       );
     const hasReadOnlyIntent =
       /(?:\bverify\b|\breview\b|\binspect\b|\baudit\b|\bcheck\b|\bvalidate\b|\banaly[sz]e\b|\bassess\b|\bexamine\b|\bconfirm\b|\btest\b|\bpass\s*\/\s*fail\b|\bpass-or-fail\b|\bpass or fail\b|\bread-only\b|\breply with\b.*\bpass\b.*\bfail\b|\b(?:reply|respond)\b.*\bonly\b)/i.test(
         text,
       ) ||
-      /(?:验证|核对|检查|审核|评审|走查|确认|分析|只需回复|仅需回复|仅回复|只回复|通过\/不通过|通过或不通过|不要修改|无需修改|不需要修改|不用修改|只给结论|仅给结论|只看结论)/.test(
+      /(?:验证|核对|检查|审核|评审|复查|确认|分析|只需回复|仅需回复|仅回复|只回复|通过\/不通过|通过或不通过|不要修改|无需修改|不用修改|只给结论|仅给结论|只看结论)/.test(
         text,
       );
     const hasArtifactActionIntent =
       /(?:\bcreate\b|\bgenerate\b|\bbuild\b|\bmake\b|\bwrite\b|\bdraft\b|\bprepare\b|\bproduce\b|\bexport\b|\battach\b|\bupload\b|\bsend\b|\bshare\b|\bdeliver\b|\breturn\b|\bfix\b|\bupdate\b|\bedit\b|\bmodify\b|\brewrite\b|\brevise\b|\bpatch\b|\bimplement\b|\brender\b|\bsave\b.{0,20}\bas\b)/i.test(
         normalizedText,
       ) ||
-      /(?:生成|制作|做成|导出|发给|发送|附上|上传|交付|产出|写成|整理成|输出|修复|修改|更新|改写|重写|补齐|实现|保存成|保存为)/.test(
+      /(?:创建|生成|构建|制作|做成|导出|发送|附上|上传|交付|产出|写成|整理成|输出|修复|修改|更新|改写|重写|补齐|实现|保存成|保存为)/.test(
         normalizedText,
       );
     const hasArtifactTarget =
       /(?:\bhtml\b|\bpdf\b|\bdocx?\b|\bmarkdown\b|\bmd\b|\bjson\b|\bcsv\b|\btxt\b|\breport\b|\bfile\b|\bartifact\b|\battachment\b|\bpage\b|\bwebpage\b|\bwebsite\b|\bdocument\b)/i.test(
         text,
-      ) || /(?:文件|文档|附件|报告|产物|页面|网页)/.test(text);
+      ) || /(?:文件|文档|附件|报告|产物|页面|网页|站点)/.test(text);
     if (hasReadOnlyIntent && !hasArtifactActionIntent) {
       return false;
     }
@@ -4054,14 +4455,14 @@ function createCollaborationChatHelpers(deps) {
       return pickUiText(
         input.language,
         `${actor} replied in ${durationLabel}.`,
-        `${actor} 已回复，用时 ${durationLabel}。`,
+        `${actor} replied in ${durationLabel}.`,
       );
     }
     const fileNames = input.attachments.slice(0, 3).map((attachment) => attachment.fileName).join(", ");
     return pickUiText(
       input.language,
       `${actor} replied in ${durationLabel} and attached ${input.attachments.length} file(s): ${fileNames}.`,
-      `${actor} 已回复，用时 ${durationLabel}，并附上 ${input.attachments.length} 个文件：${fileNames}。`,
+      `${actor} replied in ${durationLabel} and attached ${input.attachments.length} file(s): ${fileNames}.`,
     );
   }
 
