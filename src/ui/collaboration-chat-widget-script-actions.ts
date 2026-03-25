@@ -144,23 +144,33 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
 
   const roomFetchLimit = () => (state.expanded ? 80 : 32);
 
-  const buildRoomFetchParams = () => new URLSearchParams({
-    roomId: state.activeRoomId,
+  const buildRoomFetchParams = (roomId = state.activeRoomId) => new URLSearchParams({
+    roomId,
     after: '0',
     limit: String(roomFetchLimit()),
-    readSequence: String(roomCursor(state.activeRoomId)),
+    readSequence: String(roomCursor(roomId)),
     lang: root.dataset.language || embeddedLanguage,
   });
 
-  const applyRoomPayload = (room, reason = 'auto') => {
+  const applyRoomPayload = (room, reason = 'auto', options = {}) => {
     if (!room || typeof room !== 'object') return;
+    const payloadRoomId = String(room.roomId || '').trim();
+    const expectedRoomId = String(options.expectedRoomId || '').trim();
+    if (expectedRoomId && payloadRoomId && payloadRoomId !== expectedRoomId) {
+      return;
+    }
+    if (!expectedRoomId && payloadRoomId && state.activeRoomId && payloadRoomId !== state.activeRoomId) {
+      return;
+    }
     state.room = room;
     state.roomStreamLastSnapshotAt = Date.now();
     state.rooms = Array.isArray(room.rooms) ? room.rooms : [];
     state.participants = Array.isArray(room.participants) && room.participants.length > 0
       ? room.participants
       : state.participants;
-    state.activeRoomId = String(room.roomId || state.activeRoomId);
+    if (!state.activeRoomId && payloadRoomId) {
+      state.activeRoomId = payloadRoomId;
+    }
     const canonicalReadSequence = Math.max(0, Number(room.readSequence || 0));
     if (canonicalReadSequence > roomCursor(state.activeRoomId)) {
       state.roomReadCursors[state.activeRoomId] = canonicalReadSequence;
@@ -233,8 +243,9 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
       return true;
     }
     closeRoomStream();
+    const streamRoomId = String(state.activeRoomId || '').trim();
     const params = new URLSearchParams({
-      roomId: state.activeRoomId,
+      roomId: streamRoomId,
       limit: String(roomFetchLimit()),
       lang: root.dataset.language || embeddedLanguage,
     });
@@ -259,7 +270,7 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
         return;
       }
       state.roomStreamLastSnapshotAt = Date.now();
-      applyRoomPayload(payload.room, 'stream');
+      applyRoomPayload(payload.room, 'stream', { expectedRoomId: streamRoomId });
     });
     source.addEventListener('room-error', () => {
       if (source !== state.roomStream) return;
@@ -320,11 +331,14 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
   };
 
   const refreshRoom = async (reason = 'auto', allowRecovery = true) => {
+    const requestedRoomId = String(state.activeRoomId || '').trim();
+    const requestId = Number(state.activeRoomRefreshRequestId || 0) + 1;
+    state.activeRoomRefreshRequestId = requestId;
     state.loading = true;
     syncComposerState();
     syncRefreshGuard();
     try {
-      const params = buildRoomFetchParams();
+      const params = buildRoomFetchParams(requestedRoomId);
       const response = await fetch(endpoints.room + '?' + params.toString(), {
         headers: { accept: 'application/json' },
         cache: 'no-store',
@@ -333,8 +347,14 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
       if (!response.ok || payload?.ok !== true || !payload.room) {
         throw new Error(typeof payload?.error?.message === 'string' ? payload.error.message : labels.loading);
       }
-      applyRoomPayload(payload.room, reason);
+      if (requestId !== state.activeRoomRefreshRequestId || requestedRoomId !== String(state.activeRoomId || '').trim()) {
+        return;
+      }
+      applyRoomPayload(payload.room, reason, { expectedRoomId: requestedRoomId });
     } catch (error) {
+      if (requestId !== state.activeRoomRefreshRequestId || requestedRoomId !== String(state.activeRoomId || '').trim()) {
+        return;
+      }
       if (allowRecovery && await tryRecoverMissingRoom()) {
         await refreshRoom(reason, false);
         return;

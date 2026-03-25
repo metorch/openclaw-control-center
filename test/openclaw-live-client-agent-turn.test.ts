@@ -7,8 +7,10 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   buildAgentTurnCliArgsForSmoke,
+  buildSessionHistoryRecoveryPlanForSmoke,
   inspectAgentTurnCompletionForSmoke,
   OpenClawLiveClient,
+  recoverFinalAssistantReplyFromHistoryForSmoke,
   resolveRequestedAgentTurnSessionBindingForSmoke,
 } from "../src/clients/openclaw-live-client";
 import {
@@ -975,6 +977,128 @@ test("agentTurn can consume the upstream gateway event stream while still recove
       delete (globalThis as { WebSocket?: unknown }).WebSocket;
     }
   }
+});
+
+test("gateway final timeout recovery keeps polling long enough for a simulated 24-second-late final session reply", async () => {
+  const startedAtMs = Date.now();
+  const finalReply = [
+    "[[reply_to_current]]Final reply landed after the gateway timeout.",
+    '<stage_result>{"taskId":"task-gateway-timeout","projectId":"proj-gateway-timeout","agentId":"main","resultState":"awaiting_review","summary":"late final reply recovered","artifacts":[],"completionChecklist":["done"],"blockers":[],"nextSuggestion":"","reportedAt":"2026-03-24T10:07:50.223Z"}</stage_result>',
+  ].join("\n");
+  const finalHistory = {
+    rawText: [
+      JSON.stringify({
+        type: "message",
+        timestamp: new Date(startedAtMs + 24_000).toISOString(),
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: finalReply,
+              textSignature: '{"phase":"final_answer"}',
+            },
+          ],
+          stopReason: "stop",
+        },
+      }),
+    ].join("\n"),
+  };
+  const timings = {
+    defaultTimeoutMs: 40,
+    gatewayFinalTimeoutMs: 220,
+    pollIntervalMs: 10,
+  };
+  const plan = buildSessionHistoryRecoveryPlanForSmoke({
+    waitForFinal: true,
+    errorMessage: "Gateway chat stream timed out before a final event arrived.",
+    timings,
+  });
+  assert.equal(plan.extendedForGatewayFinalTimeout, true);
+  assert.equal(plan.timeoutMs, 220);
+
+  const buildDelayedReader = () => {
+    let calls = 0;
+    return {
+      getCalls: () => calls,
+      readHistory: async () => {
+        calls += 1;
+        if (calls < 10) {
+          return { rawText: "" };
+        }
+        return finalHistory;
+      },
+    };
+  };
+
+  const genericReader = buildDelayedReader();
+  const genericRecovered = await recoverFinalAssistantReplyFromHistoryForSmoke({
+    waitForFinal: true,
+    errorMessage: "Gateway chat stream closed before a final event arrived.",
+    startedAtMs,
+    timings,
+    readHistory: genericReader.readHistory,
+  });
+  assert.equal(genericRecovered, undefined);
+  assert.ok(genericReader.getCalls() <= 6);
+
+  const gatewayReader = buildDelayedReader();
+  const gatewayRecovered = await recoverFinalAssistantReplyFromHistoryForSmoke({
+    waitForFinal: true,
+    errorMessage: "Gateway chat stream timed out before a final event arrived.",
+    startedAtMs,
+    timings,
+    readHistory: gatewayReader.readHistory,
+  });
+  assert.match(gatewayRecovered?.replyText ?? "", /Final reply landed after the gateway timeout/);
+  assert.equal(gatewayRecovered?.stopReason, "stop");
+  assert.equal(gatewayRecovered?.timestampMs, startedAtMs + 24_000);
+  assert.ok(gatewayReader.getCalls() >= 10);
+});
+
+test("gateway final timeout recovery can surface interrupted session progress before a final reply exists", async () => {
+  const startedAtMs = Date.now();
+  const interruptedHistory = {
+    rawText: [
+      JSON.stringify({
+        type: "message",
+        timestamp: new Date(startedAtMs + 5_000).toISOString(),
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Still installing dependencies and running the smoke checks.",
+            },
+            {
+              type: "toolCall",
+              name: "process",
+              arguments: { action: "poll", sessionId: "brisk-canyon" },
+            },
+          ],
+          stopReason: "toolUse",
+        },
+      }),
+    ].join("\n"),
+  };
+
+  const genericRecovered = await recoverFinalAssistantReplyFromHistoryForSmoke({
+    waitForFinal: true,
+    errorMessage: "Gateway chat stream closed before a final event arrived.",
+    startedAtMs,
+    readHistory: async () => interruptedHistory,
+  });
+  assert.equal(genericRecovered, undefined);
+
+  const gatewayRecovered = await recoverFinalAssistantReplyFromHistoryForSmoke({
+    waitForFinal: true,
+    errorMessage: "Gateway chat stream timed out before a final event arrived.",
+    startedAtMs,
+    readHistory: async () => interruptedHistory,
+  });
+  assert.equal(gatewayRecovered?.replyText, "Still installing dependencies and running the smoke checks.");
+  assert.equal(gatewayRecovered?.stopReason, "toolUse");
+  assert.equal(gatewayRecovered?.incomplete, true);
 });
 
 test("agentTurn tolerates gateway delta-only payload variants and final-state aliases", async () => {

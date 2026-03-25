@@ -1,5 +1,5 @@
 export interface ApiRouteDoc {
-  method: "GET" | "POST" | "PATCH" | "PUT";
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   path: string;
   summary: string;
   query?: Record<string, string>;
@@ -63,7 +63,7 @@ export function buildApiDocs(): ApiDocsPayload {
         response: {
           ok: "boolean",
           preferences:
-            "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, collaborationChat{expanded,autoRefresh,activeRoomId?,lastReadSequence?,roomReadCursors?}, updatedAt }",
+            "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, taskBoardViewMode, collaborationChat{expanded,autoRefresh,activeRoomId?,lastReadSequence?,roomReadCursors?}, updatedAt }",
           path: "string",
           issues: "string[]",
         },
@@ -78,13 +78,14 @@ export function buildApiDocs(): ApiDocsPayload {
           quickFilter: "all|attention|todo|in_progress|blocked|done (optional)",
           taskFilters: "{ status?, owner?, project? } (optional)",
           taskCardOrder: "string[] (optional)",
+          taskBoardViewMode: "cards|details (optional)",
           collaborationChat:
             "{ expanded?, autoRefresh?, activeRoomId?, lastReadSequence?, roomReadCursors? } (optional; room fields are viewer-scoped room state)",
         },
         response: {
           ok: "boolean",
           preferences:
-            "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, collaborationChat{expanded,autoRefresh,activeRoomId?,lastReadSequence?,roomReadCursors?}, updatedAt }",
+            "{ compactStatusStrip, quickFilter, taskFilters, taskCardOrder, taskBoardViewMode, collaborationChat{expanded,autoRefresh,activeRoomId?,lastReadSequence?,roomReadCursors?}, updatedAt }",
         },
       },
       {
@@ -125,6 +126,34 @@ export function buildApiDocs(): ApiDocsPayload {
         response: {
           ok: "boolean",
           attachment: "{ attachmentId, fileName, contentType, sizeBytes, kind, previewText?, localPath, contentHref, downloadHref }",
+        },
+      },
+      {
+        method: "DELETE",
+        path: "/api/tasks/:taskId",
+        summary: "Delete one tracked task and refresh any existing collaboration project open-task mirror for the same project",
+        query: {
+          projectId: "optional project id when taskId disambiguation is required",
+        },
+        response: {
+          ok: "boolean",
+          path: "string",
+          projectId: "string",
+          projectTitle: "string",
+          task: "ProjectTask",
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/tasks/bulk-delete",
+        summary: "Delete multiple tracked tasks in one request and prune deleted task ids from UI task-board ordering preferences",
+        body: {
+          tasks: "Array<{ taskId, projectId? }>",
+        },
+        response: {
+          ok: "boolean",
+          path: "string",
+          removed: "Array<{ projectId, projectTitle, task }>",
         },
       },
       {

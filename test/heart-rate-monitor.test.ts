@@ -895,3 +895,240 @@ test("heart rate monitor drops legacy confirmation protection after the next use
   assert.equal(candidates[0]?.issueKey, "stale_in_progress");
   assert.equal(statuses[0]?.collaborationState, "stale");
 });
+
+test("heart rate monitor does not re-wake Jarvis when the latest recorded room reply already satisfied the turn", () => {
+  const now = new Date("2026-03-20T10:00:00.000Z");
+  const catalog = createCatalog([
+    {
+      agentId: "main",
+      displayName: "Jarvis",
+      workspace: "C:\\Users\\45441\\.openclaw\\workspace",
+    },
+  ]);
+  const rooms = [
+    createRoom({
+      roomId: "room-final-reply",
+      projectId: "proj-final-reply",
+      taskId: "task-final-reply",
+      agentId: "main",
+      stage: "delivery",
+      title: "Reply with exactly two lines",
+      createdAt: "2026-03-20T09:00:00.000Z",
+      receiptState: "in_progress",
+      receiptAt: "2026-03-20T09:20:00.000Z",
+      summary: "Alpha. Beta.",
+      events: [
+        {
+          sequence: 1,
+          eventId: "evt-user-1",
+          type: "user_message",
+          createdAt: "2026-03-20T09:00:00.000Z",
+          authorRole: "user",
+          message: "Please reply with exactly two lines.",
+        },
+        {
+          sequence: 2,
+          eventId: "evt-agent-1",
+          type: "agent_reply",
+          createdAt: "2026-03-20T09:21:00.000Z",
+          authorRole: "agent",
+          agentId: "main",
+          message: "[[reply_to_current]] Alpha.\nBeta.",
+        },
+      ],
+    }),
+  ];
+  const tasks = [
+    createTask(
+      "proj-final-reply",
+      "task-final-reply",
+      "Reply with exactly two lines",
+      "main",
+      "in_progress",
+      "2026-03-20T09:20:00.000Z",
+    ),
+  ];
+
+  const candidates = selectHeartRateMonitorRecoveryCandidates({
+    catalog,
+    sessions: [],
+    rooms,
+    tasks,
+    now,
+  });
+  const statuses = buildHeartRateMonitorAgentStatuses({
+    catalog,
+    sessions: [],
+    rooms,
+    tasks,
+    now,
+  });
+
+  assert.equal(candidates.length, 0);
+  assert.equal(statuses[0]?.collaborationState, "idle");
+});
+
+test("heart rate monitor still re-wakes Jarvis when the latest room reply explicitly says the work is unfinished", () => {
+  const now = new Date("2026-03-20T10:00:00.000Z");
+  const catalog = createCatalog([
+    {
+      agentId: "main",
+      displayName: "Jarvis",
+      workspace: "C:\\Users\\45441\\.openclaw\\workspace",
+    },
+  ]);
+  const rooms = [
+    createRoom({
+      roomId: "room-still-working",
+      projectId: "proj-still-working",
+      taskId: "task-still-working",
+      agentId: "main",
+      stage: "delivery",
+      title: "Finish the answer",
+      createdAt: "2026-03-20T09:00:00.000Z",
+      receiptState: "in_progress",
+      receiptAt: "2026-03-20T09:20:00.000Z",
+      summary: "Still working on it, need more work.",
+      events: [
+        {
+          sequence: 1,
+          eventId: "evt-user-1",
+          type: "user_message",
+          createdAt: "2026-03-20T09:00:00.000Z",
+          authorRole: "user",
+          message: "Finish the answer.",
+        },
+        {
+          sequence: 2,
+          eventId: "evt-agent-1",
+          type: "agent_reply",
+          createdAt: "2026-03-20T09:21:00.000Z",
+          authorRole: "agent",
+          agentId: "main",
+          message: "[[reply_to_current]] Still working on it, need more work.",
+        },
+      ],
+    }),
+  ];
+  const tasks = [
+    createTask(
+      "proj-still-working",
+      "task-still-working",
+      "Finish the answer",
+      "main",
+      "in_progress",
+      "2026-03-20T09:20:00.000Z",
+    ),
+  ];
+
+  const candidates = selectHeartRateMonitorRecoveryCandidates({
+    catalog,
+    sessions: [],
+    rooms,
+    tasks,
+    now,
+  });
+  const statuses = buildHeartRateMonitorAgentStatuses({
+    catalog,
+    sessions: [],
+    rooms,
+    tasks,
+    now,
+  });
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]?.issueKey, "stale_in_progress");
+  assert.equal(statuses[0]?.collaborationState, "stale");
+});
+
+test("heart rate monitor only re-wakes the latest Jarvis dispatch in a room", () => {
+  const now = new Date("2026-03-20T10:00:00.000Z");
+  const catalog = createCatalog([
+    {
+      agentId: "main",
+      displayName: "Jarvis",
+      workspace: "C:\\Users\\45441\\.openclaw\\workspace",
+    },
+  ]);
+  const room = defaultCollaborationRoomState({
+    roomId: "room-multi-main",
+    title: "room-multi-main",
+    projectId: "proj-main-room",
+    now: "2026-03-20T09:00:00.000Z",
+  });
+  room.dispatchRecords.push(
+    {
+      taskId: "task-main-old",
+      projectId: "proj-main-room",
+      stage: "delivery",
+      ownerAgentId: "main",
+      title: "Old Jarvis turn",
+      goal: "Finish the old Jarvis turn",
+      definitionOfDone: ["Reply clearly to the user"],
+      requiredContextRefs: ["docs/ARCHITECTURE.md"],
+      expectedArtifacts: [],
+      createdAt: "2026-03-20T09:00:00.000Z",
+      createdBy: "jarvis",
+    },
+    {
+      taskId: "task-main-new",
+      projectId: "proj-main-room",
+      stage: "delivery",
+      ownerAgentId: "main",
+      title: "Latest Jarvis turn",
+      goal: "Finish the latest Jarvis turn",
+      definitionOfDone: ["Reply clearly to the user"],
+      requiredContextRefs: ["docs/ARCHITECTURE.md"],
+      expectedArtifacts: [],
+      createdAt: "2026-03-20T09:30:00.000Z",
+      createdBy: "jarvis",
+    },
+  );
+  room.taskReceipts.push(
+    {
+      taskId: "task-main-old",
+      projectId: "proj-main-room",
+      lastResultState: "in_progress",
+      lastReportedAt: "2026-03-20T09:05:00.000Z",
+      lastReportedBy: "main",
+      taskTitle: "Old Jarvis turn",
+      stage: "delivery",
+      summary: "Old turn stalled.",
+    },
+    {
+      taskId: "task-main-new",
+      projectId: "proj-main-room",
+      lastResultState: "in_progress",
+      lastReportedAt: "2026-03-20T09:20:00.000Z",
+      lastReportedBy: "main",
+      taskTitle: "Latest Jarvis turn",
+      stage: "delivery",
+      summary: "Latest turn stalled.",
+    },
+  );
+  const tasks = [
+    createTask("proj-main-room", "task-main-old", "Old Jarvis turn", "main", "in_progress", "2026-03-20T09:05:00.000Z"),
+    createTask("proj-main-room", "task-main-new", "Latest Jarvis turn", "main", "in_progress", "2026-03-20T09:20:00.000Z"),
+  ];
+
+  const candidates = selectHeartRateMonitorRecoveryCandidates({
+    catalog,
+    sessions: [],
+    rooms: [room],
+    tasks,
+    now,
+  });
+  const statuses = buildHeartRateMonitorAgentStatuses({
+    catalog,
+    sessions: [],
+    rooms: [room],
+    tasks,
+    now,
+  });
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]?.taskId, "task-main-new");
+  assert.equal(candidates[0]?.title, "Latest Jarvis turn");
+  assert.equal(statuses[0]?.currentTaskTitle, "Latest Jarvis turn");
+  assert.equal(statuses[0]?.collaborationState, "stale");
+});

@@ -990,7 +990,13 @@ function createCollaborationChatHelpers(deps) {
       );
     }
     if (response.ok) {
-      const replyText = describeCollaborationAgentTurnOutput(response, void 0).replyText;
+      const replyText = (
+        await resolveCollaborationAgentTurnOutput({
+          response,
+          toolClient: input.toolClient,
+          sessionKey: response.sessionKey ?? binding?.sessionKey,
+        })
+      ).replyText;
       if (!replyText) {
         return;
       }
@@ -1283,6 +1289,169 @@ function createCollaborationChatHelpers(deps) {
       return safeTruncate(fallback, maxLength);
     }
     return "";
+  }
+
+  function parseCollaborationSessionHistoryRecord(input) {
+    if (!input || typeof input !== "object") {
+      if (typeof input !== "string") {
+        return void 0;
+      }
+      try {
+        const parsed = JSON.parse(input);
+        return parsed && typeof parsed === "object" ? parsed : void 0;
+      } catch {
+        return void 0;
+      }
+    }
+    return input;
+  }
+
+  function extractCollaborationSessionHistoryRecords(history) {
+    if (!history) {
+      return [];
+    }
+    const jsonHistory = history?.json?.history;
+    if (Array.isArray(jsonHistory)) {
+      return jsonHistory
+        .map((entry) => parseCollaborationSessionHistoryRecord(entry))
+        .filter((entry) => Boolean(entry));
+    }
+    return String(history.rawText || "")
+      .split(/\r?\n/)
+      .map((line) => parseCollaborationSessionHistoryRecord(line))
+      .filter((entry) => Boolean(entry));
+  }
+
+  function collectCollaborationAssistantReplyTextFragments(input, output) {
+    if (typeof input === "string") {
+      const trimmed = input.trim();
+      if (trimmed) {
+        output.push(trimmed);
+      }
+      return;
+    }
+    if (Array.isArray(input)) {
+      for (const item of input) {
+        collectCollaborationAssistantReplyTextFragments(item, output);
+      }
+      return;
+    }
+    if (!input || typeof input !== "object") {
+      return;
+    }
+    const type = String(input.type || "").trim().toLowerCase();
+    if (type.startsWith("tool")) {
+      return;
+    }
+    const directText = typeof input.text === "string" ? input.text.trim() : "";
+    if (directText) {
+      output.push(directText);
+    }
+    const directContent = typeof input.content === "string" ? input.content.trim() : "";
+    if (directContent) {
+      output.push(directContent);
+    }
+    const directMessage = typeof input.message === "string" ? input.message.trim() : "";
+    if (directMessage) {
+      output.push(directMessage);
+    }
+    if (!directContent && input.content !== void 0) {
+      collectCollaborationAssistantReplyTextFragments(input.content, output);
+    }
+    if (!directMessage && input.message !== void 0) {
+      collectCollaborationAssistantReplyTextFragments(input.message, output);
+    }
+    if (input.parts !== void 0) {
+      collectCollaborationAssistantReplyTextFragments(input.parts, output);
+    }
+  }
+
+  function extractVisibleAssistantReplyTextFromSessionHistoryMessage(message) {
+    if (!message || typeof message !== "object") {
+      return "";
+    }
+    const collected = [];
+    if (message.content !== void 0) {
+      collectCollaborationAssistantReplyTextFragments(message.content, collected);
+    }
+    const directReplyText = collected.length > 0
+      ? collected.join("\n\n").trim()
+      : (
+      (typeof message.replyText === "string" ? message.replyText : void 0) ||
+      (typeof message.text === "string" ? message.text : void 0) ||
+      (typeof message.message === "string" ? message.message : void 0) ||
+      (typeof message.content === "string" ? message.content : void 0) ||
+      ""
+    ).trim();
+    return import_collaboration_agent_artifacts.isMachineOnlyCollaborationText(directReplyText)
+      ? ""
+      : directReplyText;
+  }
+
+  function extractLatestAssistantReplyTextFromSessionHistory(history) {
+    const records = extractCollaborationSessionHistoryRecords(history);
+    let latestReplyText = "";
+    for (const record of records) {
+      if (String(record?.type || "").trim().toLowerCase() !== "message") {
+        continue;
+      }
+      const message = record?.message;
+      if (!message || typeof message !== "object") {
+        continue;
+      }
+      if (String(message.role || "").trim().toLowerCase() !== "assistant") {
+        continue;
+      }
+      const replyText = extractVisibleAssistantReplyTextFromSessionHistoryMessage(message);
+      if (replyText) {
+        latestReplyText = replyText;
+      }
+    }
+    return latestReplyText;
+  }
+
+  function normalizeComparableCollaborationReplyText(value) {
+    return String(value || "")
+      .replace(/\r/g, "")
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function looksStructuredCollaborationReplyText(value) {
+    const normalized = String(value || "").replace(/\r/g, "").trim();
+    if (!normalized) {
+      return false;
+    }
+    return /\n/.test(normalized) || /^\s*[-*]\s/m.test(normalized) || /^\s*\d+\.\s/m.test(normalized);
+  }
+
+  function shouldPreferRecoveredCollaborationReplyText(currentReplyText, recoveredReplyText, allowStructuredUpgrade = false) {
+    const currentText = String(currentReplyText || "").trim();
+    const recoveredText = String(recoveredReplyText || "").trim();
+    if (!recoveredText) {
+      return false;
+    }
+    if (!currentText) {
+      return true;
+    }
+    const currentNormalized = normalizeComparableCollaborationReplyText(currentText);
+    const recoveredNormalized = normalizeComparableCollaborationReplyText(recoveredText);
+    const currentStructured = looksStructuredCollaborationReplyText(currentText);
+    const recoveredStructured = looksStructuredCollaborationReplyText(recoveredText);
+    if (
+      recoveredStructured &&
+      (!currentStructured || allowStructuredUpgrade) &&
+      (recoveredNormalized === currentNormalized ||
+        recoveredNormalized.includes(currentNormalized) ||
+        currentNormalized.includes(recoveredNormalized))
+    ) {
+      return true;
+    }
+    return allowStructuredUpgrade && recoveredStructured && !currentStructured;
   }
 
   function summarizeCollaborationUiText(value, fallback, maxLength = 260) {
@@ -1771,6 +1940,9 @@ function createCollaborationChatHelpers(deps) {
     if (response?.incomplete) {
       return true;
     }
+    if (looksLikeInterruptedCollaborationTransportFailure(errorMessage)) {
+      return true;
+    }
     if (
       normalizedStopReason === "aborted" ||
       normalizedStopReason === "interrupted" ||
@@ -1782,6 +1954,14 @@ function createCollaborationChatHelpers(deps) {
       return true;
     }
     return /request was aborted|turn was aborted|was aborted|cancelled|canceled/.test(errorMessage);
+  }
+
+  function looksLikeInterruptedCollaborationTransportFailure(errorMessage) {
+    const normalized = String(errorMessage || "").trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    return /stream[_\s-]*read[_\s-]*error/.test(normalized);
   }
 
   function buildInterruptedCollaborationResumePrompt(input) {
@@ -1843,10 +2023,20 @@ function createCollaborationChatHelpers(deps) {
       "",
       2e3,
     );
+    const replyTextSource = stageResultCleanReplyText
+      ? "stage_clean"
+      : stageResultSummaryReplyText
+        ? "stage_summary"
+        : artifactCleanReplyText
+          ? "artifact_clean"
+          : fallbackReplyText
+            ? "response_visible"
+            : "empty";
     return {
       parsedArtifacts,
       parsedStageResult,
       rawJsonArtifactPaths,
+      replyTextSource,
       replyText:
         stageResultCleanReplyText ||
         stageResultSummaryReplyText ||
@@ -1859,6 +2049,40 @@ function createCollaborationChatHelpers(deps) {
         ...stageResultArtifactPaths,
       ]),
     };
+  }
+
+  async function resolveCollaborationAgentTurnOutput(input) {
+    const described = describeCollaborationAgentTurnOutput(input.response, input.stageResultFallback);
+    const sessionKey = String(input.sessionKey || "").trim();
+    if (!sessionKey || !input.toolClient?.sessionsHistory) {
+      return described;
+    }
+    try {
+      const history = await input.toolClient.sessionsHistory({
+        sessionKey,
+        limit: 40,
+      });
+      const recoveredReplyText = safeTruncate(
+        extractLatestAssistantReplyTextFromSessionHistory(history),
+        2e3,
+      );
+      if (
+        shouldPreferRecoveredCollaborationReplyText(
+          described.replyText,
+          recoveredReplyText,
+          described.replyTextSource === "stage_summary",
+        )
+      ) {
+        return {
+          ...described,
+          replyText: recoveredReplyText,
+          replyTextSource: "session_history",
+        };
+      }
+    } catch {
+      // Fall back to the direct response text when the targeted history read is unavailable.
+    }
+    return described;
   }
 
   function buildTaskTitleFromSourceEvent(sourceEvent, attachmentRecords, overrideText) {
@@ -2920,7 +3144,14 @@ function createCollaborationChatHelpers(deps) {
       reportedAt: new Date().toISOString(),
     };
     if (isInterruptedCollaborationAgentTurn(nextResponse)) {
-      const interruptedOutputs = [describeCollaborationAgentTurnOutput(nextResponse, stageResultFallback)];
+      const interruptedOutputs = [
+        await resolveCollaborationAgentTurnOutput({
+          response: nextResponse,
+          stageResultFallback,
+          toolClient: input.toolClient,
+          sessionKey: nextResponse.sessionKey ?? binding?.sessionKey,
+        }),
+      ];
       let interruptedDurationMs = nextResponse.durationMs;
       let resumedResponse = nextResponse;
       if (nextResponse.sessionId || binding?.sessionId || nextResponse.sessionKey || binding?.sessionKey) {
@@ -2950,7 +3181,14 @@ function createCollaborationChatHelpers(deps) {
           return;
         }
         interruptedDurationMs += resumedResponse.durationMs;
-        interruptedOutputs.push(describeCollaborationAgentTurnOutput(resumedResponse, stageResultFallback));
+        interruptedOutputs.push(
+          await resolveCollaborationAgentTurnOutput({
+            response: resumedResponse,
+            stageResultFallback,
+            toolClient: input.toolClient,
+            sessionKey: resumedResponse.sessionKey ?? nextResponse.sessionKey ?? binding?.sessionKey,
+          }),
+        );
         if (resumedResponse.sessionId) {
           updateCollaborationActiveTurn(activeTurn, {
             sessionKey:
@@ -3137,7 +3375,12 @@ function createCollaborationChatHelpers(deps) {
       );
       return;
     }
-    const nextResponseOutput = describeCollaborationAgentTurnOutput(nextResponse, stageResultFallback);
+    const nextResponseOutput = await resolveCollaborationAgentTurnOutput({
+      response: nextResponse,
+      stageResultFallback,
+      toolClient: input.toolClient,
+      sessionKey: nextResponse.sessionKey ?? binding?.sessionKey,
+    });
     if (nextResponse.ok) {
       const nextReplyAttachments = await collectCollaborationAgentReplyAttachments({
         roomId: input.roomId,
@@ -3905,6 +4148,7 @@ function createCollaborationChatHelpers(deps) {
     resolveCollaborationLiveDraftSessionKey,
     buildCollaborationAgentReplyDetail,
     describeCollaborationAgentTurnOutput,
+    resolveCollaborationAgentTurnOutput,
     extractVisibleCollaborationTurnReplyText,
     buildCollaborationPromptContextLines,
     buildRecentCollaborationSummaryLines,

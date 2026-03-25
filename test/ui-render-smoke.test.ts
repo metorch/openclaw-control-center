@@ -280,6 +280,52 @@ test("collaboration chat overlay exposes inline image preview and save actions",
   assert(!html.includes('data-collab-chat-people'));
 });
 
+test("collaboration chat overlay guards stale room refresh payloads from overwriting the active room", async () => {
+  const { renderCollaborationChatOverlay } = await import("../src/ui/collaboration-chat-widget");
+
+  const html = renderCollaborationChatOverlay({
+    language: "en",
+    preferences: {
+      expanded: true,
+      autoRefresh: true,
+      activeRoomId: "room-alpha",
+      lastReadSequence: 3,
+    },
+    primaryAgentId: "main",
+    primaryDisplayName: "Jarvis",
+    participants: [
+      {
+        agentId: "main",
+        displayName: "Jarvis",
+        aliases: ["main", "jarvis"],
+        mention: "jarvis",
+        primary: true,
+        statusTone: "idle",
+        statusDotLabel: "Idle",
+        currentWorkLabel: "Current work",
+        currentWork: "Waiting",
+        recentOutput: "None",
+        identity: {
+          accent: "#0f62fe",
+          imageHref: "/avatars/jarvis.png",
+        },
+      },
+    ],
+    writeAccessEnabled: true,
+    writeAccessAvailable: true,
+  });
+
+  assert(html.includes("activeRoomRefreshRequestId: 0"));
+  assert(html.includes("const requestedRoomId = String(state.activeRoomId || '').trim();"));
+  assert(html.includes("state.activeRoomRefreshRequestId = requestId;"));
+  assert(html.includes("buildRoomFetchParams(requestedRoomId)"));
+  assert(html.includes("requestedRoomId !== String(state.activeRoomId || '').trim()"));
+  assert(html.includes("const payloadRoomId = String(room.roomId || '').trim();"));
+  assert(html.includes("const expectedRoomId = String(options.expectedRoomId || '').trim();"));
+  assert(html.includes("if (expectedRoomId && payloadRoomId && payloadRoomId !== expectedRoomId)"));
+  assert(!html.includes("state.activeRoomId = String(room.roomId || state.activeRoomId);"));
+});
+
 test("collaboration room merge keeps transcript updates without reintroducing relay prompts", async () => {
   const { mergeCollaborationRoomApiEventsForSmoke } = await import("../src/ui/server");
 
@@ -659,7 +705,7 @@ test("empty task wall still shows live runtime signals instead of a blank board"
   assert(en.includes("Tool calls:"));
   assert(en.includes('/?compact=1&amp;section=overview&amp;lang=en&amp;quick=all#cron-health'));
   assert(en.includes('/?compact=1&amp;section=projects-tasks&amp;lang=en&amp;quick=all#tracked-task-view'));
-  assert(source.includes("renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel);"));
+  assert(source.includes("renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel, options.taskBoardViewMode);"));
   assert(source.includes('class="empty-state task-empty-state"'));
   assert(source.includes('data-task-empty-signals'));
   assert(source.includes("renderGlobalVisibilityStrip(emptyStateModel, language)"));

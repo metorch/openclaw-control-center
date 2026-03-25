@@ -364,6 +364,9 @@ export function selectHeartRateMonitorRecoveryCandidates(input: {
   const catalogByAgent = new Map(
     input.catalog.entries.map((entry) => [normalizeAgentId(entry.agentId), entry] as const),
   );
+  const latestPrimaryTaskIdsByRoom = new Map(
+    input.rooms.map((room) => [room.roomId, resolveLatestPrimaryDispatchTaskId(room, input.catalog.primaryAgentId ?? "main")] as const),
+  );
   const sessionsByAgent = new Map<string, SessionsListItem[]>();
   for (const session of input.sessions) {
     const agentId = normalizeAgentId(session.agentId);
@@ -378,6 +381,15 @@ export function selectHeartRateMonitorRecoveryCandidates(input: {
     for (const dispatch of room.dispatchRecords) {
       const normalizedAgentId = normalizeAgentId(dispatch.ownerAgentId);
       if (!normalizedAgentId || isMonitorAgentId(normalizedAgentId)) continue;
+      if (
+        shouldIgnoreHistoricalPrimaryDispatch({
+          dispatch,
+          primaryAgentId: input.catalog.primaryAgentId ?? "main",
+          latestPrimaryTaskId: latestPrimaryTaskIdsByRoom.get(room.roomId),
+        })
+      ) {
+        continue;
+      }
       const receipt = room.taskReceipts.find(
         (item) => item.projectId === dispatch.projectId && item.taskId === dispatch.taskId,
       );
@@ -386,13 +398,22 @@ export function selectHeartRateMonitorRecoveryCandidates(input: {
       const heartbeatAtMs = Date.parse(lastHeartbeatAt);
       if (!Number.isFinite(heartbeatAtMs)) continue;
       const heartbeatAgeMs = Math.max(0, nowMs - heartbeatAtMs);
+      const waitingForUserConfirmation = hasPendingPrimaryUserConfirmation({
+        room,
+        dispatch,
+        receipt,
+        primaryAgentId: input.catalog.primaryAgentId ?? "main",
+      });
+      const stablePrimaryReplyWithoutFollowUp = hasStablePrimaryReplyWithoutFollowUp({
+        room,
+        dispatch,
+        receipt,
+        task,
+        primaryAgentId: input.catalog.primaryAgentId ?? "main",
+      });
       const issueKey = resolveRecoveryIssueKey(receipt, task, heartbeatAgeMs, {
-        waitingForUserConfirmation: hasPendingPrimaryUserConfirmation({
-          room,
-          dispatch,
-          receipt,
-          primaryAgentId: input.catalog.primaryAgentId ?? "main",
-        }),
+        waitingForUserConfirmation,
+        stablePrimaryReplyWithoutFollowUp,
       });
       if (!issueKey) continue;
       const entry = catalogByAgent.get(normalizedAgentId);
@@ -728,6 +749,20 @@ function isCompletedReceipt(receipt: CollaborationTaskReceipt | undefined, task:
   return receipt?.reviewState === "approved" || isReviewReadyReceipt(receipt) || task?.status === "done";
 }
 
+function normalizeHeartRateMonitorVisibleReplyText(replyText: string | undefined): string {
+  return stripHeartRateMonitorReplyControlText(replyText).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function primaryReplyLooksLikeOngoingWork(replyText: string | undefined): boolean {
+  const visibleText = normalizeHeartRateMonitorVisibleReplyText(replyText);
+  if (!visibleText) {
+    return false;
+  }
+  return /(?:working on|in progress|not ready|draft|partial|unfinished|todo|pending|still working|continue working|need more work|needs more work|follow-up needed|follow up needed|blocker|blocked|failed|failure|unable|cannot|can't|missing|review first|verify first|继续|再继续|后续|下一步|还在处理|仍在处理|未完成|草稿|部分完成|待继续|阻塞|失败|无法|缺少|先审核|先验证)/i.test(
+    visibleText,
+  );
+}
+
 function stripHeartRateMonitorReplyControlText(replyText: string | undefined): string {
   const parsed = parseStageResultEnvelopeFromReply(String(replyText || ""), {
     taskId: "display",
@@ -797,6 +832,76 @@ function hasPendingPrimaryUserConfirmation(input: {
   }
   return !input.room.events.some(
     (event) => event.type === "user_message" && event.sequence > latestPrimaryReply.sequence,
+  );
+}
+
+function hasStablePrimaryReplyWithoutFollowUp(input: {
+  room: CollaborationRoomState;
+  dispatch: ProjectTaskDispatchRecord;
+  receipt: CollaborationTaskReceipt | undefined;
+  task: ProjectTask | undefined;
+  primaryAgentId: string;
+}): boolean {
+  if (normalizeAgentId(input.dispatch.ownerAgentId) !== normalizeAgentId(input.primaryAgentId)) {
+    return false;
+  }
+  if (
+    input.receipt?.lastResultState === "blocked" ||
+    input.receipt?.lastResultState === "failed" ||
+    input.task?.status === "blocked"
+  ) {
+    return false;
+  }
+  const latestPrimaryReply = [...input.room.events]
+    .filter(
+      (event) =>
+        event.type === "agent_reply" &&
+        normalizeAgentId(event.agentId) === normalizeAgentId(input.primaryAgentId),
+    )
+    .at(-1);
+  if (!latestPrimaryReply) {
+    return false;
+  }
+  const latestUserMessage = [...input.room.events]
+    .filter((event) => event.type === "user_message")
+    .at(-1);
+  if (latestUserMessage && latestPrimaryReply.sequence <= latestUserMessage.sequence) {
+    return false;
+  }
+  if (
+    input.room.events.some(
+      (event) => event.type === "user_message" && event.sequence > latestPrimaryReply.sequence,
+    )
+  ) {
+    return false;
+  }
+  const parsedReply = parseStageResultEnvelopeFromReply(String(latestPrimaryReply.message || ""), {
+    taskId: input.receipt?.taskId || input.dispatch.taskId,
+    projectId: input.receipt?.projectId || input.dispatch.projectId,
+    agentId: input.primaryAgentId,
+    reportedAt: input.receipt?.lastReportedAt || latestPrimaryReply.createdAt,
+  });
+  if (parsedReply.envelope) {
+    return parsedReply.envelope.resultState === "awaiting_review";
+  }
+  const visibleText = stripHeartRateMonitorReplyControlText(latestPrimaryReply.message);
+  if (!visibleText) {
+    return false;
+  }
+  if (isPrimaryReplyWaitingForUserConfirmation(visibleText) || primaryReplyLooksLikeOngoingWork(visibleText)) {
+    return false;
+  }
+  const normalizedVisibleReply = normalizeHeartRateMonitorVisibleReplyText(visibleText);
+  const normalizedSummary = normalizeHeartRateMonitorVisibleReplyText(
+    input.receipt?.recentOutput ?? input.receipt?.summary,
+  );
+  if (!normalizedVisibleReply || !normalizedSummary) {
+    return false;
+  }
+  return (
+    normalizedVisibleReply === normalizedSummary ||
+    normalizedVisibleReply.includes(normalizedSummary) ||
+    normalizedSummary.includes(normalizedVisibleReply)
   );
 }
 
@@ -1042,22 +1147,43 @@ function buildCollaborationStatusByAgent(
 ): Map<string, { state: HeartRateMonitorAgentStatus["collaborationState"]; stage?: string; title?: string; issue?: string }> {
   const taskByKey = new Map(tasks.map((task) => [buildProjectTaskKey(task.projectId, task.taskId), task]));
   const strongest = new Map<string, { state: HeartRateMonitorAgentStatus["collaborationState"]; stage?: string; title?: string; issue?: string; score: number }>();
+  const latestPrimaryTaskIdsByRoom = new Map(
+    rooms.map((room) => [room.roomId, resolveLatestPrimaryDispatchTaskId(room, primaryAgentId)] as const),
+  );
 
   for (const room of rooms) {
     for (const dispatch of room.dispatchRecords) {
       const agentId = normalizeAgentId(dispatch.ownerAgentId);
       if (!agentId) continue;
+      if (
+        shouldIgnoreHistoricalPrimaryDispatch({
+          dispatch,
+          primaryAgentId,
+          latestPrimaryTaskId: latestPrimaryTaskIdsByRoom.get(room.roomId),
+        })
+      ) {
+        continue;
+      }
       const receipt = room.taskReceipts.find((item) => item.projectId === dispatch.projectId && item.taskId === dispatch.taskId);
       const task = taskByKey.get(buildProjectTaskKey(dispatch.projectId, dispatch.taskId));
       const lastHeartbeatAt = receipt?.lastReportedAt ?? dispatch.createdAt;
       const ageMs = Math.max(0, nowMs - Date.parse(lastHeartbeatAt));
+      const waitingForUserConfirmation = hasPendingPrimaryUserConfirmation({
+        room,
+        dispatch,
+        receipt,
+        primaryAgentId,
+      });
+      const stablePrimaryReplyWithoutFollowUp = hasStablePrimaryReplyWithoutFollowUp({
+        room,
+        dispatch,
+        receipt,
+        task,
+        primaryAgentId,
+      });
       const state = resolveCollaborationState(receipt, task, ageMs, {
-        waitingForUserConfirmation: hasPendingPrimaryUserConfirmation({
-          room,
-          dispatch,
-          receipt,
-          primaryAgentId,
-        }),
+        waitingForUserConfirmation,
+        stablePrimaryReplyWithoutFollowUp,
       });
       const score = collaborationStateScore(state);
       const previous = strongest.get(agentId);
@@ -1092,7 +1218,7 @@ function resolveCollaborationState(
   receipt: CollaborationTaskReceipt | undefined,
   task: ProjectTask | undefined,
   heartbeatAgeMs: number,
-  options: { waitingForUserConfirmation?: boolean } = {},
+  options: { waitingForUserConfirmation?: boolean; stablePrimaryReplyWithoutFollowUp?: boolean } = {},
 ): HeartRateMonitorAgentStatus["collaborationState"] {
   if (options.waitingForUserConfirmation || isWaitingForUserConfirmationReceipt(receipt)) {
     return "awaiting_review";
@@ -1101,6 +1227,9 @@ function resolveCollaborationState(
     return "awaiting_review";
   }
   if (isCompletedReceipt(receipt, task)) {
+    return "idle";
+  }
+  if (options.stablePrimaryReplyWithoutFollowUp) {
     return "idle";
   }
   if (receipt?.lastResultState === "blocked" || task?.status === "blocked") {
@@ -1148,12 +1277,15 @@ function resolveRecoveryIssueKey(
   receipt: CollaborationTaskReceipt | undefined,
   task: ProjectTask | undefined,
   heartbeatAgeMs: number,
-  options: { waitingForUserConfirmation?: boolean } = {},
+  options: { waitingForUserConfirmation?: boolean; stablePrimaryReplyWithoutFollowUp?: boolean } = {},
 ): HeartRateMonitorRecoveryCandidate["issueKey"] | undefined {
   if (options.waitingForUserConfirmation || isWaitingForUserConfirmationReceipt(receipt)) {
     return undefined;
   }
   if (isCompletedReceipt(receipt, task)) {
+    return undefined;
+  }
+  if (options.stablePrimaryReplyWithoutFollowUp) {
     return undefined;
   }
   if (receipt?.lastResultState === "blocked" || task?.status === "blocked") {
@@ -1189,6 +1321,42 @@ function compareRecoveryCandidates(
 
 function recoveryIssueRank(issueKey: HeartRateMonitorRecoveryCandidate["issueKey"]): number {
   return issueKey === "failed_turn" ? 0 : 1;
+}
+
+function resolveLatestPrimaryDispatchTaskId(
+  room: Pick<CollaborationRoomState, "dispatchRecords">,
+  primaryAgentId: string,
+): string | undefined {
+  const primaryKey = normalizeAgentId(primaryAgentId);
+  if (!primaryKey) {
+    return undefined;
+  }
+  let latestTaskId: string | undefined;
+  let latestCreatedAtMs = Number.NEGATIVE_INFINITY;
+  for (const dispatch of room.dispatchRecords) {
+    if (normalizeAgentId(dispatch.ownerAgentId) !== primaryKey) {
+      continue;
+    }
+    const createdAtMs = Date.parse(dispatch.createdAt);
+    const comparableCreatedAtMs = Number.isFinite(createdAtMs) ? createdAtMs : latestCreatedAtMs;
+    if (latestTaskId === undefined || comparableCreatedAtMs >= latestCreatedAtMs) {
+      latestTaskId = dispatch.taskId;
+      latestCreatedAtMs = comparableCreatedAtMs;
+    }
+  }
+  return latestTaskId;
+}
+
+function shouldIgnoreHistoricalPrimaryDispatch(input: {
+  dispatch: Pick<ProjectTaskDispatchRecord, "ownerAgentId" | "taskId">;
+  primaryAgentId: string;
+  latestPrimaryTaskId?: string;
+}): boolean {
+  const primaryKey = normalizeAgentId(input.primaryAgentId);
+  if (!primaryKey || normalizeAgentId(input.dispatch.ownerAgentId) !== primaryKey) {
+    return false;
+  }
+  return Boolean(input.latestPrimaryTaskId) && input.dispatch.taskId !== input.latestPrimaryTaskId;
 }
 
 function guessBestSessionBinding(sessions: SessionsListItem[]): CollaborationSessionBinding | undefined {

@@ -165,6 +165,18 @@ export interface CollaborationParticipantMention {
 let collaborationRoomWriteChain: Promise<void> = Promise.resolve();
 let collaborationRoomInitPromise: Promise<void> | undefined;
 const roomSubscribers = new Map<string, Set<() => void>>();
+let allCollaborationRoomsCache:
+  | {
+      key: string;
+      value: CollaborationRoomState[];
+    }
+  | undefined;
+let allCollaborationRoomsInFlight:
+  | {
+      key: string;
+      value: Promise<CollaborationRoomState[]>;
+    }
+  | undefined;
 
 export function defaultCollaborationRoomState(input?: {
   roomId?: string;
@@ -255,8 +267,35 @@ export async function setCollaborationRoomReadCursor(roomId: string, sequence: n
 
 export async function loadAllCollaborationRooms(): Promise<CollaborationRoomState[]> {
   const summaries = await listCollaborationRooms();
-  const rooms = await Promise.all(summaries.map((summary) => loadCollaborationRoom(summary.roomId)));
-  return rooms.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  const cacheKey = summaries
+    .map((summary) => `${summary.roomId}:${summary.updatedAt}:${summary.lastSequence}:${summary.eventCount}`)
+    .join("|");
+  if (allCollaborationRoomsCache?.key === cacheKey) {
+    return allCollaborationRoomsCache.value;
+  }
+  if (allCollaborationRoomsInFlight?.key === cacheKey) {
+    return allCollaborationRoomsInFlight.value;
+  }
+
+  const nextValue = Promise.all(summaries.map((summary) => loadCollaborationRoom(summary.roomId))).then((rooms) =>
+    rooms.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
+  );
+  allCollaborationRoomsInFlight = {
+    key: cacheKey,
+    value: nextValue,
+  };
+  try {
+    const value = await nextValue;
+    allCollaborationRoomsCache = {
+      key: cacheKey,
+      value,
+    };
+    return value;
+  } finally {
+    if (allCollaborationRoomsInFlight?.key === cacheKey) {
+      allCollaborationRoomsInFlight = undefined;
+    }
+  }
 }
 
 export async function createCollaborationRoom(input?: {

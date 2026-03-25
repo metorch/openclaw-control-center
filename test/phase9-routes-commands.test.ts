@@ -52,6 +52,8 @@ test("done-checklist route logic builds readiness payload", async () => {
   assert(docs.routes.some((route) => route.path === "/api/action-queue"));
   assert(docs.routes.some((route) => route.path === "/api/action-queue/acks/prune-preview"));
   assert(docs.routes.some((route) => route.path === "/api/tasks/heartbeat"));
+  assert(docs.routes.some((route) => route.path === "/api/tasks/:taskId" && route.method === "DELETE"));
+  assert(docs.routes.some((route) => route.path === "/api/tasks/bulk-delete" && route.method === "POST"));
   assert(docs.routes.some((route) => route.path === "/api/usage-cost"));
   const preferencesRoute = docs.routes.find((route) => route.path === "/api/ui/preferences" && route.method === "PATCH");
   assert(preferencesRoute, "Expected /api/ui/preferences PATCH docs.");
@@ -63,6 +65,7 @@ test("done-checklist route logic builds readiness payload", async () => {
     preferencesRoute.body?.collaborationChat ?? "",
     /activeRoomId\?|roomReadCursors\?/,
   );
+  assert.match(preferencesRoute.body?.taskBoardViewMode ?? "", /cards\|details/);
 
   // Route-level guard behavior used by /api/import/dry-run
   const blocked = evaluateLocalTokenGate({

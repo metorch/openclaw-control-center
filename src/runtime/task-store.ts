@@ -56,11 +56,25 @@ export interface UpdateTaskStatusInput {
   projectId?: string;
 }
 
+export interface DeleteTaskInput {
+  taskId: string;
+  projectId?: string;
+}
+
+export interface DeleteTasksInput {
+  tasks: DeleteTaskInput[];
+}
+
 export interface TaskMutationResult {
   path: string;
   projectId: string;
   projectTitle: string;
   task: ProjectTask;
+}
+
+export interface TaskDeletionResult {
+  path: string;
+  removed: TaskMutationResult[];
 }
 
 export async function loadTaskStore(): Promise<TaskStoreSnapshot> {
@@ -197,6 +211,95 @@ export async function updateTaskStatus(input: unknown): Promise<TaskMutationResu
   };
 }
 
+export async function deleteTask(input: unknown): Promise<TaskMutationResult> {
+  const payload = validateDeleteTaskInput(input);
+  const [store, projectStore] = await Promise.all([loadTaskStore(), loadProjectStore()]);
+  const matches = findTaskMatches(store, payload.taskId, payload.projectId);
+
+  if (matches.length === 0) {
+    throw new TaskStoreValidationError(
+      `taskId '${payload.taskId}' was not found${payload.projectId ? ` in project '${payload.projectId}'` : ""}.`,
+      [],
+      404,
+    );
+  }
+
+  if (matches.length > 1) {
+    throw new TaskStoreValidationError(
+      `taskId '${payload.taskId}' is ambiguous. Provide projectId.`,
+      ["projectId"],
+      409,
+    );
+  }
+
+  const target = matches[0].task;
+  const projectTitle =
+    projectStore.projects.find((item) => item.projectId === target.projectId)?.title ?? target.projectId;
+
+  store.tasks = store.tasks.filter(
+    (task) => !(task.taskId === target.taskId && task.projectId === target.projectId),
+  );
+  store.updatedAt = new Date().toISOString();
+
+  const path = await saveTaskStore(store);
+  return {
+    path,
+    projectId: target.projectId,
+    projectTitle,
+    task: target,
+  };
+}
+
+export async function deleteTasks(input: unknown): Promise<TaskDeletionResult> {
+  const payload = validateDeleteTasksInput(input);
+  const [store, projectStore] = await Promise.all([loadTaskStore(), loadProjectStore()]);
+  const projectTitleById = new Map(projectStore.projects.map((item) => [item.projectId, item.title]));
+  const removed: TaskMutationResult[] = [];
+  const removeTaskKeys = new Set<string>();
+
+  for (const entry of payload.tasks) {
+    const matches = findTaskMatches(store, entry.taskId, entry.projectId);
+    if (matches.length === 0) {
+      throw new TaskStoreValidationError(
+        `taskId '${entry.taskId}' was not found${entry.projectId ? ` in project '${entry.projectId}'` : ""}.`,
+        [],
+        404,
+      );
+    }
+    if (matches.length > 1) {
+      throw new TaskStoreValidationError(
+        `taskId '${entry.taskId}' is ambiguous. Provide projectId.`,
+        ["projectId"],
+        409,
+      );
+    }
+
+    const task = matches[0].task;
+    const taskKey = `${task.projectId}::${task.taskId}`;
+    if (removeTaskKeys.has(taskKey)) continue;
+    removeTaskKeys.add(taskKey);
+    removed.push({
+      path: "",
+      projectId: task.projectId,
+      projectTitle: projectTitleById.get(task.projectId) ?? task.projectId,
+      task,
+    });
+  }
+
+  if (removed.length === 0) {
+    throw new TaskStoreValidationError("At least one task must be provided.", ["tasks"], 400);
+  }
+
+  store.tasks = store.tasks.filter((task) => !removeTaskKeys.has(`${task.projectId}::${task.taskId}`));
+  store.updatedAt = new Date().toISOString();
+
+  const path = await saveTaskStore(store);
+  return {
+    path,
+    removed: removed.map((item) => ({ ...item, path })),
+  };
+}
+
 function findTaskMatches(
   store: TaskStoreSnapshot,
   taskId: string,
@@ -261,6 +364,58 @@ function validateUpdateTaskStatusInput(input: unknown): UpdateTaskStatusInput {
   }
 
   return { taskId, status, projectId };
+}
+
+function validateDeleteTaskInput(input: unknown): DeleteTaskInput {
+  const obj = ensureObject(input, "delete task payload");
+  const issues: string[] = [];
+  const taskId = requiredTaskId(obj.taskId, "taskId", issues);
+  const projectId = optionalProjectId(obj.projectId, "projectId", issues);
+
+  if (issues.length > 0) {
+    throw new TaskStoreValidationError("Invalid delete task payload.", issues, 400);
+  }
+
+  return { taskId, projectId };
+}
+
+function validateDeleteTasksInput(input: unknown): DeleteTasksInput {
+  const obj = ensureObject(input, "delete tasks payload");
+  const rawTasks = asArray(obj.tasks);
+  if (!rawTasks || rawTasks.length === 0) {
+    throw new TaskStoreValidationError("delete tasks payload must include a non-empty tasks array.", ["tasks"], 400);
+  }
+  if (rawTasks.length > 100) {
+    throw new TaskStoreValidationError("delete tasks payload must contain <= 100 tasks.", ["tasks"], 400);
+  }
+
+  const issues: string[] = [];
+  const seen = new Set<string>();
+  const tasks: DeleteTaskInput[] = [];
+
+  rawTasks.forEach((entry, index) => {
+    const objEntry = asObject(entry);
+    if (!objEntry) {
+      issues.push(`tasks[${index}] must be an object`);
+      return;
+    }
+    const taskId = requiredTaskId(objEntry.taskId, `tasks[${index}].taskId`, issues);
+    const projectId = optionalProjectId(objEntry.projectId, `tasks[${index}].projectId`, issues);
+    const dedupeKey = `${projectId ?? ""}::${taskId}`;
+    if (!taskId || seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    tasks.push({ taskId, projectId });
+  });
+
+  if (issues.length > 0) {
+    throw new TaskStoreValidationError("Invalid delete tasks payload.", issues, 400);
+  }
+
+  if (tasks.length === 0) {
+    throw new TaskStoreValidationError("At least one task must be provided.", ["tasks"], 400);
+  }
+
+  return { tasks };
 }
 
 function normalizeTaskStore(input: unknown): TaskStoreSnapshot {
@@ -397,10 +552,7 @@ function normalizeRollback(input: Record<string, unknown> | undefined): Rollback
 }
 
 function normalizeTaskState(input: string | undefined): TaskState {
-  if (input === "todo" || input === "in_progress" || input === "blocked" || input === "done") {
-    return input;
-  }
-  return "todo";
+  return normalizeTaskStateAlias(input) ?? "todo";
 }
 
 function normalizeThresholds(input: Record<string, unknown> | undefined): BudgetThresholds {
@@ -551,11 +703,31 @@ function requiredTaskState(
   field: string,
   issues: string[],
 ): TaskState {
-  if (value === "todo" || value === "in_progress" || value === "blocked" || value === "done") {
-    return value;
+  const normalized = normalizeTaskStateAlias(value);
+  if (normalized) {
+    return normalized;
   }
   issues.push(`${field} must be one of: todo, in_progress, blocked, done`);
   return "todo";
+}
+
+function normalizeTaskStateAlias(value: unknown): TaskState | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case "todo":
+    case "in_progress":
+    case "blocked":
+    case "done":
+      return normalized;
+    case "completed":
+    case "complete":
+    case "finished":
+    case "closed":
+      return "done";
+    default:
+      return undefined;
+  }
 }
 
 function optionalArtifacts(

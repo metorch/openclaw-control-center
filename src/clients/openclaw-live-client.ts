@@ -70,6 +70,8 @@ const SESSION_HISTORY_TAIL_MIN_LINES = 80;
 const SESSION_HISTORY_TAIL_LINE_MULTIPLIER = 8;
 const SESSION_HISTORY_TAIL_CHUNK_BYTES = 64 * 1024;
 const SESSION_HISTORY_RECOVERY_TIMEOUT_MS = 1_500;
+const GATEWAY_FINAL_TIMEOUT_SESSION_HISTORY_RECOVERY_TIMEOUT_MS = 30_000;
+const SESSION_HISTORY_RECOVERY_POLL_INTERVAL_MS = 200;
 const AGENT_TURN_SESSION_HISTORY_LOOKBACK_LIMIT = 80;
 const AGENT_TURN_RETRY_BATCH_SIZE = 3;
 const AGENT_TURN_RETRY_DELAY_MS = 400;
@@ -78,6 +80,19 @@ const AGENT_TURN_TRANSIENT_RETRY_DELAY_MS = 1_200;
 const AGENT_TURN_STALE_LOCK_MIN_AGE_MS = 30 * 60 * 1000;
 const AGENT_TURN_STALE_LOCK_FORCE_AGE_MS = 30 * 60 * 1000;
 const AGENT_TURN_STALE_LOCK_RETRY_DELAY_MS = 250;
+
+export interface SessionHistoryRecoveryTiming {
+  defaultTimeoutMs: number;
+  gatewayFinalTimeoutMs: number;
+  pollIntervalMs: number;
+}
+
+interface SessionHistoryRecoveryPlan {
+  waitForFinal: boolean;
+  timeoutMs: number;
+  pollIntervalMs: number;
+  extendedForGatewayFinalTimeout: boolean;
+}
 
 interface SessionLockFailureDetails {
   lockPath?: string;
@@ -454,6 +469,8 @@ export class OpenClawLiveClient implements ToolClient {
         sessionFile: resolvedSession?.sessionFile,
         startedAtMs: input.startedAt,
         waitForFinal: !looksLikeFinalAgentTurnReply(rawReplyText, completion),
+        errorMessage: completion.errorMessage,
+        signal: input.signal,
       });
       const applied = applyRecoveredAssistantReply({
         ok: true,
@@ -500,13 +517,15 @@ export class OpenClawLiveClient implements ToolClient {
         input.sessionKey,
       );
       const rawReplyText = extractAgentReplyText(rawJson);
-      const recoveredReply = await this.maybeRecoverFinalAssistantReplyFromSessionHistory({
-        sessionId: resolvedSession?.sessionId,
-        sessionKey: resolvedSession?.sessionKey ?? input.sessionKey,
-        sessionFile: resolvedSession?.sessionFile,
-        startedAtMs: input.startedAt,
-        waitForFinal: true,
-      });
+    const recoveredReply = await this.maybeRecoverFinalAssistantReplyFromSessionHistory({
+      sessionId: resolvedSession?.sessionId,
+      sessionKey: resolvedSession?.sessionKey ?? input.sessionKey,
+      sessionFile: resolvedSession?.sessionFile,
+      startedAtMs: input.startedAt,
+      waitForFinal: true,
+      errorMessage: completion.errorMessage,
+      signal: input.signal,
+    });
       const applied = applyRecoveredAssistantReply({
         ok: false,
         replyText: rawReplyText,
@@ -593,6 +612,8 @@ export class OpenClawLiveClient implements ToolClient {
       sessionFile: resolvedSession?.sessionFile,
       startedAtMs: input.startedAt,
       waitForFinal: !looksLikeFinalAgentTurnReply(streamed.replyText, completion),
+      errorMessage: completion.errorMessage,
+      signal: input.signal,
     });
     const applied = applyRecoveredAssistantReply({
       ok: !streamed.errorMessage,
@@ -673,6 +694,8 @@ export class OpenClawLiveClient implements ToolClient {
       sessionFile: resolvedSession?.sessionFile,
       startedAtMs: input.startedAt,
       waitForFinal: !looksLikeFinalAgentTurnReply(streamed.replyText, completion),
+      errorMessage: streamed.errorMessage,
+      signal: input.signal,
     });
     const applied = applyRecoveredAssistantReply({
       ok: !streamed.errorMessage,
@@ -708,6 +731,8 @@ export class OpenClawLiveClient implements ToolClient {
     sessionFile?: string;
     startedAtMs: number;
     waitForFinal: boolean;
+    errorMessage?: string;
+    signal?: AbortSignal;
   }): Promise<RecoveredAssistantReply | undefined> {
     const sessionKey = input.sessionKey?.trim();
     const sessionFile =
@@ -717,10 +742,12 @@ export class OpenClawLiveClient implements ToolClient {
     if (!sessionKey && !sessionFile) {
       return undefined;
     }
-
-    const deadline = Date.now() + SESSION_HISTORY_RECOVERY_TIMEOUT_MS;
-    while (true) {
-      const history =
+    return await recoverFinalAssistantReplyFromHistoryLoop({
+      waitForFinal: input.waitForFinal,
+      errorMessage: input.errorMessage,
+      startedAtMs: input.startedAtMs,
+      signal: input.signal,
+      readHistory: async () =>
         (sessionFile
           ? await readSessionHistoryFile(
             sessionFile,
@@ -732,16 +759,8 @@ export class OpenClawLiveClient implements ToolClient {
             sessionKey,
             limit: AGENT_TURN_SESSION_HISTORY_LOOKBACK_LIMIT,
           })
-          : undefined);
-      const candidate = selectLatestFinalAssistantReplyFromHistory(history, input.startedAtMs);
-      if (candidate) {
-        return candidate;
-      }
-      if (!input.waitForFinal || Date.now() >= deadline) {
-        return undefined;
-      }
-      await sleep(200);
-    }
+          : undefined),
+    });
   }
 
   private async loadSessionsFromStores(input?: {
@@ -1243,6 +1262,41 @@ function normalizeSessionHistoryChunk(raw: string, limit: number): SessionsHisto
   };
 }
 
+async function recoverFinalAssistantReplyFromHistoryLoop(input: {
+  waitForFinal: boolean;
+  errorMessage?: string;
+  startedAtMs: number;
+  signal?: AbortSignal;
+  timings?: Partial<SessionHistoryRecoveryTiming>;
+  readHistory: () => Promise<SessionsHistoryResponse | undefined>;
+}): Promise<RecoveredAssistantReply | undefined> {
+  const recoveryPlan = buildSessionHistoryRecoveryPlan({
+    waitForFinal: input.waitForFinal,
+    errorMessage: input.errorMessage,
+    timings: input.timings,
+  });
+  const deadline = Date.now() + recoveryPlan.timeoutMs;
+  while (true) {
+    if (input.signal?.aborted) {
+      return undefined;
+    }
+    const history = await input.readHistory();
+    const candidate =
+      selectLatestFinalAssistantReplyFromHistory(history, input.startedAtMs) ??
+      (recoveryPlan.extendedForGatewayFinalTimeout
+        ? selectLatestInterruptedAssistantReplyFromHistory(history, input.startedAtMs)
+        : undefined);
+    if (candidate) {
+      return candidate;
+    }
+    if (!recoveryPlan.waitForFinal || Date.now() >= deadline) {
+      return undefined;
+    }
+    const remainingMs = Math.max(1, deadline - Date.now());
+    await sleep(Math.min(recoveryPlan.pollIntervalMs, remainingMs));
+  }
+}
+
 function applyRecoveredAssistantReply(input: {
   ok: boolean;
   replyText: string;
@@ -1255,7 +1309,25 @@ function applyRecoveredAssistantReply(input: {
   errorMessage?: string;
   incomplete: boolean;
 } {
-  if (!input.recoveredReply?.replyText.trim()) {
+  if (!input.recoveredReply) {
+    return {
+      ok: input.ok,
+      replyText: input.replyText,
+      stopReason: input.completion.stopReason,
+      errorMessage: input.completion.errorMessage,
+      incomplete: input.completion.incomplete,
+    };
+  }
+  if (input.recoveredReply.incomplete) {
+    return {
+      ok: input.ok,
+      replyText: input.recoveredReply.replyText.trim() || input.replyText,
+      stopReason: input.recoveredReply.stopReason ?? input.completion.stopReason ?? "toolUse",
+      errorMessage: input.recoveredReply.errorMessage ?? input.completion.errorMessage,
+      incomplete: true,
+    };
+  }
+  if (!input.recoveredReply.replyText.trim()) {
     return {
       ok: input.ok,
       replyText: input.replyText,
@@ -1281,6 +1353,22 @@ function looksLikeFinalAgentTurnReply(replyText: string, completion: AgentTurnCo
   return isFinalAgentTurnStopReason(normalizedStopReason) || /<stage_result\b/i.test(replyText);
 }
 
+function buildSessionHistoryRecoveryPlan(input: {
+  waitForFinal: boolean;
+  errorMessage?: string;
+  timings?: Partial<SessionHistoryRecoveryTiming>;
+}): SessionHistoryRecoveryPlan {
+  const timing = normalizeSessionHistoryRecoveryTiming(input.timings);
+  const extendedForGatewayFinalTimeout =
+    input.waitForFinal && isGatewayFinalTimeoutBeforeFinalEventMessage(input.errorMessage);
+  return {
+    waitForFinal: input.waitForFinal,
+    timeoutMs: extendedForGatewayFinalTimeout ? timing.gatewayFinalTimeoutMs : timing.defaultTimeoutMs,
+    pollIntervalMs: timing.pollIntervalMs,
+    extendedForGatewayFinalTimeout,
+  };
+}
+
 function selectLatestFinalAssistantReplyFromHistory(
   history: SessionsHistoryResponse | undefined,
   startedAtMs: number,
@@ -1289,6 +1377,24 @@ function selectLatestFinalAssistantReplyFromHistory(
   let latest: RecoveredAssistantReply | undefined;
   for (const record of records) {
     const candidate = extractFinalAssistantReplyFromHistoryRecord(record, startedAtMs);
+    if (!candidate) {
+      continue;
+    }
+    if (!latest || candidate.timestampMs >= latest.timestampMs) {
+      latest = candidate;
+    }
+  }
+  return latest;
+}
+
+function selectLatestInterruptedAssistantReplyFromHistory(
+  history: SessionsHistoryResponse | undefined,
+  startedAtMs: number,
+): RecoveredAssistantReply | undefined {
+  const records = extractSessionHistoryRecords(history);
+  let latest: RecoveredAssistantReply | undefined;
+  for (const record of records) {
+    const candidate = extractInterruptedAssistantReplyFromHistoryRecord(record, startedAtMs);
     if (!candidate) {
       continue;
     }
@@ -1363,6 +1469,68 @@ function extractFinalAssistantReplyFromHistoryRecord(
     replyText,
     stopReason: stopReason?.trim() || undefined,
     timestampMs,
+    incomplete: false,
+  };
+}
+
+function extractInterruptedAssistantReplyFromHistoryRecord(
+  record: Record<string, unknown>,
+  startedAtMs: number,
+): RecoveredAssistantReply | undefined {
+  if (normalizeSessionHistoryRecordType(record) !== "message") {
+    return undefined;
+  }
+  const message = asObject(record.message);
+  if (normalizeSessionHistoryMessageRole(message) !== "assistant") {
+    return undefined;
+  }
+  const timestampMs = parseSessionHistoryTimestampMs(record, message);
+  if (!Number.isFinite(timestampMs) || timestampMs + 1_000 < startedAtMs) {
+    return undefined;
+  }
+  const replyText = extractVisibleAssistantTextFromHistoryMessage(message);
+  const stopReason =
+    asString(message?.stopReason) ??
+    asString(message?.stop_reason) ??
+    asString(record.stopReason) ??
+    asString(record.stop_reason);
+  const errorMessage =
+    asString(message?.errorMessage) ??
+    asString(message?.error_message) ??
+    asString(record.errorMessage) ??
+    asString(record.error_message) ??
+    asString(asObject(record.error)?.message) ??
+    asString(asObject(record.error)?.error);
+  const normalizedStopReason = normalizeAgentTurnStopReason(stopReason);
+  const looksFinal =
+    historyMessageHasFinalAnswerSignature(message) ||
+    isFinalAgentTurnStopReason(normalizedStopReason) ||
+    /<stage_result\b/i.test(replyText);
+  if (looksFinal) {
+    return undefined;
+  }
+  const contentPayload = message?.content;
+  const combinedSignalText = joinNonEmptyText(errorMessage, replyText);
+  const looksInterrupted =
+    normalizedStopReason === "aborted" ||
+    normalizedStopReason === "interrupted" ||
+    normalizedStopReason === "cancelled" ||
+    normalizedStopReason === "canceled" ||
+    normalizedStopReason === "tooluse" ||
+    normalizedStopReason === "toolcall" ||
+    /request was aborted|turn was aborted|was aborted|cancelled|canceled|request timed out before a response was generated|timed out before a response was generated/i.test(
+      combinedSignalText,
+    ) ||
+    payloadsContainToolCall(Array.isArray(contentPayload) ? contentPayload : [contentPayload]);
+  if (!looksInterrupted) {
+    return undefined;
+  }
+  return {
+    replyText,
+    stopReason: stopReason?.trim() || undefined,
+    timestampMs,
+    incomplete: true,
+    errorMessage: errorMessage?.trim() || undefined,
   };
 }
 
@@ -1543,6 +1711,8 @@ interface RecoveredAssistantReply {
   replyText: string;
   stopReason?: string;
   timestampMs: number;
+  incomplete?: boolean;
+  errorMessage?: string;
 }
 
 function inspectAgentTurnCompletion(input: unknown): AgentTurnCompletion {
@@ -1595,6 +1765,33 @@ function normalizeAgentTurnStopReason(input: unknown): string | undefined {
   if (typeof input !== "string") return undefined;
   const normalized = input.trim().toLowerCase().replace(/[^a-z]+/g, "");
   return normalized || undefined;
+}
+
+function normalizeSessionHistoryRecoveryTiming(
+  input?: Partial<SessionHistoryRecoveryTiming>,
+): SessionHistoryRecoveryTiming {
+  return {
+    defaultTimeoutMs: normalizeNonNegativeMs(input?.defaultTimeoutMs, SESSION_HISTORY_RECOVERY_TIMEOUT_MS),
+    gatewayFinalTimeoutMs: normalizeNonNegativeMs(
+      input?.gatewayFinalTimeoutMs,
+      GATEWAY_FINAL_TIMEOUT_SESSION_HISTORY_RECOVERY_TIMEOUT_MS,
+    ),
+    pollIntervalMs: Math.max(
+      1,
+      normalizeNonNegativeMs(input?.pollIntervalMs, SESSION_HISTORY_RECOVERY_POLL_INTERVAL_MS),
+    ),
+  };
+}
+
+function normalizeNonNegativeMs(input: number | undefined, fallback: number): number {
+  if (typeof input !== "number" || !Number.isFinite(input)) return fallback;
+  return Math.max(0, Math.trunc(input));
+}
+
+function isGatewayFinalTimeoutBeforeFinalEventMessage(input: string | undefined): boolean {
+  const normalized = String(input || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized.includes("gateway chat stream timed out before a final event arrived");
 }
 
 function payloadsContainToolCall(input: unknown): boolean {
@@ -1898,6 +2095,39 @@ export function resolveRequestedAgentTurnSessionBindingForSmoke(
   preferredSessionKey?: string,
 ): ResolvedAgentTurnSessionBinding {
   return resolveRequestedAgentTurnSessionBinding(agentId, beforeSessions, preferredSessionId, preferredSessionKey);
+}
+
+export function buildSessionHistoryRecoveryPlanForSmoke(input: {
+  waitForFinal: boolean;
+  errorMessage?: string;
+  timings?: Partial<SessionHistoryRecoveryTiming>;
+}): {
+  waitForFinal: boolean;
+  timeoutMs: number;
+  pollIntervalMs: number;
+  extendedForGatewayFinalTimeout: boolean;
+} {
+  return buildSessionHistoryRecoveryPlan(input);
+}
+
+export async function recoverFinalAssistantReplyFromHistoryForSmoke(input: {
+  waitForFinal: boolean;
+  errorMessage?: string;
+  startedAtMs: number;
+  signal?: AbortSignal;
+  timings?: Partial<SessionHistoryRecoveryTiming>;
+  readHistory: () => Promise<SessionsHistoryResponse | undefined>;
+}): Promise<
+  | {
+      replyText: string;
+      stopReason?: string;
+      timestampMs: number;
+      incomplete?: boolean;
+      errorMessage?: string;
+    }
+  | undefined
+> {
+  return await recoverFinalAssistantReplyFromHistoryLoop(input);
 }
 
 function parseEmbeddedJson(input: string): unknown {

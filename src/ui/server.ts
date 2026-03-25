@@ -33,6 +33,7 @@ const import_budget_policy = require("../runtime/budget-policy");
 const import_commander = require("../runtime/commander");
 const import_cron_overview = require("../runtime/cron-overview");
 const import_collaboration_room = require("../runtime/collaboration-room");
+const import_collaboration_project_memory = require("../runtime/collaboration-project-memory");
 const import_collaboration_live_drafts = require("../runtime/collaboration-live-drafts");
 const import_openclaw_chat_rooms = require("../runtime/openclaw-chat-rooms");
 const import_done_checklist = require("../runtime/done-checklist");
@@ -648,6 +649,7 @@ function startUiServer(port, toolClient) {
                 const compactStatusStrip = resolveCompactStatusStrip(url.searchParams, prefs.preferences.compactStatusStrip);
                 const usageView = resolveUsageView(url.searchParams);
                 const search = resolveDashboardSearchQuery(url.searchParams);
+                const requestedCollaborationRoomId = (0, import_collaboration_room.normalizeCollaborationRoomId)(url.searchParams.get("roomId"));
                 const hasTaskFilterQuery = hasAnyQueryKey(url.searchParams, ["quick", "status", "owner", "project"]);
                 if (section === "projects-tasks" && !hasTaskFilterQuery) {
                     filters = { quick: "all" };
@@ -659,7 +661,19 @@ function startUiServer(port, toolClient) {
                 if (hasAnyQueryKey(url.searchParams, ["quick", "status", "owner", "project", "compact", "lang", "usage_view"])) {
                     await (0, import_ui_preferences.saveUiPreferences)({ ...prefs.preferences, language, compactStatusStrip, quickFilter: filters.quick ?? "all", taskFilters: { status: filters.status, owner: filters.owner, project: filters.project }, updatedAt: new Date().toISOString() });
                 }
-                const html = await renderHtml(filters, toolClient, { section, language, compactStatusStrip, usageView, preferencesPath: prefs.path, taskCardOrder: prefs.preferences.taskCardOrder, localMutationUnlock: prefs.preferences.localMutationUnlock, collaborationChat: prefs.preferences.collaborationChat, search });
+                const collaborationChatPreferences = requestedCollaborationRoomId
+                    ? {
+                        ...prefs.preferences.collaborationChat,
+                        expanded: true,
+                        activeRoomId: requestedCollaborationRoomId,
+                        lastReadSequence: prefs.preferences.collaborationChat.roomReadCursors?.[requestedCollaborationRoomId] ?? 0,
+                        roomReadCursors: {
+                            ...prefs.preferences.collaborationChat.roomReadCursors,
+                            [requestedCollaborationRoomId]: prefs.preferences.collaborationChat.roomReadCursors?.[requestedCollaborationRoomId] ?? 0
+                        }
+                    }
+                    : prefs.preferences.collaborationChat;
+                const html = await renderHtml(filters, toolClient, { section, language, compactStatusStrip, usageView, preferencesPath: prefs.path, taskCardOrder: prefs.preferences.taskCardOrder, taskBoardViewMode: prefs.preferences.taskBoardViewMode, localMutationUnlock: prefs.preferences.localMutationUnlock, collaborationChat: collaborationChatPreferences, search });
                 return writeText(res, 200, html, "text/html; charset=utf-8");
             }
             if (method === "POST" && path === "/api/dashboard/refresh") {
@@ -1392,6 +1406,14 @@ function startUiServer(port, toolClient) {
                 const created = await (0, import_task_store.createTask)(payload);
                 return writeJson(res, 201, { ok: true, ...created });
             }
+            if (method === "POST" && path === "/api/tasks/bulk-delete") {
+                assertMutationAuthorized(req, "/api/tasks/bulk-delete");
+                assertJsonContentType(req);
+                const payload = expectObject(await readJsonBody(req), "delete tasks payload");
+                const deleted = await (0, import_task_store.deleteTasks)(payload);
+                await syncTaskBoardDeletionSideEffects(deleted.removed);
+                return writeJson(res, 200, { ok: true, ...deleted });
+            }
             if (method === "PATCH" && path.startsWith("/api/tasks/") && path.endsWith("/status")) {
                 assertMutationAuthorized(req, "/api/tasks/:taskId/status");
                 assertJsonContentType(req);
@@ -1399,6 +1421,15 @@ function startUiServer(port, toolClient) {
                 const payload = expectObject(await readJsonBody(req), "update task status payload");
                 const updated = await (0, import_task_store.updateTaskStatus)({ taskId, status: payload.status, projectId: payload.projectId });
                 return writeJson(res, 200, { ok: true, ...updated });
+            }
+            if (method === "DELETE" && path.startsWith("/api/tasks/") && !path.endsWith("/status")) {
+                assertMutationAuthorized(req, "/api/tasks/:taskId");
+                assertAllowedQueryParams(url.searchParams, ["projectId"], true);
+                const taskId = decodeRouteParam(path, /^\/api\/tasks\/([^/]+)$/, "taskId");
+                const projectId = normalizeQueryString(url.searchParams.get("projectId"), "projectId", 120, true);
+                const deleted = await (0, import_task_store.deleteTask)({ taskId, projectId });
+                await syncTaskBoardDeletionSideEffects([deleted]);
+                return writeJson(res, 200, { ok: true, ...deleted });
             }
             if (method === "GET" && (path === "/sessions" || path === "/api/sessions")) {
                 const snapshot = await readReadModelSnapshotWithLiveSessions(toolClient);
@@ -1648,6 +1679,7 @@ async function renderHtml(filters, toolClient, options) {
     const needsUpdateSummary = activeSection === "settings";
     const needsMemoryState = activeSection === "memory";
     const needsCollaborationThreads = activeSection === "collaboration";
+    const needsCollaborationRoomRefs = needsCollaborationThreads || activeSection === "projects-tasks";
     const needsMemorySection = needsMemoryFiles;
     const needsDocsHub = needsWorkspaceFiles;
     const needsSettingsInsights = activeSection === "settings";
@@ -1690,7 +1722,7 @@ async function renderHtml(filters, toolClient, options) {
     const collaborationSignalItems = mergeSessionConversationItems(collaborationEvidenceItems, mergeSessionConversationItems(taskSignalItems, collaborationPreview.items));
     const taskExecutionChainCards = buildTaskExecutionChainCards({ tasks: collaborationScopedTasks, sessions: snapshot.sessions, sessionItems: needsCollaborationThreads ? collaborationSignalItems : taskSignalItems, language: options.language, includeSnapshotUnmappedSessions: !needsCollaborationThreads });
     const collaborationThreadCards = needsCollaborationThreads ? mergeCollaborationThreadCards(buildCollaborationThreadCards({ cards: taskExecutionChainCards, sessionItems: collaborationSignalItems, language: options.language, primaryAgentId: collaborationDirectory.primaryAgentId }), buildInterSessionCollaborationCards({ sessionItems: collaborationSignalItems, language: options.language, primaryAgentId: collaborationDirectory.primaryAgentId })) : [];
-    const collaborationRoomStates = needsCollaborationThreads ? await (0, import_collaboration_room.loadAllCollaborationRooms)() : [];
+    const collaborationRoomStates = needsCollaborationRoomRefs ? await (0, import_collaboration_room.loadAllCollaborationRooms)() : [];
     const collaborationThreadCardsWithRoomRefs = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(collaborationThreadCards, collaborationRoomStates, options.language) : collaborationThreadCards;
     const taskCertaintyCards = buildTaskCertaintyCards({ tasks, sessions: snapshot.sessions, sessionItems: taskSignalItems, approvals: snapshot.approvals, language: options.language });
     const taskSpotlightCards = buildTaskSpotlightCards({ tasks, certaintyCards: taskCertaintyCards, sessions: snapshot.sessions, sessionItems: taskSignalItems, approvals: snapshot.approvals, manualOrder: options.taskCardOrder, language: options.language });
@@ -1757,7 +1789,8 @@ async function renderHtml(filters, toolClient, options) {
     const runtimeOnlyCronRows = cronOverview.jobs.filter(job => !catalogMatchedRuntimeIds.has(job.jobId)).map(job => ({ source: "runtime", sourceLabel: t("Runtime monitor", "\u7CFB\u7EDF\u76D1\u63A7"), jobId: job.jobId, name: job.name ?? job.jobId, owner: formatExecutorAgentLabel("system-cron", options.language), purpose: cronRuntimePurpose(job.jobId, options.language), schedule: pickUiText(options.language, "system interval", "\u7CFB\u7EDF\u95F4\u9694"), status: job.enabled ? job.health : "disabled", statusLabel: cronHealthLabel(job.enabled ? job.health : "disabled", options.language), nextRun: job.nextRunAt ?? "-", dueInSeconds: job.dueInSeconds }));
     const allCronRows = [...catalogCronRows, ...runtimeOnlyCronRows];
     const timedJobSpotlightCards = buildTimedJobSpotlightCards({ jobs: allCronRows, language: options.language });
-    const taskBoardCards = buildUnifiedTaskBoardCards({ taskCards: taskSpotlightCards, timedJobCards: timedJobSpotlightCards, manualOrder: options.taskCardOrder });
+    const taskSpotlightCardsWithRoomRefs = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(taskSpotlightCards, collaborationRoomStates, options.language) : taskSpotlightCards;
+    const taskBoardCards = buildUnifiedTaskBoardCards({ taskCards: taskSpotlightCardsWithRoomRefs, timedJobCards: timedJobSpotlightCards, manualOrder: options.taskCardOrder });
     const cronRows = allCronRows.slice(0, 20).map(job => { const dueIn = Number.isFinite(job.dueInSeconds) ? formatSeconds(job.dueInSeconds, options.language) : "-"; const purpose = sanitizeCronPurposeText(job.purpose, options.language, 56); return `<tr><td><div>${escapeHtml(job.name)}</div><div class="meta">${escapeHtml(job.jobId)}</div></td><td>${escapeHtml(job.owner)}</td><td>${escapeHtml(purpose)}</td><td>${badge(job.status, job.statusLabel)}</td><td>${escapeHtml(job.nextRun)}</td><td>${escapeHtml(dueIn)}</td></tr>`; }).join("");
     const agentJobCatalogRows = allCronRows;
     const agentJobRowsHtml = agentJobCatalogRows.length === 0 ? `<tr><td colspan="7">${escapeHtml(t("No visible jobs yet.", "\u6682\u65E0\u53EF\u89C1 job\u3002"))}</td></tr>` : agentJobCatalogRows.slice(0, 40).map(item => `<tr><td>${escapeHtml(item.sourceLabel)}</td><td><div>${escapeHtml(item.name)}</div><div class="meta">${escapeHtml(item.jobId)}</div></td><td>${escapeHtml(item.owner)}</td><td>${escapeHtml(sanitizeCronPurposeText(item.purpose, options.language, 48))}</td><td>${escapeHtml(humanizeTimedJobScheduleLabel(item.schedule, options.language))}</td><td>${escapeHtml(item.nextRun)}</td><td>${badge(item.status, item.statusLabel)}</td></tr>`).join("");
@@ -1827,7 +1860,7 @@ async function renderHtml(filters, toolClient, options) {
         return `<details class="group-section" open><summary>${escapeHtml(owner)} (${jobs.length})</summary><ul class="group-items">${rows}</ul></details>`;
     }).join("")}</div>`;
     const exceptionsItems = renderExceptionsList(exceptionsFeed);
-    const taskBoard = renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel);
+    const taskBoard = renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel, options.taskBoardViewMode);
     const projectBoard = renderProjectBoard(snapshot.projectSummaries, options.language);
     const actionQueueItems = renderActionQueue(actionQueue);
     const effectiveQuick = filters.quick ?? "all";
@@ -5494,6 +5527,9 @@ async function renderHtml(filters, toolClient, options) {
     .task-status-dot.issue {
       background: #dc3c32;
     }
+    .task-status-dot.done {
+      background: #159947;
+    }
     .task-status-dot.scheduled {
       background: #1778f2;
     }
@@ -5814,6 +5850,70 @@ async function renderHtml(filters, toolClient, options) {
       justify-items: end;
       min-width: min(100%, 190px);
     }
+    .task-board-switches {
+      display: grid;
+      gap: 8px;
+      justify-items: end;
+    }
+    .task-view-mode-switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+    }
+    .task-view-toggle {
+      appearance: none;
+      border: none;
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: transparent;
+      color: #5c6570;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 650;
+      cursor: pointer;
+      transition:
+        background 160ms ease,
+        color 160ms ease,
+        transform 160ms ease,
+        box-shadow 160ms ease;
+    }
+    .task-view-toggle.is-active {
+      background: linear-gradient(135deg, rgba(17, 24, 39, 0.92), rgba(31, 41, 55, 0.94));
+      color: #ffffff;
+      box-shadow: 0 10px 22px rgba(17, 24, 39, 0.16);
+    }
+    .task-view-toggle:hover {
+      transform: translateY(-1px);
+    }
+    .task-board-bulk-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .task-board-selection-status {
+      white-space: nowrap;
+    }
+    .task-board-bulk-delete,
+    .task-delete-button {
+      border-color: rgba(185, 28, 28, 0.18);
+      background: rgba(255, 244, 244, 0.95);
+      color: #b42318;
+    }
+    .task-board-bulk-delete:disabled,
+    .task-delete-button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .task-board-view {
+      min-width: 0;
+    }
     .task-brief-token {
       width: min(100%, 220px);
       border-radius: 12px;
@@ -5858,6 +5958,7 @@ async function renderHtml(filters, toolClient, options) {
     .task-legend-dot.idle { background: #1f9d55; }
     .task-legend-dot.working { background: #e0a106; }
     .task-legend-dot.issue { background: #dc3c32; }
+    .task-legend-dot.done { background: #159947; }
     .task-legend-dot.scheduled { background: #1778f2; }
     .task-brief-grid {
       margin-top: 12px;
@@ -6053,9 +6154,164 @@ async function renderHtml(filters, toolClient, options) {
       padding-top: 8px;
       border-top: 1px solid rgba(17, 24, 39, 0.07);
     }
+    .task-brief-actions-meta {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .task-brief-action-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
     .task-brief-actions code {
       color: #46607c;
       font-size: 11px;
+    }
+    .task-select-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: #5c6570;
+      font-size: 11px;
+      font-weight: 620;
+    }
+    .task-select-control input {
+      margin: 0;
+      accent-color: #0f62fe;
+    }
+    .task-select-control.table {
+      white-space: nowrap;
+    }
+    .task-list-static {
+      color: #7b8490;
+      font-size: 11px;
+      font-weight: 620;
+      white-space: nowrap;
+    }
+    .task-detail-table-shell {
+      margin-top: 12px;
+      overflow: auto;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 18px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 253, 0.97)),
+        radial-gradient(circle at top right, rgba(191, 219, 254, 0.18), transparent 36%);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.8),
+        0 14px 28px rgba(17, 24, 39, 0.05);
+    }
+    .task-detail-table {
+      width: 100%;
+      min-width: 960px;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    .task-detail-col-select {
+      width: 126px;
+    }
+    .task-detail-col-type {
+      width: 86px;
+    }
+    .task-detail-col-title {
+      width: 292px;
+    }
+    .task-detail-col-status {
+      width: 142px;
+    }
+    .task-detail-col-focus {
+      width: 136px;
+    }
+    .task-detail-col-recent {
+      width: auto;
+    }
+    .task-detail-col-updated {
+      width: 112px;
+    }
+    .task-detail-col-actions {
+      width: 146px;
+    }
+    .task-detail-table th,
+    .task-detail-table td {
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(17, 24, 39, 0.06);
+      text-align: left;
+      vertical-align: top;
+      overflow: hidden;
+    }
+    .task-detail-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: rgba(248, 250, 252, 0.98);
+      color: #5c6570;
+      font-size: 11px;
+      line-height: 1.35;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .task-detail-row:nth-child(even) {
+      background: rgba(248, 250, 252, 0.66);
+    }
+    .task-detail-title {
+      display: block;
+      color: #1d1d1f;
+      font-size: 13px;
+      font-weight: 680;
+      line-height: 1.35;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .task-detail-primary-line,
+    .task-detail-submeta,
+    .task-detail-cell-updated {
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .task-detail-submeta {
+      display: block;
+      margin-top: 4px;
+    }
+    .task-detail-status {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .task-detail-recent {
+      min-width: 0;
+      color: #24313d;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .task-detail-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .task-list-kind {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 26px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: rgba(17, 24, 39, 0.06);
+      color: #24313d;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .task-list-kind.timed_job {
+      background: rgba(23, 120, 242, 0.12);
+      color: #1557b0;
     }
     .staff-brief-head {
       display: grid;
@@ -8298,6 +8554,47 @@ function formatMs(value, language = "en") {
 __name(formatMs, "formatMs");
 function projectTitleMap(snapshot) { return new Map(snapshot.projects.projects.map(project => [project.projectId, project.title])); }
 __name(projectTitleMap, "projectTitleMap");
+async function syncTaskBoardDeletionSideEffects(removedItems) {
+    const deletedTaskIds = new Set(removedItems.map(item => item?.task?.taskId).filter(Boolean));
+    if (deletedTaskIds.size > 0) {
+        try {
+            const prefs = await (0, import_ui_preferences.loadUiPreferences)();
+            const nextTaskCardOrder = prefs.preferences.taskCardOrder.filter(taskId => !deletedTaskIds.has(taskId));
+            if (nextTaskCardOrder.length !== prefs.preferences.taskCardOrder.length) {
+                await (0, import_ui_preferences.saveUiPreferences)({ ...prefs.preferences, taskCardOrder: nextTaskCardOrder, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+            }
+        }
+        catch (error) {
+            console.warn("[mission-control] failed to prune deleted task ids from ui preferences", {
+                deletedTaskIds: [...deletedTaskIds],
+                error: error instanceof Error ? error.message : String(error)
+            });
+        }
+    }
+    const projects = new Map();
+    removedItems.forEach(item => {
+        if (!item?.projectId)
+            return;
+        if (projects.has(item.projectId))
+            return;
+        projects.set(item.projectId, item.projectTitle || item.projectId);
+    });
+    await Promise.allSettled([...projects.entries()].map(async ([projectId, projectTitle]) => {
+        const files = import_collaboration_project_memory.resolveCollaborationProjectFiles(OPENCLAW_WORKSPACE_ROOT, projectId);
+        try {
+            await import_promises.access(files.openTasksPath);
+        }
+        catch {
+            return;
+        }
+        await import_collaboration_project_memory.syncCollaborationProjectOpenTasks({
+            workspaceRoot: OPENCLAW_WORKSPACE_ROOT,
+            projectId,
+            projectTitle
+        });
+    }));
+}
+__name(syncTaskBoardDeletionSideEffects, "syncTaskBoardDeletionSideEffects");
 function asObject(v) { return v !== null && typeof v === "object" && !Array.isArray(v) ? v : void 0; }
 __name(asObject, "asObject");
 function asArray(v) { return Array.isArray(v) ? v : []; }
@@ -8377,6 +8674,7 @@ const dashboardQueryHelpers = createDashboardQueryHelpers({
     hasAnyQueryKey,
     isUiLanguage: import_ui_preferences.isUiLanguage,
     isUiQuickFilter: import_ui_preferences.isUiQuickFilter,
+    isUiTaskBoardViewMode: import_ui_preferences.isUiTaskBoardViewMode,
     legacyDashboardRouteAnchor: LEGACY_DASHBOARD_ROUTE_ANCHOR,
     legacyDashboardRouteSection: LEGACY_DASHBOARD_ROUTE_SECTION,
     listTasks: import_task_store.listTasks,

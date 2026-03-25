@@ -36,11 +36,13 @@ test("task card order persists and normalizes duplicates or blanks", async () =>
     await saveUiPreferences({
       ...defaultUiPreferences(),
       taskCardOrder: ["task-alpha", " task-beta ", "", "task-alpha"],
+      taskBoardViewMode: "details",
       updatedAt: new Date().toISOString(),
     });
 
     const loaded = await loadUiPreferences();
     assert.deepEqual(loaded.preferences.taskCardOrder, ["task-alpha", "task-beta"]);
+    assert.equal(loaded.preferences.taskBoardViewMode, "details");
   } finally {
     if (original === undefined) {
       await rm(UI_PREFERENCES_PATH, { force: true });

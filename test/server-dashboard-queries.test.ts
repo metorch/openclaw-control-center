@@ -32,6 +32,7 @@ const helpers = createDashboardQueryHelpers({
   isUiLanguage: (value: string) => value === "en" || value === "zh",
   isUiQuickFilter: (value: string) =>
     ["all", "attention", "todo", "in_progress", "blocked", "done"].includes(value),
+  isUiTaskBoardViewMode: (value: string) => value === "cards" || value === "details",
   legacyDashboardRouteAnchor: {},
   legacyDashboardRouteSection: {},
   listTasks: () => [],
@@ -79,4 +80,12 @@ test("mergeUiPreferencesPatch keeps canonical collaboration room ids for local-o
     "room_local.demo": 7,
     "secondary-room": 3,
   });
+});
+
+test("mergeUiPreferencesPatch accepts task board view mode changes", () => {
+  const merged = helpers.mergeUiPreferencesPatch(defaultUiPreferences(), {
+    taskBoardViewMode: "details",
+  });
+
+  assert.equal(merged.taskBoardViewMode, "details");
 });

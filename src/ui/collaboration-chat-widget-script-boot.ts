@@ -455,6 +455,17 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
     syncComposerState();
     schedulePolling();
   });
+  window.addEventListener('openclaw:collaboration-room-open', (event) => {
+    const roomId = event instanceof CustomEvent ? event.detail?.roomId : '';
+    const normalizedRoomId = String(roomId || '').trim();
+    if (!normalizedRoomId) return;
+    setExpanded(true);
+    void activateRoom(normalizedRoomId).finally(() => {
+      window.requestAnimationFrame(() => {
+        inputNode.focus();
+      });
+    });
+  });
   window.addEventListener('resize', () => {
     applyPanelSize(false);
     setRoomMenuOpen(false);

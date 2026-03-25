@@ -195,6 +195,141 @@ test("primary controller prefers user-facing mention alias while preserving raw 
   assert.equal(preferredMentionAlias("main", "Jarvis", aliases), "jarvis");
 });
 
+test("task cards attach collaboration room refs without rescanning full room history per match", () => {
+  const helpers = createRoomHelpersForSmoke();
+  const cards = [
+    {
+      taskId: "task-qa",
+      sessionKeys: ["agent:qa:thread:room-alpha"],
+    },
+  ];
+  const roomStates = [
+    {
+      roomId: "room-alpha",
+      attachments: [],
+      events: [
+        {
+          sequence: 1,
+          eventId: "evt-parent",
+          type: "system_note",
+          createdAt: "2026-03-24T10:00:00.000Z",
+          authorRole: "system",
+          detail: "Jarvis delegated QA.",
+        },
+        {
+          sequence: 2,
+          eventId: "evt-direct",
+          type: "dispatch_started",
+          createdAt: "2026-03-24T10:00:01.000Z",
+          authorRole: "system",
+          agentId: "qa",
+          sourceEventId: "evt-parent",
+          relatedSessionKey: "agent:qa:thread:room-alpha",
+        },
+        {
+          sequence: 3,
+          eventId: "evt-child",
+          type: "agent_reply",
+          createdAt: "2026-03-24T10:00:02.000Z",
+          authorRole: "agent",
+          agentId: "qa",
+          sourceEventId: "evt-direct",
+          message: "QA finished the check.",
+        },
+        {
+          sequence: 4,
+          eventId: "evt-sibling",
+          type: "system_note",
+          createdAt: "2026-03-24T10:00:03.000Z",
+          authorRole: "system",
+          sourceEventId: "evt-parent",
+          detail: "Jarvis is waiting for QA confirmation.",
+        },
+        {
+          sequence: 5,
+          eventId: "evt-unrelated",
+          type: "agent_reply",
+          createdAt: "2026-03-24T10:00:04.000Z",
+          authorRole: "agent",
+          agentId: "architect",
+          relatedSessionKey: "agent:architect:thread:room-beta",
+          message: "Unrelated.",
+        },
+      ],
+    },
+  ];
+
+  const [attached] = helpers.attachCollaborationRoomRefsToCards(cards, roomStates, "en");
+
+  assert.equal(attached?.linkedRoomId, "room-alpha");
+  assert.deepEqual(
+    attached?.roomRefs?.map((item: { sequence: number; roomId: string }) => ({
+      sequence: item.sequence,
+      roomId: item.roomId,
+    })),
+    [
+      { sequence: 1, roomId: "room-alpha" },
+      { sequence: 2, roomId: "room-alpha" },
+      { sequence: 3, roomId: "room-alpha" },
+      { sequence: 4, roomId: "room-alpha" },
+    ],
+  );
+});
+
+test("task cards tolerate missing source events when back-linking room refs", () => {
+  const helpers = createRoomHelpersForSmoke();
+  const cards = [
+    {
+      taskId: "task-main",
+      sessionKeys: ["agent:main:thread:room-missing-source"],
+    },
+  ];
+  const roomStates = [
+    {
+      roomId: "room-missing-source",
+      attachments: [],
+      events: [
+        {
+          sequence: 10,
+          eventId: "evt-dispatch",
+          type: "dispatch_started",
+          createdAt: "2026-03-24T11:00:00.000Z",
+          authorRole: "system",
+          agentId: "main",
+          sourceEventId: "evt-user-missing",
+          relatedSessionKey: "agent:main:thread:room-missing-source",
+        },
+        {
+          sequence: 11,
+          eventId: "evt-reply",
+          type: "agent_reply",
+          createdAt: "2026-03-24T11:00:05.000Z",
+          authorRole: "agent",
+          agentId: "main",
+          sourceEventId: "evt-user-missing",
+          relatedSessionKey: "agent:main:thread:room-missing-source",
+          message: "Recovered without the original source event still on disk.",
+        },
+      ],
+    },
+  ];
+
+  const [attached] = helpers.attachCollaborationRoomRefsToCards(cards, roomStates, "en");
+
+  assert.equal(attached?.linkedRoomId, "room-missing-source");
+  assert.deepEqual(
+    attached?.roomRefs?.map((item: { sequence: number; roomId: string; type: string }) => ({
+      sequence: item.sequence,
+      roomId: item.roomId,
+      type: item.type,
+    })),
+    [
+      { sequence: 10, roomId: "room-missing-source", type: "dispatch_started" },
+      { sequence: 11, roomId: "room-missing-source", type: "agent_reply" },
+    ],
+  );
+});
+
 test("collaboration room state keeps project binding and empty collaboration receipts by default", () => {
   const state = defaultCollaborationRoomState({
     roomId: "room-alpha",
@@ -1337,6 +1472,319 @@ test("legacy transcript-backed rooms still load and bootstrap local metadata", a
   }
 });
 
+test("local collaboration rooms with empty timelines ignore unrelated transcript recovery windows", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-room-empty-local-filter-"));
+
+  try {
+    const output = await runCollaborationRoomModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const roomHelpersMod = unwrap(await import(${JSON.stringify(serverCollaborationRoomModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const { mkdir, writeFile } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+
+        const helpers = roomHelpersMod.createCollaborationRoomHelpers({
+          buildCollaborationRoomApiEvent: (event) => ({
+            ...event,
+            label: event.type,
+            detail: event.detail || event.message || "",
+            targetDisplayNames: [],
+            fallbackDisplayName: undefined,
+            attachments: [],
+            messageHtml: undefined,
+            detailHtml: undefined,
+            relatedSessionHref: undefined,
+            syncControlMessage: false,
+          }),
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message) => new Error(message),
+          deriveAgentAnimalIdentity: () => ({ accent: "#0f766e", imageHref: "" }),
+          getOpenClawHomeDir: () => process.cwd(),
+          getSearchLimitMax: () => 20,
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          humanizeOperatorLabel: (value) => value,
+          loadCachedStaffRecentActivity: async () => new Map(),
+          normalizeAgentIdCandidate: (value) => {
+            const trimmed = String(value ?? "").trim().toLowerCase();
+            return trimmed ? trimmed : undefined;
+          },
+          normalizeSessionHistoryMessages: (history) =>
+            Array.isArray(history?.json?.history)
+              ? history.json.history
+                  .filter((entry) => entry?.type === "message" && typeof entry?.message?.role === "string")
+                  .map((entry) => ({
+                    role: entry.message.role,
+                    content: Array.isArray(entry.message.content)
+                      ? entry.message.content.map((item) => item?.text || "").join(" ").trim()
+                      : "",
+                    timestamp: entry.timestamp,
+                    kind: "message",
+                    sourceSessionKey: entry.sourceSessionKey,
+                    author: entry.author,
+                  }))
+              : [],
+          normalizeLookupKey: (value) => String(value ?? "").trim().toLowerCase(),
+          pickLatestSessionActivityTimestamp: (...values) => values.find(Boolean),
+          pickUiText: (_language, english) => english,
+          resolveConfiguredWorkspaceRoot: () => "",
+          resolveStaffStatusDotTone: () => "idle",
+          safeTruncate: (value, max = Number.MAX_SAFE_INTEGER) => String(value ?? "").slice(0, max),
+          staffCurrentWorkLabel: () => ({ label: "Current task", value: "Idle" }),
+          staffStatusDotLabel: () => "Idle",
+          toSortableMs: (value) => {
+            const parsed = Date.parse(value ?? "");
+            return Number.isNaN(parsed) ? 0 : parsed;
+          },
+        });
+
+        const roomId = "66666666-6666-4666-8666-666666666666";
+        const workspaceRoot = join(process.cwd(), "workspace");
+        const sessionsDir = join(process.cwd(), "agents", "main", "sessions");
+        await collaborationRoom.createCollaborationRoom({
+          roomId,
+          title: "Empty local room",
+          titleMode: "manual",
+          projectId: "proj-empty-local",
+        });
+        await mkdir(sessionsDir, { recursive: true });
+        await writeFile(
+          join(sessionsDir, roomId + ".jsonl"),
+          [
+            JSON.stringify({
+              type: "session",
+              version: 3,
+              id: roomId,
+              timestamp: "2026-03-24T11:01:30.000Z",
+              cwd: workspaceRoot,
+            }),
+            JSON.stringify({
+              type: "message",
+              timestamp: "2026-03-24T11:01:31.300Z",
+              message: {
+                role: "user",
+                content: [
+                  { type: "text", text: "[[internal_wake_resume]]" },
+                  { type: "text", text: "Current task: Install context7-cli" },
+                  { type: "text", text: "Project: 3-24-16-04-49" },
+                ],
+                timestamp: "2026-03-24T11:01:31.300Z",
+              },
+            }),
+            JSON.stringify({
+              type: "message",
+              timestamp: "2026-03-24T11:01:43.303Z",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "Context7 installation follow-up from another room." }],
+                timestamp: "2026-03-24T11:01:43.303Z",
+              },
+            }),
+          ].join("\\n"),
+          "utf8",
+        );
+
+        const directory = {
+          primaryAgentId: "main",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            {
+              agentId: "main",
+              displayName: "Jarvis",
+              aliases: ["main", "jarvis"],
+              primary: true,
+              identity: { accent: "#0f766e", imageHref: "" },
+            },
+          ],
+        };
+        const roomView = await helpers.buildCollaborationRoomApiView({
+          roomId,
+          language: "en",
+          afterSequence: 0,
+          limit: 20,
+          readSequence: 0,
+          directory,
+          primaryAgentId: directory.primaryAgentId,
+          primaryDisplayName: directory.primaryDisplayName,
+        });
+        const roomMeta = roomView.rooms.find((room) => room.roomId === roomId);
+        process.stdout.write(JSON.stringify({
+          roomId: roomView.roomId,
+          eventIds: roomView.events.map((event) => event.eventId),
+          eventMessages: roomView.events.map((event) => event.message || null),
+          hasLocalRoom: roomMeta?.hasLocalRoom ?? null,
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.roomId, "66666666-6666-4666-8666-666666666666");
+    assert.equal(parsed.hasLocalRoom, true);
+    assert.deepEqual(parsed.eventIds, []);
+    assert.deepEqual(parsed.eventMessages, []);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("local collaboration rooms with empty timelines still accept room-scoped transcript windows", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-room-empty-local-scoped-"));
+
+  try {
+    const output = await runCollaborationRoomModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const roomHelpersMod = unwrap(await import(${JSON.stringify(serverCollaborationRoomModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const { mkdir, writeFile } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+
+        const helpers = roomHelpersMod.createCollaborationRoomHelpers({
+          buildCollaborationRoomApiEvent: (event) => ({
+            ...event,
+            label: event.type,
+            detail: event.detail || event.message || "",
+            targetDisplayNames: [],
+            fallbackDisplayName: undefined,
+            attachments: [],
+            messageHtml: undefined,
+            detailHtml: undefined,
+            relatedSessionHref: undefined,
+            syncControlMessage: false,
+          }),
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message) => new Error(message),
+          deriveAgentAnimalIdentity: () => ({ accent: "#0f766e", imageHref: "" }),
+          getOpenClawHomeDir: () => process.cwd(),
+          getSearchLimitMax: () => 20,
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          humanizeOperatorLabel: (value) => value,
+          loadCachedStaffRecentActivity: async () => new Map(),
+          normalizeAgentIdCandidate: (value) => {
+            const trimmed = String(value ?? "").trim().toLowerCase();
+            return trimmed ? trimmed : undefined;
+          },
+          normalizeSessionHistoryMessages: (history) =>
+            Array.isArray(history?.json?.history)
+              ? history.json.history
+                  .filter((entry) => entry?.type === "message" && typeof entry?.message?.role === "string")
+                  .map((entry) => ({
+                    role: entry.message.role,
+                    content: Array.isArray(entry.message.content)
+                      ? entry.message.content.map((item) => item?.text || "").join(" ").trim()
+                      : "",
+                    timestamp: entry.timestamp,
+                    kind: "message",
+                    sourceSessionKey: entry.sourceSessionKey,
+                    author: entry.author,
+                  }))
+              : [],
+          normalizeLookupKey: (value) => String(value ?? "").trim().toLowerCase(),
+          pickLatestSessionActivityTimestamp: (...values) => values.find(Boolean),
+          pickUiText: (_language, english) => english,
+          resolveConfiguredWorkspaceRoot: () => "",
+          resolveStaffStatusDotTone: () => "idle",
+          safeTruncate: (value, max = Number.MAX_SAFE_INTEGER) => String(value ?? "").slice(0, max),
+          staffCurrentWorkLabel: () => ({ label: "Current task", value: "Idle" }),
+          staffStatusDotLabel: () => "Idle",
+          toSortableMs: (value) => {
+            const parsed = Date.parse(value ?? "");
+            return Number.isNaN(parsed) ? 0 : parsed;
+          },
+        });
+
+        const roomId = "77777777-7777-4777-8777-777777777777";
+        const workspaceRoot = join(process.cwd(), "workspace");
+        const sessionsDir = join(process.cwd(), "agents", "main", "sessions");
+        await collaborationRoom.createCollaborationRoom({
+          roomId,
+          title: "Scoped local room",
+          titleMode: "manual",
+          projectId: "proj-scoped-local",
+        });
+        await mkdir(sessionsDir, { recursive: true });
+        await writeFile(
+          join(sessionsDir, roomId + ".jsonl"),
+          [
+            JSON.stringify({
+              type: "session",
+              version: 3,
+              id: roomId,
+              timestamp: "2026-03-24T11:02:00.000Z",
+              cwd: workspaceRoot,
+            }),
+            JSON.stringify({
+              type: "message",
+              timestamp: "2026-03-24T11:02:00.000Z",
+              message: {
+                role: "user",
+                content: [
+                  { type: "text", text: "<openclaw_coordination>" },
+                  { type: "text", text: "roomId: 77777777-7777-4777-8777-777777777777" },
+                  { type: "text", text: "projectId: proj-scoped-local" },
+                  { type: "text", text: "</openclaw_coordination>" },
+                  { type: "text", text: "" },
+                  { type: "text", text: "User request:" },
+                  { type: "text", text: "Please continue in this room." },
+                ],
+                timestamp: "2026-03-24T11:02:00.000Z",
+              },
+            }),
+            JSON.stringify({
+              type: "message",
+              timestamp: "2026-03-24T11:02:12.000Z",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "[[reply_to_current]] Room-scoped reply." }],
+                timestamp: "2026-03-24T11:02:12.000Z",
+              },
+            }),
+          ].join("\\n"),
+          "utf8",
+        );
+
+        const directory = {
+          primaryAgentId: "main",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            {
+              agentId: "main",
+              displayName: "Jarvis",
+              aliases: ["main", "jarvis"],
+              primary: true,
+              identity: { accent: "#0f766e", imageHref: "" },
+            },
+          ],
+        };
+        const roomView = await helpers.buildCollaborationRoomApiView({
+          roomId,
+          language: "en",
+          afterSequence: 0,
+          limit: 20,
+          readSequence: 0,
+          directory,
+          primaryAgentId: directory.primaryAgentId,
+          primaryDisplayName: directory.primaryDisplayName,
+        });
+        process.stdout.write(JSON.stringify({
+          roomId: roomView.roomId,
+          eventTypes: roomView.events.map((event) => event.type),
+          messages: roomView.events.map((event) => event.message || null),
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.roomId, "77777777-7777-4777-8777-777777777777");
+    assert.deepEqual(parsed.eventTypes, ["user_message", "agent_reply"]);
+    assert.deepEqual(parsed.messages, ["User request: Please continue in this room.", "Room-scoped reply."]);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("stale collaboration receipts with attached deliverables do not degrade to a red stale state", () => {
   const helpers = createRoomHelpersForSmoke();
   const executionState = helpers.deriveCollaborationExecutionStateForSmoke({
@@ -1607,6 +2055,96 @@ test("visible timeline filter hides machine-only agent payload noise", () => {
   );
 });
 
+test("visible timeline filter hides a gateway timeout failure once Jarvis later replies on the same room turn", () => {
+  const helpers = createRoomHelpersForSmoke();
+
+  const filtered = helpers.filterVisibleCollaborationApiEvents([
+    {
+      sequence: 1,
+      eventId: "dispatch-started",
+      type: "dispatch_started",
+      createdAt: "2026-03-24T08:05:06.993Z",
+      authorRole: "system",
+      agentId: "main",
+      relatedSessionKey: "agent:main:thread:collab-room-a",
+      sourceEventId: "user-1",
+      detail: "Queued for Jarvis.",
+    },
+    {
+      sequence: 2,
+      eventId: "dispatch-failed",
+      type: "dispatch_failed",
+      createdAt: "2026-03-24T08:07:38.195Z",
+      authorRole: "system",
+      agentId: "main",
+      relatedSessionKey: "agent:main:thread:collab-room-a",
+      sourceEventId: "user-1",
+      failureReason: "Gateway chat stream timed out before a final event arrived.",
+    },
+    {
+      sequence: 3,
+      eventId: "jarvis-final",
+      type: "agent_reply",
+      createdAt: "2026-03-24T08:25:42.317Z",
+      authorRole: "agent",
+      agentId: "main",
+      relatedSessionKey: "agent:main:thread:collab-room-a",
+      message: "The skill is installed. Here is the final answer.",
+      detail: "",
+    },
+  ]);
+
+  assert.deepEqual(
+    filtered.map((event: { eventId: string }) => event.eventId),
+    ["dispatch-started", "jarvis-final"],
+  );
+});
+
+test("visible timeline filter keeps an older dispatch failure visible once a newer room turn has already started", () => {
+  const helpers = createRoomHelpersForSmoke();
+
+  const filtered = helpers.filterVisibleCollaborationApiEvents([
+    {
+      sequence: 1,
+      eventId: "dispatch-failed-old",
+      type: "dispatch_failed",
+      createdAt: "2026-03-24T08:07:38.195Z",
+      authorRole: "system",
+      agentId: "main",
+      relatedSessionKey: "agent:main:thread:collab-room-a",
+      sourceEventId: "user-1",
+      failureReason: "Gateway chat stream timed out before a final event arrived.",
+    },
+    {
+      sequence: 2,
+      eventId: "dispatch-started-new",
+      type: "dispatch_started",
+      createdAt: "2026-03-24T08:20:00.000Z",
+      authorRole: "system",
+      agentId: "main",
+      relatedSessionKey: "agent:main:thread:collab-room-a",
+      sourceEventId: "user-2",
+      detail: "Queued for Jarvis again.",
+    },
+    {
+      sequence: 3,
+      eventId: "jarvis-reply-new",
+      type: "agent_reply",
+      createdAt: "2026-03-24T08:20:10.000Z",
+      authorRole: "agent",
+      agentId: "main",
+      relatedSessionKey: "agent:main:thread:collab-room-a",
+      message: "Reply for the newer turn.",
+      detail: "",
+    },
+  ]);
+
+  assert.deepEqual(
+    filtered.map((event: { eventId: string }) => event.eventId),
+    ["dispatch-failed-old", "dispatch-started-new", "jarvis-reply-new"],
+  );
+});
+
 test("transcript backfill drops tool events so shared chat stays focused on visible conversation", () => {
   const helpers = createRoomHelpersForSmoke();
 
@@ -1625,6 +2163,77 @@ test("transcript backfill drops tool events so shared chat stays focused on visi
   });
 
   assert.equal(toolEvent, null);
+});
+
+test("room-scoped transcript filtering drops unrelated recovery transcript windows for rooms with local state", () => {
+  const helpers = createRoomHelpersForSmoke();
+
+  const filtered = helpers.filterRoomScopedTranscriptMessages(
+    [
+      {
+        role: "user",
+        kind: "message",
+        timestamp: "2026-03-24T11:01:31.300Z",
+        content: [
+          "[[internal_wake_resume]]",
+          "Current task: Install context7-cli",
+          "Project: 3-24-16-04-49",
+        ].join("\n"),
+      },
+      {
+        role: "assistant",
+        kind: "message",
+        timestamp: "2026-03-24T11:01:43.303Z",
+        content: "Context7 installation follow-up from another room.",
+      },
+      {
+        role: "user",
+        kind: "message",
+        timestamp: "2026-03-24T11:02:00.000Z",
+        content: [
+          "<openclaw_coordination>",
+          "roomId: room-alpha",
+          "projectId: proj-alpha",
+          "</openclaw_coordination>",
+          "",
+          "User request:",
+          "Please continue in this room.",
+        ].join("\n"),
+      },
+      {
+        role: "assistant",
+        kind: "message",
+        timestamp: "2026-03-24T11:02:12.000Z",
+        content: "[[reply_to_current]] Room-alpha reply.",
+      },
+    ],
+    "room-alpha",
+  );
+
+  assert.deepEqual(
+    filtered.map((message: { role: string; content: string }) => ({
+      role: message.role,
+      content: message.content,
+    })),
+    [
+      {
+        role: "user",
+        content: [
+          "<openclaw_coordination>",
+          "roomId: room-alpha",
+          "projectId: proj-alpha",
+          "</openclaw_coordination>",
+          "",
+          "User request:",
+          "Please continue in this room.",
+        ].join("\n"),
+      },
+      {
+        role: "assistant",
+        content: "[[reply_to_current]] Room-alpha reply.",
+      },
+    ],
+  );
 });
 
 test("transcript merge drops room-scoped transcript user prompts once local canonical messages exist", () => {
@@ -1816,6 +2425,128 @@ test("live session backfill projects the latest room-scoped worker reply into th
   assert.equal(liveEvents[0]?.message, "QA has completed the verification pass.");
   assert.equal(liveEvents[0]?.liveSessionBackfill, true);
   assert.equal(liveEvents[0]?.relatedSessionKey, "agent:qa:thread:collab-room-alpha");
+});
+
+test("live session backfill prefers raw session history so multiline markdown is not flattened or polluted by stage_result remnants", async () => {
+  const helpers = createRoomHelpersForSmoke({
+    normalizeSessionHistoryMessages: (response: { messages?: unknown[] }, limit: number) =>
+      Array.isArray(response?.messages) ? response.messages.slice(-limit) : [],
+  });
+
+  const liveEvents = await helpers.buildCollaborationLiveSessionBackfillEvents({
+    client: {
+      sessionsHistory: async () => ({
+        messages: [
+          {
+            role: "user",
+            kind: "message",
+            timestamp: "2026-03-25T06:00:00.000Z",
+            content: [
+              "<openclaw_coordination>",
+              "roomId: room-structured",
+              "projectId: proj-structured",
+              "taskId: task-qa",
+              "</openclaw_coordination>",
+              "",
+              "User request:",
+              "@qa Please post the shared-room status update.",
+            ].join("\n"),
+          },
+          {
+            role: "assistant",
+            kind: "message",
+            timestamp: "2026-03-25T06:00:12.000Z",
+            content:
+              '[[reply_to_current]] 目前进度是： **已经做完的** - 已新增 - `one` - `two` <stage_result>{"taskId":"task-qa","projectId":"proj-structured","agentId":"qa","resultState":"in_progress","summary":"Checkpoint ready"',
+          },
+        ],
+        json: {
+          history: [
+            {
+              type: "message",
+              timestamp: "2026-03-25T06:00:00.000Z",
+              message: {
+                role: "user",
+                timestamp: "2026-03-25T06:00:00.000Z",
+                content: [
+                  { type: "text", text: "<openclaw_coordination>\nroomId: room-structured\nprojectId: proj-structured\ntaskId: task-qa\n</openclaw_coordination>" },
+                  { type: "text", text: "User request:\n@qa Please post the shared-room status update." },
+                ],
+              },
+            },
+            {
+              type: "message",
+              timestamp: "2026-03-25T06:00:12.000Z",
+              message: {
+                role: "assistant",
+                timestamp: "2026-03-25T06:00:12.000Z",
+                content: [
+                  { type: "text", text: "[[reply_to_current]] 目前进度是：" },
+                  {
+                    type: "text",
+                    text: [
+                      "",
+                      "**已经做完的**",
+                      "- 已新增",
+                      "- `one`",
+                      "- `two`",
+                      "",
+                      '<stage_result>{"taskId":"task-qa","projectId":"proj-structured","agentId":"qa","resultState":"in_progress","summary":"Checkpoint ready","artifacts":[],"completionChecklist":[],"blockers":[],"reportedAt":"2026-03-25T06:00:12.000Z"}</stage_result>',
+                    ].join("\n"),
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    },
+    state: {
+      events: [
+        {
+          sequence: 1,
+          eventId: "dispatch-qa-structured",
+          type: "dispatch_started",
+          createdAt: "2026-03-25T06:00:00.000Z",
+          authorRole: "system",
+          agentId: "qa",
+          relatedSessionKey: "agent:qa:thread:collab-room-structured",
+        },
+      ],
+      sessionBindings: [],
+    },
+    roomId: "room-structured",
+    directory: {
+      entries: [
+        {
+          agentId: "jarvis",
+          displayName: "Jarvis",
+          aliases: buildMentionAliases("jarvis", "Jarvis"),
+        },
+        {
+          agentId: "qa",
+          displayName: "QA",
+          aliases: buildMentionAliases("qa", "QA"),
+        },
+      ],
+    },
+    transcriptEvents: [],
+    visibleTimeline: [],
+    primaryAgentId: "jarvis",
+    primaryDisplayName: "Jarvis",
+    language: "en",
+    limit: 20,
+    baseSequence: 9,
+  });
+
+  assert.equal(liveEvents.length, 1);
+  assert.equal(
+    liveEvents[0]?.message,
+    ["目前进度是：", "**已经做完的**", "- 已新增", "- `one`", "- `two`"].join("\n"),
+  );
+  assert.match(String(liveEvents[0]?.messageHtml || ""), /chat-md-list/);
+  assert.doesNotMatch(String(liveEvents[0]?.messageHtml || ""), /stage_result/i);
+  assert.equal(liveEvents[0]?.liveSessionBackfill, true);
 });
 
 test("pending draft fallback appears only when a current-room dispatch has no visible reply yet", () => {
@@ -2053,6 +2784,108 @@ test("transcript sync-control reply deduplicates against later canonical local r
       },
     ],
   );
+});
+
+test("transcript merge upgrades flattened local agent replies when transcript preserves structured formatting", () => {
+  const helpers = createRoomHelpersForSmoke();
+  const localReply = {
+    sequence: 1,
+    eventId: "local-jarvis",
+    type: "agent_reply",
+    createdAt: "2026-03-24T10:57:41.921Z",
+    authorRole: "agent",
+    agentId: "jarvis",
+    agentDisplayName: "Jarvis",
+    label: "Jarvis replied",
+    message:
+      "可以，Sir。 - **门店运营**：梳理接待流程和 SOP。 - **销售提升**：优化成交话术和客单价。",
+    messageHtml:
+      '<p class="chat-md-paragraph">可以，Sir。 - <strong>门店运营</strong>：梳理接待流程和 SOP。 - <strong>销售提升</strong>：优化成交话术和客单价。</p>',
+    detail: "Jarvis 已回复，用时 29s。",
+    detailHtml: '<p class="chat-md-paragraph">Jarvis 已回复，用时 29s。</p>',
+    relatedSessionKey: "agent:jarvis:thread:collab-room-wrap",
+  };
+  const transcriptReply = {
+    sequence: 1,
+    eventId: "transcript:1:assistant",
+    type: "agent_reply",
+    createdAt: "2026-03-24T10:57:42.111Z",
+    authorRole: "agent",
+    agentId: "jarvis",
+    agentDisplayName: "Jarvis",
+    label: "Jarvis replied",
+    message: [
+      "可以，Sir。",
+      "",
+      "- **门店运营**：梳理接待流程和 SOP。",
+      "- **销售提升**：优化成交话术和客单价。",
+    ].join("\n"),
+    messageHtml:
+      '<p class="chat-md-paragraph">可以，Sir。</p><ul class="chat-md-list"><li><strong>门店运营</strong>：梳理接待流程和 SOP。</li><li><strong>销售提升</strong>：优化成交话术和客单价。</li></ul>',
+    detail: "Jarvis",
+    detailHtml: '<p class="chat-md-paragraph">Jarvis</p>',
+    relatedSessionKey: "agent:jarvis:thread:collab-room-wrap",
+  };
+
+  const merged = helpers.mergeCollaborationRoomApiEvents({
+    lastLocalSequence: 1,
+    localEvents: [localReply],
+    transcriptEvents: [transcriptReply],
+  });
+
+  assert.equal(merged.events.length, 1);
+  assert.equal(merged.events[0]?.eventId, "local-jarvis");
+  assert.equal(merged.events[0]?.message, transcriptReply.message);
+  assert.equal(merged.events[0]?.messageHtml, transcriptReply.messageHtml);
+  assert.equal(merged.events[0]?.detail, localReply.detail);
+});
+
+test("room api view upgrades flattened local agent replies from the current room session history", async () => {
+  const historyCalls: Array<{ sessionKey: string; limit?: number }> = [];
+  const helpers = createRoomHelpersForSmoke();
+  const localReply = {
+    sequence: 1,
+    eventId: "local-jarvis",
+    type: "agent_reply",
+    createdAt: "2026-03-24T10:57:41.921Z",
+    authorRole: "agent",
+    agentId: "jarvis",
+    agentDisplayName: "Jarvis",
+    label: "Jarvis replied",
+    message: "Plan ready. 1. Verify the config. 2. Restart the room stream.",
+    messageHtml:
+      '<p class="chat-md-paragraph">Plan ready. 1. Verify the config. 2. Restart the room stream.</p>',
+    relatedSessionKey: "agent:jarvis:thread:collab-room-wrap",
+  };
+
+  const upgraded = await helpers.upgradeCollaborationApiEventsFromSessionHistory({
+    client: {
+      sessionsHistory: async (request: { sessionKey: string; limit?: number }) => {
+        historyCalls.push(request);
+        return {
+          json: {
+            history: [
+              {
+                type: "message",
+                message: {
+                  role: "assistant",
+                  content: "Plan ready.\n\n1. Verify the config.\n2. Restart the room stream.",
+                },
+              },
+            ],
+          },
+          rawText: "",
+        };
+      },
+    },
+    events: [localReply],
+    roomId: "room-wrap",
+    language: "en",
+  });
+
+  assert.deepEqual(historyCalls, [{ sessionKey: "agent:jarvis:thread:collab-room-wrap", limit: 40 }]);
+  assert.equal(upgraded[0]?.message, "Plan ready.\n1. Verify the config.\n2. Restart the room stream.");
+  assert.match(String(upgraded[0]?.messageHtml || ""), /chat-md-list/);
 });
 
 test("transcript backfill preserves the actual agent identity when author metadata points at another employee", () => {

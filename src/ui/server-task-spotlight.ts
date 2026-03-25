@@ -34,6 +34,9 @@ function createTaskSpotlightHelpers(deps) {
   }
 
   function resolveTaskSpotlightTone(input) {
+    if (input.task.status === "done") {
+      return "done";
+    }
     if (
       input.task.status === "blocked" ||
       input.certainty?.tone === "blocked" ||
@@ -299,6 +302,8 @@ function createTaskSpotlightHelpers(deps) {
           cardId: task.taskId,
           cardKind: "task",
           taskId: task.taskId,
+          projectId: task.projectId,
+          sessionKeys: linkedSessionKeys,
           title: task.title,
           projectTitle: task.projectTitle,
           taskStatus: task.status,
@@ -377,6 +382,7 @@ function createTaskSpotlightHelpers(deps) {
           cardId: `cron:${job.jobId}`,
           cardKind: "timed_job",
           taskId: job.jobId,
+          projectId: "",
           title: job.name,
           projectTitle: job.sourceLabel,
           taskStatus: "scheduled",

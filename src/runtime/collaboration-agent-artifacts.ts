@@ -125,15 +125,19 @@ export function isMachineOnlyCollaborationText(value: string): boolean {
   if (!trimmed) return false;
   if (/^no_reply$/i.test(trimmed)) return true;
   if (!/^[\[{]/.test(trimmed)) return false;
-  if (
-    !/"(?:payloads|meta|systemPromptReport|agentMeta|lastCallUsage|promptTokens)"/i.test(trimmed)
-  ) {
-    return false;
-  }
   try {
-    return looksLikeMachinePayloadRoot(JSON.parse(trimmed) as unknown);
+    const parsed = JSON.parse(trimmed) as unknown;
+    return looksLikeMachinePayloadRoot(parsed) || looksLikeGatewayStreamEnvelopeRoot(parsed);
   } catch {
-    return /"payloads"\s*:\s*\[/i.test(trimmed) && /"meta"\s*:/i.test(trimmed);
+    if (/"payloads"\s*:\s*\[/i.test(trimmed) && /"meta"\s*:/i.test(trimmed)) {
+      return true;
+    }
+    return (
+      /"runId"\s*:\s*"/i.test(trimmed) &&
+      /"sessionKey"\s*:\s*"/i.test(trimmed) &&
+      /"state"\s*:\s*"(?:started|delta|final|complete|completed|aborted|error)"/i.test(trimmed) &&
+      !/"(?:text|replyText|message|content)"\s*:\s*"/i.test(trimmed)
+    );
   }
 }
 
@@ -167,6 +171,33 @@ function looksLikeMachinePayloadRoot(input: unknown): boolean {
       (objectValue.systemPromptReport && typeof objectValue.systemPromptReport === "object") ||
       (objectValue.agentMeta && typeof objectValue.agentMeta === "object"),
   );
+}
+
+function looksLikeGatewayStreamEnvelopeRoot(input: unknown): boolean {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+  const objectValue = input as Record<string, unknown>;
+  const state = typeof objectValue.state === "string" ? objectValue.state.trim().toLowerCase() : "";
+  if (!/^(?:started|delta|final|complete|completed|aborted|error)$/.test(state)) {
+    return false;
+  }
+  const sessionKey = typeof objectValue.sessionKey === "string" ? objectValue.sessionKey.trim() : "";
+  const runId = typeof objectValue.runId === "string" ? objectValue.runId.trim() : "";
+  const seq =
+    typeof objectValue.seq === "number"
+      ? objectValue.seq
+      : typeof objectValue.seq === "string"
+        ? Number(objectValue.seq)
+        : NaN;
+  const hasTransportIdentity = Boolean(sessionKey) && (Boolean(runId) || Number.isFinite(seq));
+  if (!hasTransportIdentity) {
+    return false;
+  }
+  return ![
+    objectValue.text,
+    objectValue.replyText,
+    objectValue.message,
+    objectValue.content,
+  ].some((value) => typeof value === "string" && value.trim() !== "");
 }
 
 function stripArtifactHintLines(replyText: string): string {

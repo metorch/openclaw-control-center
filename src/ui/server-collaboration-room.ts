@@ -354,6 +354,8 @@ function createCollaborationRoomHelpers(deps) {
       updatedAt,
       lastSequence: input.localRoom?.lastSequence ?? 0,
       eventCount: input.localRoom?.eventCount ?? 0,
+      hasLocalRoom: Boolean(input.localRoom),
+      hasTranscriptRoom: Boolean(input.transcriptRoom),
       active: input.roomId === input.activeRoomId,
     };
   }
@@ -799,6 +801,52 @@ function createCollaborationRoomHelpers(deps) {
     return `attachments:${attachmentNames.length}:${attachmentNames.join("|")}`;
   }
 
+  function normalizeComparableCollaborationDisplayText(value) {
+    return String(value || "")
+      .replace(/\r/g, "")
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function looksStructuredCollaborationDisplayText(value) {
+    const normalized = String(value || "").replace(/\r/g, "").trim();
+    if (!normalized) {
+      return false;
+    }
+    return /\n/.test(normalized) || /^\s*[-*]\s/m.test(normalized) || /^\s*\d+\.\s/m.test(normalized);
+  }
+
+  function shouldPreferStructuredCollaborationDisplayText(candidate, current) {
+    const candidateText = String(candidate || "").trim();
+    if (!candidateText) {
+      return false;
+    }
+    const currentText = String(current || "").trim();
+    if (!currentText) {
+      return true;
+    }
+    const candidateStructured = looksStructuredCollaborationDisplayText(candidateText);
+    const currentStructured = looksStructuredCollaborationDisplayText(currentText);
+    if (!candidateStructured && currentStructured) {
+      return false;
+    }
+    const candidateNormalized = normalizeComparableCollaborationDisplayText(candidateText);
+    const currentNormalized = normalizeComparableCollaborationDisplayText(currentText);
+    if (!candidateStructured) {
+      return candidateNormalized.length > currentNormalized.length && !currentNormalized;
+    }
+    return (
+      !currentStructured ||
+      candidateNormalized === currentNormalized ||
+      candidateNormalized.includes(currentNormalized) ||
+      currentNormalized.includes(candidateNormalized)
+    );
+  }
+
   function areCollaborationEventAttachmentSemanticsCompatible(left, right) {
     if (!left || !right) {
       return true;
@@ -806,31 +854,35 @@ function createCollaborationRoomHelpers(deps) {
     return left === right;
   }
 
-  function isDuplicateCollaborationSyncEvent(event, signatures, thresholdMs = 2e4) {
+  function findMatchingCollaborationSyncEvent(event, signatures, thresholdMs = 2e4) {
     const signature = buildCollaborationEventSyncSignature(event);
     if (!signature) {
-      return false;
+      return void 0;
     }
     const timestamp = toSortableMs(event.createdAt);
     const attachmentSemanticKey = buildCollaborationEventAttachmentSemanticKey(event);
     const known = signatures.get(signature);
     const effectiveThresholdMs = event?.syncControlMessage ? Math.max(thresholdMs, 6e4) : thresholdMs;
     if (!known || known.length === 0) {
-      return false;
+      return void 0;
     }
     if (timestamp <= 0) {
-      return known.some((value) =>
+      return known.find((value) =>
         areCollaborationEventAttachmentSemanticsCompatible(attachmentSemanticKey, value.attachmentSemanticKey),
       );
     }
-    return known.some(
+    return known.find(
       (value) =>
         Math.abs(value.timestamp - timestamp) <= effectiveThresholdMs &&
         areCollaborationEventAttachmentSemanticsCompatible(attachmentSemanticKey, value.attachmentSemanticKey),
     );
   }
 
-  function registerCollaborationSyncEventSignature(event, signatures) {
+  function isDuplicateCollaborationSyncEvent(event, signatures, thresholdMs = 2e4) {
+    return Boolean(findMatchingCollaborationSyncEvent(event, signatures, thresholdMs));
+  }
+
+  function registerCollaborationSyncEventSignature(event, signatures, metadata) {
     const signature = buildCollaborationEventSyncSignature(event);
     if (!signature) {
       return;
@@ -838,8 +890,44 @@ function createCollaborationRoomHelpers(deps) {
     const timestamp = toSortableMs(event.createdAt);
     const attachmentSemanticKey = buildCollaborationEventAttachmentSemanticKey(event);
     const next = signatures.get(signature) ?? [];
-    next.push({ timestamp, attachmentSemanticKey });
+    next.push({ timestamp, attachmentSemanticKey, ...(metadata || {}) });
     signatures.set(signature, next);
+  }
+
+  function mergePreferredTranscriptEventIntoLocalEvent(localEvent, transcriptEvent) {
+    if (!localEvent) {
+      return transcriptEvent;
+    }
+    if (!transcriptEvent) {
+      return localEvent;
+    }
+    const merged = { ...localEvent };
+    if (shouldPreferStructuredCollaborationDisplayText(transcriptEvent.message, localEvent.message)) {
+      merged.message = transcriptEvent.message;
+      merged.messageHtml = transcriptEvent.messageHtml ?? merged.messageHtml;
+    }
+    if (shouldPreferStructuredCollaborationDisplayText(transcriptEvent.detail, localEvent.detail)) {
+      merged.detail = transcriptEvent.detail;
+      merged.detailHtml = transcriptEvent.detailHtml ?? merged.detailHtml;
+    }
+    if (
+      (!Array.isArray(merged.attachments) || merged.attachments.length === 0) &&
+      Array.isArray(transcriptEvent.attachments) &&
+      transcriptEvent.attachments.length > 0
+    ) {
+      merged.attachments = transcriptEvent.attachments;
+      merged.attachmentIds = transcriptEvent.attachmentIds ?? merged.attachmentIds;
+    }
+    if (!merged.relatedSessionId && transcriptEvent.relatedSessionId) {
+      merged.relatedSessionId = transcriptEvent.relatedSessionId;
+    }
+    if (!merged.relatedSessionKey && transcriptEvent.relatedSessionKey) {
+      merged.relatedSessionKey = transcriptEvent.relatedSessionKey;
+    }
+    if (!merged.relatedSessionHref && transcriptEvent.relatedSessionHref) {
+      merged.relatedSessionHref = transcriptEvent.relatedSessionHref;
+    }
+    return merged;
   }
 
   function compareCollaborationApiEventsByTime(a, b) {
@@ -871,24 +959,30 @@ function createCollaborationRoomHelpers(deps) {
       const events = [...transcriptEvents].sort(compareCollaborationApiEventsByTime);
       return { events, localSequenceOffset: 0, lastSequence: events.at(-1)?.sequence ?? 0 };
     }
+    const localEvents = input.localEvents.map((event) => ({ ...event }));
     const signatures = new Map();
-    for (const event of input.localEvents) {
-      registerCollaborationSyncEventSignature(event, signatures);
-    }
-    const firstLocalAt = toSortableMs(input.localEvents[0]?.createdAt);
+    localEvents.forEach((event, index) => {
+      registerCollaborationSyncEventSignature(event, signatures, { localIndex: index });
+    });
+    const firstLocalAt = toSortableMs(localEvents[0]?.createdAt);
     const historicalTranscript = [];
     const appendedTranscript = [];
     for (const event of transcriptEvents) {
       const eventTimestamp = toSortableMs(event.createdAt);
       if (
-        input.localEvents.length > 0 &&
+        localEvents.length > 0 &&
         event.authorRole === "user" &&
         looksLikeAnyRoomScopedCollaborationSessionKey(event.relatedSessionKey) &&
         (firstLocalAt <= 0 || eventTimestamp <= 0 || eventTimestamp >= firstLocalAt)
       ) {
         continue;
       }
-      if (isDuplicateCollaborationSyncEvent(event, signatures)) {
+      const matchingSignature = findMatchingCollaborationSyncEvent(event, signatures);
+      if (matchingSignature) {
+        const localIndex = Number.isInteger(matchingSignature.localIndex) ? matchingSignature.localIndex : -1;
+        if (localIndex >= 0 && localIndex < localEvents.length) {
+          localEvents[localIndex] = mergePreferredTranscriptEventIntoLocalEvent(localEvents[localIndex], event);
+        }
         continue;
       }
       registerCollaborationSyncEventSignature(event, signatures);
@@ -902,7 +996,7 @@ function createCollaborationRoomHelpers(deps) {
     appendedTranscript.sort(compareCollaborationApiEventsByTime);
     const localSequenceOffset = historicalTranscript.length;
     const historicalWithSequence = historicalTranscript.map((event, index) => ({ ...event, sequence: index + 1 }));
-    const localWithSequence = input.localEvents.map((event) => ({
+    const localWithSequence = localEvents.map((event) => ({
       ...event,
       sequence: localSequenceOffset + event.sequence,
     }));
@@ -955,8 +1049,76 @@ function createCollaborationRoomHelpers(deps) {
     return false;
   }
 
+  function normalizeCollaborationEventId(value) {
+    return String(value || "").trim();
+  }
+
+  function normalizeCollaborationEventAgentKey(event) {
+    return normalizeLookupKey(event?.agentId ?? event?.authorAgentId ?? "");
+  }
+
+  function isVisibleCollaborationReplyCandidate(event) {
+    if (!event || event.type !== "agent_reply") {
+      return false;
+    }
+    if (
+      isHeartbeatRecoveryNoiseText(event.message) ||
+      isCollaborationMachineOnlyMessage(event.message)
+    ) {
+      return false;
+    }
+    return Boolean(String(event.message || "").trim() || event.attachmentIds?.length);
+  }
+
+  function isSupersededDispatchFailureEvent(events, index) {
+    const failureEvent = Array.isArray(events) ? events[index] : void 0;
+    if (!failureEvent || failureEvent.type !== "dispatch_failed") {
+      return false;
+    }
+    const failureAgentKey = normalizeCollaborationEventAgentKey(failureEvent);
+    const failureSessionKey = normalizeLookupKey(failureEvent.relatedSessionKey ?? "");
+    const failureSourceEventId = normalizeCollaborationEventId(failureEvent.sourceEventId);
+    const failureEventId = normalizeCollaborationEventId(failureEvent.eventId);
+    if (!failureSessionKey && !failureSourceEventId && !failureEventId) {
+      return false;
+    }
+
+    for (let cursor = index + 1; cursor < events.length; cursor += 1) {
+      const candidate = events[cursor];
+      if (!candidate || typeof candidate !== "object") {
+        continue;
+      }
+      const candidateAgentKey = normalizeCollaborationEventAgentKey(candidate);
+      const sameAgent = !failureAgentKey || !candidateAgentKey || candidateAgentKey === failureAgentKey;
+      const candidateSessionKey = normalizeLookupKey(candidate.relatedSessionKey ?? "");
+      const candidateEventId = normalizeCollaborationEventId(candidate.eventId);
+      const candidateSourceEventId = normalizeCollaborationEventId(candidate.sourceEventId);
+      const sameSession = failureSessionKey && candidateSessionKey && candidateSessionKey === failureSessionKey;
+      const sameSourceChain = Boolean(
+        (failureSourceEventId &&
+          (candidateSourceEventId === failureSourceEventId || candidateEventId === failureSourceEventId)) ||
+          (failureEventId && candidateSourceEventId === failureEventId),
+      );
+      if (!sameSession && !sameSourceChain) {
+        continue;
+      }
+      if (candidate.type === "dispatch_started" && sameSession && sameAgent && !sameSourceChain) {
+        return false;
+      }
+      if (sameAgent && isVisibleCollaborationReplyCandidate(candidate)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function filterVisibleCollaborationApiEvents(events) {
-    return (Array.isArray(events) ? events : []).filter((event) => !shouldHideCollaborationApiEvent(event));
+    const normalizedEvents = Array.isArray(events) ? events : [];
+    return normalizedEvents.filter(
+      (event, index) =>
+        !shouldHideCollaborationApiEvent(event) &&
+        !isSupersededDispatchFailureEvent(normalizedEvents, index),
+    );
   }
 
   function looksLikeRoomScopedCollaborationSessionKey(sessionKey, roomId) {
@@ -1057,7 +1219,8 @@ function createCollaborationRoomHelpers(deps) {
       if (normalizeLookupKey(message?.role) !== "user") {
         continue;
       }
-      if (!isRoomScopedCoordinationPrompt(message.content, input.roomId)) {
+      const promptText = extractSessionHistoryMessageText(message);
+      if (!isRoomScopedCoordinationPrompt(promptText, input.roomId)) {
         continue;
       }
       let latestAssistant = null;
@@ -1072,18 +1235,19 @@ function createCollaborationRoomHelpers(deps) {
         if (candidateRole !== "assistant") {
           continue;
         }
-        const sanitized = sanitizeCollaborationDisplayText(candidate.content, input.language, "", 12000, true);
+        const visibleReplyText = extractVisibleAssistantReplyTextFromSessionHistoryMessage(candidate);
+        const sanitized = sanitizeCollaborationDisplayText(visibleReplyText, input.language, "", 12000, true);
         if (
           !sanitized ||
-          isCollaborationInternalPromptMessage(candidate.content) ||
-          isCollaborationMachineOnlyMessage(candidate.content)
+          isCollaborationInternalPromptMessage(visibleReplyText) ||
+          isCollaborationMachineOnlyMessage(visibleReplyText)
         ) {
           continue;
         }
         latestAssistant = {
           ...candidate,
           author: candidate.author || input.agentId,
-          content: candidate.content,
+          content: visibleReplyText,
           sourceSessionKey: candidate.sourceSessionKey || input.sessionKey,
           visibleContent: sanitized,
         };
@@ -1095,6 +1259,307 @@ function createCollaborationRoomHelpers(deps) {
       };
     }
     return latest;
+  }
+
+  function filterRoomScopedTranscriptMessages(messages, roomId) {
+    const normalizedMessages = Array.isArray(messages) ? messages : [];
+    const filtered = [];
+    let insideRoomScopedWindow = false;
+
+    for (const message of normalizedMessages) {
+      const role = normalizeLookupKey(message?.role);
+      if (role === "user") {
+        insideRoomScopedWindow = isRoomScopedCoordinationPrompt(message?.content, roomId);
+        if (insideRoomScopedWindow) {
+          filtered.push(message);
+        }
+        continue;
+      }
+      if (!insideRoomScopedWindow) {
+        continue;
+      }
+      if (role === "assistant" || message?.kind === "inter_session") {
+        filtered.push(message);
+      }
+    }
+
+    return filtered;
+  }
+
+  function normalizeComparableCollaborationReplyText(value) {
+    return String(value || "")
+      .replace(/\r/g, "")
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function looksStructuredCollaborationReplyText(value) {
+    const normalized = String(value || "").replace(/\r/g, "").trim();
+    if (!normalized) {
+      return false;
+    }
+    return /\n/.test(normalized) || /^\s*[-*]\s/m.test(normalized) || /^\s*\d+\.\s/m.test(normalized);
+  }
+
+  function shouldPreferRecoveredCollaborationReplyText(currentReplyText, recoveredReplyText) {
+    const currentText = String(currentReplyText || "").trim();
+    const recoveredText = String(recoveredReplyText || "").trim();
+    if (!recoveredText) {
+      return false;
+    }
+    if (!currentText) {
+      return true;
+    }
+    const currentNormalized = normalizeComparableCollaborationReplyText(currentText);
+    const recoveredNormalized = normalizeComparableCollaborationReplyText(recoveredText);
+    const currentStructured = looksStructuredCollaborationReplyText(currentText);
+    const recoveredStructured = looksStructuredCollaborationReplyText(recoveredText);
+    return Boolean(
+      recoveredStructured &&
+        !currentStructured &&
+        (recoveredNormalized === currentNormalized ||
+          recoveredNormalized.includes(currentNormalized) ||
+          currentNormalized.includes(recoveredNormalized)),
+    );
+  }
+
+  function parseCollaborationSessionHistoryRecord(input) {
+    if (!input || typeof input !== "object") {
+      if (typeof input !== "string") {
+        return void 0;
+      }
+      try {
+        const parsed = JSON.parse(input);
+        return parsed && typeof parsed === "object" ? parsed : void 0;
+      } catch {
+        return void 0;
+      }
+    }
+    return input;
+  }
+
+  function extractCollaborationSessionHistoryRecords(history) {
+    if (!history) {
+      return [];
+    }
+    const jsonHistory = history?.json?.history;
+    if (Array.isArray(jsonHistory)) {
+      return jsonHistory
+        .map((entry) => parseCollaborationSessionHistoryRecord(entry))
+        .filter((entry) => Boolean(entry));
+    }
+    return String(history.rawText || "")
+      .split(/\r?\n/)
+      .map((line) => parseCollaborationSessionHistoryRecord(line))
+      .filter((entry) => Boolean(entry));
+  }
+
+  function extractSessionHistoryMessageText(message) {
+    if (!message || typeof message !== "object") {
+      return "";
+    }
+    const collected = [];
+    if (message.content !== void 0) {
+      collectCollaborationAssistantReplyTextFragments(message.content, collected);
+    }
+    if (collected.length > 0) {
+      return collected.join("\n\n").trim();
+    }
+    return (
+      (typeof message.replyText === "string" ? message.replyText : void 0) ||
+      (typeof message.text === "string" ? message.text : void 0) ||
+      (typeof message.message === "string" ? message.message : void 0) ||
+      (typeof message.content === "string" ? message.content : void 0) ||
+      ""
+    ).trim();
+  }
+
+  function normalizeRoomSyncMessageFromSessionHistoryRecord(record, fallback) {
+    if (!record || typeof record !== "object") {
+      return null;
+    }
+    const nestedMessage =
+      record.message && typeof record.message === "object"
+        ? record.message
+        : record;
+    const role = String(nestedMessage.role ?? record.role ?? "").trim();
+    if (!role) {
+      return null;
+    }
+    const content = extractSessionHistoryMessageText(nestedMessage);
+    if (!content) {
+      return null;
+    }
+    return {
+      role,
+      kind: String(nestedMessage.kind ?? record.kind ?? "message").trim() || "message",
+      timestamp: String(nestedMessage.timestamp ?? record.timestamp ?? "").trim(),
+      content,
+      sourceSessionKey: String(nestedMessage.sourceSessionKey ?? record.sourceSessionKey ?? fallback.sessionKey ?? "").trim(),
+      author: String(nestedMessage.author ?? record.author ?? fallback.agentId ?? "").trim(),
+    };
+  }
+
+  function collectCollaborationAssistantReplyTextFragments(input, output) {
+    if (typeof input === "string") {
+      const trimmed = input.trim();
+      if (trimmed) {
+        output.push(trimmed);
+      }
+      return;
+    }
+    if (Array.isArray(input)) {
+      for (const item of input) {
+        collectCollaborationAssistantReplyTextFragments(item, output);
+      }
+      return;
+    }
+    if (!input || typeof input !== "object") {
+      return;
+    }
+    const type = String(input.type || "").trim().toLowerCase();
+    if (type.startsWith("tool")) {
+      return;
+    }
+    const directText = typeof input.text === "string" ? input.text.trim() : "";
+    if (directText) {
+      output.push(directText);
+    }
+    const directContent = typeof input.content === "string" ? input.content.trim() : "";
+    if (directContent) {
+      output.push(directContent);
+    }
+    const directMessage = typeof input.message === "string" ? input.message.trim() : "";
+    if (directMessage) {
+      output.push(directMessage);
+    }
+    if (!directContent && input.content !== void 0) {
+      collectCollaborationAssistantReplyTextFragments(input.content, output);
+    }
+    if (!directMessage && input.message !== void 0) {
+      collectCollaborationAssistantReplyTextFragments(input.message, output);
+    }
+    if (input.parts !== void 0) {
+      collectCollaborationAssistantReplyTextFragments(input.parts, output);
+    }
+  }
+
+  function extractVisibleAssistantReplyTextFromSessionHistoryMessage(message) {
+    const directReplyText = extractSessionHistoryMessageText(message);
+    return import_collaboration_agent_artifacts.isMachineOnlyCollaborationText(directReplyText)
+      ? ""
+      : directReplyText;
+  }
+
+  function extractStructuredAssistantRepliesFromSessionHistory(input) {
+    const replies = [];
+    for (const record of extractCollaborationSessionHistoryRecords(input.history)) {
+      if (normalizeLookupKey(record?.type) !== "message") {
+        continue;
+      }
+      const message = record?.message;
+      if (!message || typeof message !== "object" || normalizeLookupKey(message?.role) !== "assistant") {
+        continue;
+      }
+      const visibleContent = sanitizeCollaborationDisplayText(
+        extractVisibleAssistantReplyTextFromSessionHistoryMessage(message),
+        input.language,
+        "",
+        12000,
+        true,
+      );
+      if (
+        !visibleContent ||
+        isCollaborationInternalPromptMessage(visibleContent) ||
+        isCollaborationMachineOnlyMessage(visibleContent)
+      ) {
+        continue;
+      }
+      replies.push(visibleContent);
+    }
+    return replies;
+  }
+
+  function resolveStructuredLocalReplyFromSessionHistory(input) {
+    const currentMessage = String(input.event?.message || "").trim();
+    if (!currentMessage || looksStructuredCollaborationReplyText(currentMessage)) {
+      return "";
+    }
+    let bestMatch = "";
+    let bestExactMatch = "";
+    const currentNormalized = normalizeComparableCollaborationReplyText(currentMessage);
+    for (const candidate of extractStructuredAssistantRepliesFromSessionHistory(input)) {
+      if (!shouldPreferRecoveredCollaborationReplyText(currentMessage, candidate)) {
+        continue;
+      }
+      const candidateNormalized = normalizeComparableCollaborationReplyText(candidate);
+      if (candidateNormalized === currentNormalized) {
+        bestExactMatch = candidate;
+      } else if (!bestMatch) {
+        bestMatch = candidate;
+      }
+    }
+    return bestExactMatch || bestMatch;
+  }
+
+  async function upgradeCollaborationApiEventsFromSessionHistory(input) {
+    if (!input.client || typeof input.client.sessionsHistory !== "function") {
+      return input.events ?? [];
+    }
+    const normalizedEvents = Array.isArray(input.events) ? input.events : [];
+    const historyCache = new Map();
+    const historyLimit = Math.max(40, Math.min(80, Math.max(40, normalizedEvents.length * 4)));
+
+    const loadHistoryMessages = async (sessionKey) => {
+      const normalizedSessionKey = normalizeLookupKey(sessionKey);
+      if (!normalizedSessionKey) {
+        return [];
+      }
+      if (!historyCache.has(normalizedSessionKey)) {
+        historyCache.set(
+          normalizedSessionKey,
+          promiseWithTimeout(
+            input.client
+              .sessionsHistory({
+                sessionKey,
+                limit: historyLimit,
+              })
+              .catch(() => void 0),
+            LIVE_SESSION_HISTORY_TIMEOUT_MS,
+          ).catch(() => void 0),
+        );
+      }
+      return historyCache.get(normalizedSessionKey);
+    };
+
+    return Promise.all(
+      normalizedEvents.map(async (event) => {
+        if (
+          event?.type !== "agent_reply" ||
+          !event?.relatedSessionKey ||
+          !looksLikeRoomScopedCollaborationSessionKey(event.relatedSessionKey, input.roomId)
+        ) {
+          return event;
+        }
+        const recoveredMessage = resolveStructuredLocalReplyFromSessionHistory({
+          event,
+          history: await loadHistoryMessages(event.relatedSessionKey),
+          language: input.language,
+        });
+        if (!recoveredMessage || recoveredMessage === event.message) {
+          return event;
+        }
+        return {
+          ...event,
+          message: recoveredMessage,
+          messageHtml: import_chat_markdown.renderChatMarkdownToHtml(recoveredMessage),
+        };
+      }),
+    );
   }
 
   async function buildCollaborationLiveSessionBackfillEvents(input) {
@@ -1125,9 +1590,20 @@ function createCollaborationRoomHelpers(deps) {
             }),
             LIVE_SESSION_HISTORY_TIMEOUT_MS,
           );
+          const rawMessages = extractCollaborationSessionHistoryRecords(history)
+            .map((record) =>
+              normalizeRoomSyncMessageFromSessionHistoryRecord(record, {
+                sessionKey: candidate.sessionKey,
+                agentId: candidate.agentId,
+              }),
+            )
+            .filter((message) => Boolean(message));
           return {
             candidate,
-            messages: normalizeSessionHistoryMessages(history, historyLimit),
+            messages:
+              rawMessages.length > 0
+                ? rawMessages
+                : normalizeSessionHistoryMessages(history, historyLimit),
           };
         } catch {
           return null;
@@ -1480,15 +1956,24 @@ function createCollaborationRoomHelpers(deps) {
         limit: effectiveLimit,
       })
       .catch(() => void 0);
-    const transcriptEvents = transcriptHistory
-      ? buildCollaborationTranscriptBackfillEvents({
-          messages: normalizeSessionHistoryMessages(transcriptHistory, effectiveLimit),
-          language: input.language,
-          primaryAgentId: input.primaryAgentId,
-          primaryDisplayName: input.primaryDisplayName,
-          directory,
-        })
+    const normalizedTranscriptMessages = transcriptHistory
+      ? normalizeSessionHistoryMessages(transcriptHistory, effectiveLimit)
       : [];
+    const requireRoomScopedTranscriptBackfill = selectedRoom?.hasLocalRoom === true;
+    const transcriptMessages =
+      requireRoomScopedTranscriptBackfill
+        ? filterRoomScopedTranscriptMessages(normalizedTranscriptMessages, effectiveRoomId)
+        : normalizedTranscriptMessages;
+    const transcriptEvents =
+      transcriptMessages.length > 0
+        ? buildCollaborationTranscriptBackfillEvents({
+            messages: transcriptMessages,
+            language: input.language,
+            primaryAgentId: input.primaryAgentId,
+            primaryDisplayName: input.primaryDisplayName,
+            directory,
+          })
+        : [];
     const localEvents = state.events.map((event) =>
       buildCollaborationRoomApiEvent(event, directory, attachmentsById, input.language, state.roomId),
     );
@@ -1542,7 +2027,12 @@ function createCollaborationRoomHelpers(deps) {
       currentEvents: [...visibleTimeline, ...liveDraftEvents, ...liveSessionEvents],
       baseSequence: effectiveLastSequence + liveDraftEvents.length + liveSessionEvents.length,
     });
-    const events = [...realEvents, ...liveDraftEvents, ...liveSessionEvents, ...pendingDraftEvents];
+    const events = await upgradeCollaborationApiEventsFromSessionHistory({
+      client: input.client,
+      events: [...realEvents, ...liveDraftEvents, ...liveSessionEvents, ...pendingDraftEvents],
+      roomId: effectiveRoomId,
+      language: input.language,
+    });
     const unreadCount = visibleTimeline.filter(
       (event) => event.sequence > normalizedReadSequence && shouldCountUnreadCollaborationApiEvent(event),
     ).length;
@@ -1702,58 +2192,141 @@ function createCollaborationRoomHelpers(deps) {
   }
 
   function attachCollaborationRoomRefsToCards(cards, roomStates, language) {
+    const roomIndexes = roomStates.map((roomState) => {
+      const attachmentsById = new Map((roomState.attachments ?? []).map((item) => [item.attachmentId, item]));
+      const eventsBySessionKey = new Map();
+      const eventsById = new Map();
+      const eventsBySourceEventId = new Map();
+      const eventRefCache = new Map();
+      const events = Array.isArray(roomState.events) ? roomState.events : [];
+
+      for (const event of events) {
+        const eventId = String(event?.eventId ?? "").trim();
+        if (eventId) {
+          eventsById.set(eventId, event);
+        }
+        const relatedSessionKey = normalizeLookupKey(event?.relatedSessionKey ?? "");
+        if (relatedSessionKey) {
+          const bucket = eventsBySessionKey.get(relatedSessionKey) ?? [];
+          bucket.push(event);
+          eventsBySessionKey.set(relatedSessionKey, bucket);
+        }
+        const sourceEventId = String(event?.sourceEventId ?? "").trim();
+        if (sourceEventId) {
+          const bucket = eventsBySourceEventId.get(sourceEventId) ?? [];
+          bucket.push(event);
+          eventsBySourceEventId.set(sourceEventId, bucket);
+        }
+      }
+
+      const getRoomRef = (event) => {
+        if (!event || typeof event !== "object") {
+          return null;
+        }
+        const eventId = String(event?.eventId ?? "").trim() || `sequence:${Number(event?.sequence ?? 0)}`;
+        if (eventRefCache.has(eventId)) {
+          return eventRefCache.get(eventId);
+        }
+        const described = describeCollaborationRoomEvent(event, language, void 0, attachmentsById);
+        const ref = {
+          roomId: roomState.roomId,
+          sequence: event.sequence,
+          type: event.type,
+          createdAt: event.createdAt,
+          label: described.label,
+          detail: described.detail,
+          eventId: String(event?.eventId ?? "").trim(),
+          sourceEventId: String(event?.sourceEventId ?? "").trim(),
+        };
+        eventRefCache.set(eventId, ref);
+        return ref;
+      };
+
+      return {
+        eventsById,
+        eventsBySessionKey,
+        eventsBySourceEventId,
+        getRoomRef,
+      };
+    });
+
     return cards.map((card) => {
+      const aggregateItems = Array.isArray(card.aggregateItems) ? card.aggregateItems : [];
+      const directSessionKeys = Array.isArray(card.sessionKeys) ? card.sessionKeys : [];
       const sessionKeys = new Set(
-        [card.sessionKey, card.parentSessionKey, card.childSessionKey, ...card.aggregateItems.map((item) => item.sessionKey)]
+        [
+          card.sessionKey,
+          card.parentSessionKey,
+          card.childSessionKey,
+          ...directSessionKeys,
+          ...aggregateItems.map((item) => item.sessionKey),
+        ]
           .map((value) => normalizeLookupKey(value ?? ""))
           .filter(Boolean),
       );
       if (sessionKeys.size === 0) {
         return card;
       }
-      const roomRefs = roomStates
-        .flatMap((roomState) => {
-          const attachmentsById = new Map(roomState.attachments.map((item) => [item.attachmentId, item]));
-          const relatedSourceEventIds = new Set();
-          for (const event of roomState.events) {
-            const relatedSessionKey = normalizeLookupKey(event.relatedSessionKey ?? "");
-            if (!relatedSessionKey || !sessionKeys.has(relatedSessionKey)) {
-              continue;
+      const roomRefsByKey = new Map();
+      const pushRoomRef = (ref) => {
+        if (!ref) {
+          return;
+        }
+        const key = `${ref.roomId}:${ref.eventId || ref.sequence}:${ref.type}`;
+        if (!roomRefsByKey.has(key)) {
+          roomRefsByKey.set(key, ref);
+        }
+      };
+      for (const roomIndex of roomIndexes) {
+        const relatedSourceEventIds = new Set();
+        let matched = false;
+        for (const sessionKey of sessionKeys) {
+          const directEvents = roomIndex.eventsBySessionKey.get(sessionKey) ?? [];
+          if (directEvents.length === 0) {
+            continue;
+          }
+          matched = true;
+          for (const event of directEvents) {
+            const ref = roomIndex.getRoomRef(event);
+            pushRoomRef(ref);
+            if (ref.eventId) {
+              relatedSourceEventIds.add(ref.eventId);
             }
-            relatedSourceEventIds.add(event.eventId);
-            if (event.sourceEventId) {
-              relatedSourceEventIds.add(event.sourceEventId);
+            if (ref.sourceEventId) {
+              relatedSourceEventIds.add(ref.sourceEventId);
             }
           }
-          if (relatedSourceEventIds.size === 0) {
-            return [];
+        }
+        if (!matched || relatedSourceEventIds.size === 0) {
+          continue;
+        }
+        for (const relatedSourceEventId of relatedSourceEventIds) {
+          pushRoomRef(roomIndex.getRoomRef(roomIndex.eventsById.get(relatedSourceEventId)));
+          const linkedEvents = roomIndex.eventsBySourceEventId.get(relatedSourceEventId) ?? [];
+          for (const event of linkedEvents) {
+            pushRoomRef(roomIndex.getRoomRef(event));
           }
-          return roomState.events
-            .filter((event) => {
-              const relatedSessionKey = normalizeLookupKey(event.relatedSessionKey ?? "");
-              return (
-                (relatedSessionKey && sessionKeys.has(relatedSessionKey)) ||
-                relatedSourceEventIds.has(event.eventId) ||
-                Boolean(event.sourceEventId && relatedSourceEventIds.has(event.sourceEventId))
-              );
-            })
-            .map((event) => {
-              const described = describeCollaborationRoomEvent(event, language, void 0, attachmentsById);
-              return {
-                sequence: event.sequence,
-                type: event.type,
-                createdAt: event.createdAt,
-                label: described.label,
-                detail: described.detail,
-              };
-            });
-        })
+        }
+      }
+      const roomRefs = [...roomRefsByKey.values()]
         .sort((a, b) => toSortableMs(a.createdAt) - toSortableMs(b.createdAt))
-        .slice(-6);
+        .slice(-6)
+        .map((ref) => ({
+          roomId: ref.roomId,
+          sequence: ref.sequence,
+          type: ref.type,
+          createdAt: ref.createdAt,
+          label: ref.label,
+          detail: ref.detail,
+        }));
       if (roomRefs.length === 0) {
         return card;
       }
-      return { ...card, roomRefs };
+      return {
+        ...card,
+        roomRefs,
+        linkedRoomId: roomRefs[roomRefs.length - 1]?.roomId ?? card.linkedRoomId,
+      };
     });
   }
 
@@ -2117,10 +2690,12 @@ function createCollaborationRoomHelpers(deps) {
     buildCollaborationRoomStreamSignature,
     buildCollaborationEventSyncSignature,
     buildCollaborationLiveSessionBackfillEvents,
+    upgradeCollaborationApiEventsFromSessionHistory,
     buildCollaborationLiveDraftEvents,
     buildCollaborationPendingDraftEvents,
     buildCollaborationTranscriptBackfillEvent,
     buildCollaborationTranscriptBackfillEvents,
+    filterRoomScopedTranscriptMessages,
     buildTranscriptBackfillDetail,
     compareCollaborationApiEventsByTime,
     deriveCollaborationExecutionStateForSmoke: deriveCollaborationExecutionState,

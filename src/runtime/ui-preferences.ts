@@ -8,6 +8,7 @@ const UI_TASK_CARD_ID_MAX_LENGTH = 160;
 
 export type UiQuickFilter = "all" | "attention" | TaskState;
 export type UiLanguage = "en" | "zh";
+export type UiTaskBoardViewMode = "cards" | "details";
 export const UI_QUICK_FILTERS: UiQuickFilter[] = [
   "all",
   "attention",
@@ -40,6 +41,7 @@ export interface UiPreferences {
   quickFilter: UiQuickFilter;
   taskFilters: UiPreferencesTaskFilters;
   taskCardOrder: string[];
+  taskBoardViewMode: UiTaskBoardViewMode;
   localMutationUnlock: boolean;
   collaborationChat: UiPreferencesCollaborationChat;
   updatedAt: string;
@@ -58,6 +60,7 @@ export function defaultUiPreferences(now = new Date().toISOString()): UiPreferen
     quickFilter: "all",
     taskFilters: {},
     taskCardOrder: [],
+    taskBoardViewMode: "cards",
     localMutationUnlock: false,
     collaborationChat: {
       expanded: false,
@@ -121,6 +124,10 @@ export function isUiLanguage(input: string): input is UiLanguage {
   return input === "en" || input === "zh";
 }
 
+export function isUiTaskBoardViewMode(input: string): input is UiTaskBoardViewMode {
+  return input === "cards" || input === "details";
+}
+
 function normalizeUiPreferences(input: unknown): { preferences: UiPreferences; issues: string[] } {
   const now = new Date().toISOString();
   const base = defaultUiPreferences(now);
@@ -171,6 +178,7 @@ function normalizeUiPreferences(input: unknown): { preferences: UiPreferences; i
     taskFilters.status = quickFilter;
   }
   const taskCardOrder = normalizeTaskCardOrder(obj.taskCardOrder, issues);
+  const taskBoardViewMode = normalizeTaskBoardViewMode(obj.taskBoardViewMode, issues);
   const localMutationUnlock = normalizeLocalMutationUnlock(obj.localMutationUnlock, issues);
   const collaborationChat = normalizeCollaborationChat(obj.collaborationChat, issues);
 
@@ -184,14 +192,15 @@ function normalizeUiPreferences(input: unknown): { preferences: UiPreferences; i
   return {
     preferences: {
       language,
-        compactStatusStrip,
-        quickFilter,
-        taskFilters,
-        taskCardOrder,
-        localMutationUnlock,
-        collaborationChat,
-        updatedAt,
-      },
+      compactStatusStrip,
+      quickFilter,
+      taskFilters,
+      taskCardOrder,
+      taskBoardViewMode,
+      localMutationUnlock,
+      collaborationChat,
+      updatedAt,
+    },
     issues,
   };
 }
@@ -359,6 +368,24 @@ function normalizeTaskCardOrder(input: unknown, issues: string[]): string[] {
   }
 
   return out;
+}
+
+function normalizeTaskBoardViewMode(
+  input: unknown,
+  issues: string[],
+): UiTaskBoardViewMode {
+  const fallback = defaultUiPreferences().taskBoardViewMode;
+  if (input === undefined) return fallback;
+  if (typeof input !== "string") {
+    issues.push("taskBoardViewMode must be a string");
+    return fallback;
+  }
+  const normalized = input.trim().toLowerCase();
+  if (!isUiTaskBoardViewMode(normalized)) {
+    issues.push("taskBoardViewMode must be one of: cards, details");
+    return fallback;
+  }
+  return normalized;
 }
 
 function normalizeLocalMutationUnlock(input: unknown, issues: string[]): boolean {

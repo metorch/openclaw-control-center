@@ -140,6 +140,7 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     roomStreamLastSnapshotAt: 0,
     roomStreamReconnectTimer: 0,
     roomStreamDisabledUntil: 0,
+    activeRoomRefreshRequestId: 0,
     pollingTimer: 0,
     prefsTimer: 0,
     prefsIncludeRoomViewState: false,

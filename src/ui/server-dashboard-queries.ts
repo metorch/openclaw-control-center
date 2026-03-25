@@ -13,6 +13,7 @@ function createDashboardQueryHelpers(deps) {
     hasAnyQueryKey,
     isUiLanguage,
     isUiQuickFilter,
+    isUiTaskBoardViewMode,
     legacyDashboardRouteAnchor,
     legacyDashboardRouteSection,
     listTasks,
@@ -395,6 +396,7 @@ function createDashboardQueryHelpers(deps) {
       quickFilter: current.quickFilter,
       taskFilters: { ...current.taskFilters },
       taskCardOrder: [...current.taskCardOrder],
+      taskBoardViewMode: current.taskBoardViewMode,
       localMutationUnlock: current.localMutationUnlock,
       collaborationChat: { ...current.collaborationChat },
       updatedAt: new Date().toISOString(),
@@ -451,6 +453,16 @@ function createDashboardQueryHelpers(deps) {
     }
     if (payload.taskCardOrder !== void 0) {
       next.taskCardOrder = normalizeTaskCardOrderPatch(payload.taskCardOrder, "taskCardOrder");
+    }
+    if (payload.taskBoardViewMode !== void 0) {
+      if (typeof payload.taskBoardViewMode !== "string") {
+        throw new RequestValidationError("taskBoardViewMode must be a string.", 400);
+      }
+      const viewMode = payload.taskBoardViewMode.trim().toLowerCase();
+      if (!isUiTaskBoardViewMode(viewMode)) {
+        throw new RequestValidationError("taskBoardViewMode must be one of: cards, details", 400);
+      }
+      next.taskBoardViewMode = viewMode;
     }
     if (payload.localMutationUnlock !== void 0) {
       if (typeof payload.localMutationUnlock !== "boolean") {

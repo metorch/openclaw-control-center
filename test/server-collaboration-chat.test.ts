@@ -552,6 +552,88 @@ test("reply output falls back to stage_result summary when the visible body is e
   assert.equal(output.parsedStageResult.envelope?.summary, "1");
 });
 
+test("resolve reply output prefers structured session history text over flattened agent turn text", async () => {
+  const helper = buildHelper();
+  const historyCalls: Array<{ sessionKey: string; limit?: number }> = [];
+
+  const output = await helper.resolveCollaborationAgentTurnOutput({
+    response: {
+      replyText: "Plan ready. 1. Verify the config. 2. Restart the room stream.",
+      rawText: "Plan ready. 1. Verify the config. 2. Restart the room stream.",
+      rawJson: {},
+    },
+    toolClient: {
+      sessionsHistory: async (request: { sessionKey: string; limit?: number }) => {
+        historyCalls.push(request);
+        return {
+          json: {
+            history: [
+              {
+                type: "message",
+                message: {
+                  role: "assistant",
+                  content: "Plan ready.\n\n1. Verify the config.\n2. Restart the room stream.",
+                },
+              },
+            ],
+          },
+          rawText: "",
+        };
+      },
+    },
+    sessionKey: "agent:main:thread:collab-room-wrap",
+  });
+
+  assert.deepEqual(historyCalls, [{ sessionKey: "agent:main:thread:collab-room-wrap", limit: 40 }]);
+  assert.equal(output.replyTextSource, "session_history");
+  assert.equal(output.replyText, "Plan ready.\n\n1. Verify the config.\n2. Restart the room stream.");
+});
+
+test("reply output ignores gateway final wrapper payloads until a visible assistant reply exists", async () => {
+  const helper = buildHelper();
+  const wrapperPayload = JSON.stringify({
+    runId: "run-final-1",
+    sessionKey: "agent:main:thread:collab-wrapper-room",
+    seq: 1,
+    state: "final",
+  });
+
+  assert.equal(
+    helper.extractVisibleCollaborationTurnReplyText({
+      replyText: wrapperPayload,
+      rawText: wrapperPayload,
+    }),
+    "",
+  );
+
+  const output = await helper.resolveCollaborationAgentTurnOutput({
+    response: {
+      replyText: wrapperPayload,
+      rawText: wrapperPayload,
+      rawJson: {},
+    },
+    toolClient: {
+      sessionsHistory: async () => ({
+        json: {
+          history: [
+            {
+              type: "message",
+              message: {
+                role: "assistant",
+                content: wrapperPayload,
+              },
+            },
+          ],
+        },
+        rawText: "",
+      }),
+    },
+    sessionKey: "agent:main:thread:collab-wrapper-room",
+  });
+
+  assert.equal(output.replyText, "");
+});
+
 test("reply output does not expose machine-only payloads or NO_REPLY placeholders", () => {
   const helper = buildHelper();
   const payloadOnlyRawText = JSON.stringify({
@@ -1141,6 +1223,267 @@ test("failed turns do not backfill project memory files as generated attachments
     assert.equal(parsed.attachmentCount, 0);
     assert.equal(parsed.systemNoteCount, 0);
     assert.deepEqual(parsed.failedReasons, ["Unknown agent failure."]);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("gateway timeout interruptions resume automatically without writing a failed room event first", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-chat-gateway-timeout-resume-"));
+
+  try {
+    const output = await runCollaborationChatModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const chatMod = unwrap(await import(${JSON.stringify(collaborationChatModuleHref)}));
+        const openclawChatRooms = unwrap(await import(${JSON.stringify(openclawChatRoomsModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const { join } = await import("node:path");
+
+        let turnCalls = 0;
+        const helpers = chatMod.createCollaborationChatHelpers({
+          buildCollaborationAttachmentSummary: () => "",
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message, statusCode = 400) => {
+            const error = new Error(message);
+            error.statusCode = statusCode;
+            return error;
+          },
+          describeCollaborationRoomEvent: () => ({ label: "", detail: "" }),
+          formatBytesCompact: () => "",
+          formatCollaborationDuration: (value) => String(value || 0) + "ms",
+          getOpenClawHomeDir: () => process.cwd(),
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          isUiLanguage: (value) => value === "en" || value === "zh",
+          normalizeCollaborationAttachmentIds: (input) => Array.isArray(input) ? input : [],
+          normalizeCollaborationRoomIdPayload: async (value) => value,
+          normalizeLookupKey: (value) => String(value || "").trim().toLowerCase(),
+          optionalBoundedString: (value) => typeof value === "string" ? value : undefined,
+          pickUiText: (language, english, chinese) => language === "zh" ? chinese : english,
+          resolveCollaborationParticipantName: (directory, agentId) =>
+            directory.entries.find((entry) => String(entry.agentId || "").toLowerCase() === String(agentId || "").toLowerCase())?.displayName || agentId,
+          sanitizeCollaborationDisplayText: (value) => String(value || "").trim(),
+          safeTruncate: (value, maxLength) => String(value || "").slice(0, maxLength),
+          toCollaborationApiAttachment: (attachment) => attachment,
+        });
+
+        const workspaceRoot = join(process.cwd(), "workspace");
+        const transcriptRoom = await openclawChatRooms.createOpenClawChatRoom({
+          agentId: "jarvis",
+          workspaceRoot,
+          openclawHomeDir: process.cwd(),
+          title: "Gateway timeout auto resume",
+        });
+        await collaborationRoom.saveCollaborationRoom(
+          collaborationRoom.defaultCollaborationRoomState({
+            roomId: transcriptRoom.roomId,
+            title: "Gateway timeout auto resume",
+            titleMode: "manual",
+          }),
+        );
+
+        const directory = {
+          primaryAgentId: "jarvis",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            { agentId: "jarvis", displayName: "Jarvis", aliases: ["jarvis"], workspaceRoot },
+          ],
+        };
+
+        const toolClient = {
+          agentTurn: async (request) => {
+            turnCalls += 1;
+            if (turnCalls === 1) {
+              return {
+                ok: false,
+                replyText: "Still installing dependencies and running checks.",
+                rawText: "Still installing dependencies and running checks.",
+                rawJson: {},
+                durationMs: 25,
+                sessionId: "session-jarvis",
+                sessionKey: request.sessionKey || "agent:jarvis:thread:collab-timeout-room",
+                failureReason: "Gateway chat stream timed out before a final event arrived.",
+                errorMessage: "Gateway chat stream timed out before a final event arrived.",
+                stopReason: "toolUse",
+                incomplete: true,
+              };
+            }
+            return {
+              ok: true,
+              replyText: "[[reply_to_current]]Final recovered answer.",
+              rawText: "[[reply_to_current]]Final recovered answer.",
+              rawJson: {},
+              durationMs: 30,
+              sessionId: "session-jarvis",
+              sessionKey: request.sessionKey || "agent:jarvis:thread:collab-timeout-room",
+              stopReason: "stop",
+              incomplete: false,
+            };
+          },
+        };
+
+        await helpers.createCollaborationRoomMessage(
+          {
+            roomId: transcriptRoom.roomId,
+            text: "@jarvis please recover the final reply after a gateway timeout.",
+          },
+          toolClient,
+          directory,
+          "en",
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, 700));
+
+        const roomState = await collaborationRoom.loadCollaborationRoom(transcriptRoom.roomId);
+        process.stdout.write(JSON.stringify({
+          turnCalls,
+          roomEventTypes: roomState.events.map((event) => event.type),
+          roomEventMessages: roomState.events.map((event) => event.message || event.detail || ""),
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output) as {
+      turnCalls: number;
+      roomEventTypes: string[];
+      roomEventMessages: string[];
+    };
+
+    assert.equal(parsed.turnCalls, 2);
+    assert.equal(parsed.roomEventTypes.includes("dispatch_failed"), false);
+    assert.equal(parsed.roomEventTypes.includes("agent_reply"), true);
+    assert(parsed.roomEventMessages.some((message) => /Final recovered answer/i.test(message)));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("stream_read_error interruptions resume automatically without writing a failed room event first", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-chat-stream-read-error-resume-"));
+
+  try {
+    const output = await runCollaborationChatModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const chatMod = unwrap(await import(${JSON.stringify(collaborationChatModuleHref)}));
+        const openclawChatRooms = unwrap(await import(${JSON.stringify(openclawChatRoomsModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const { join } = await import("node:path");
+
+        let turnCalls = 0;
+        const helpers = chatMod.createCollaborationChatHelpers({
+          buildCollaborationAttachmentSummary: () => "",
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message, statusCode = 400) => {
+            const error = new Error(message);
+            error.statusCode = statusCode;
+            return error;
+          },
+          describeCollaborationRoomEvent: () => ({ label: "", detail: "" }),
+          formatBytesCompact: () => "",
+          formatCollaborationDuration: (value) => String(value || 0) + "ms",
+          getOpenClawHomeDir: () => process.cwd(),
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          isUiLanguage: (value) => value === "en" || value === "zh",
+          normalizeCollaborationAttachmentIds: (input) => Array.isArray(input) ? input : [],
+          normalizeCollaborationRoomIdPayload: async (value) => value,
+          normalizeLookupKey: (value) => String(value || "").trim().toLowerCase(),
+          optionalBoundedString: (value) => typeof value === "string" ? value : undefined,
+          pickUiText: (language, english, chinese) => language === "zh" ? chinese : english,
+          resolveCollaborationParticipantName: (directory, agentId) =>
+            directory.entries.find((entry) => String(entry.agentId || "").toLowerCase() === String(agentId || "").toLowerCase())?.displayName || agentId,
+          sanitizeCollaborationDisplayText: (value) => String(value || "").trim(),
+          safeTruncate: (value, maxLength) => String(value || "").slice(0, maxLength),
+          toCollaborationApiAttachment: (attachment) => attachment,
+        });
+
+        const workspaceRoot = join(process.cwd(), "workspace");
+        const transcriptRoom = await openclawChatRooms.createOpenClawChatRoom({
+          agentId: "jarvis",
+          workspaceRoot,
+          openclawHomeDir: process.cwd(),
+          title: "Stream read error auto resume",
+        });
+        await collaborationRoom.saveCollaborationRoom(
+          collaborationRoom.defaultCollaborationRoomState({
+            roomId: transcriptRoom.roomId,
+            title: "Stream read error auto resume",
+            titleMode: "manual",
+          }),
+        );
+
+        const directory = {
+          primaryAgentId: "jarvis",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            { agentId: "jarvis", displayName: "Jarvis", aliases: ["jarvis"], workspaceRoot },
+          ],
+        };
+
+        const toolClient = {
+          agentTurn: async (request) => {
+            turnCalls += 1;
+            if (turnCalls === 1) {
+              return {
+                ok: false,
+                replyText: "",
+                rawText: "stream_read_error",
+                rawJson: {},
+                durationMs: 25,
+                sessionId: "session-jarvis",
+                sessionKey: request.sessionKey || "agent:jarvis:thread:collab-stream-read-room",
+                failureReason: "stream_read_error",
+                errorMessage: "stream_read_error",
+                incomplete: false,
+              };
+            }
+            return {
+              ok: true,
+              replyText: "[[reply_to_current]]Final recovered answer after stream read retry.",
+              rawText: "[[reply_to_current]]Final recovered answer after stream read retry.",
+              rawJson: {},
+              durationMs: 30,
+              sessionId: "session-jarvis",
+              sessionKey: request.sessionKey || "agent:jarvis:thread:collab-stream-read-room",
+              stopReason: "stop",
+              incomplete: false,
+            };
+          },
+        };
+
+        await helpers.createCollaborationRoomMessage(
+          {
+            roomId: transcriptRoom.roomId,
+            text: "@jarvis please keep going if the gateway stream reader fails.",
+          },
+          toolClient,
+          directory,
+          "en",
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, 700));
+
+        const roomState = await collaborationRoom.loadCollaborationRoom(transcriptRoom.roomId);
+        process.stdout.write(JSON.stringify({
+          turnCalls,
+          roomEventTypes: roomState.events.map((event) => event.type),
+          roomEventMessages: roomState.events.map((event) => event.message || event.detail || ""),
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output) as {
+      turnCalls: number;
+      roomEventTypes: string[];
+      roomEventMessages: string[];
+    };
+
+    assert.equal(parsed.turnCalls, 2);
+    assert.equal(parsed.roomEventTypes.includes("dispatch_failed"), false);
+    assert.equal(parsed.roomEventTypes.includes("agent_reply"), true);
+    assert(parsed.roomEventMessages.some((message) => /Final recovered answer after stream read retry/i.test(message)));
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
