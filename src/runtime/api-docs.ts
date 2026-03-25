@@ -222,6 +222,129 @@ export function buildApiDocs(): ApiDocsPayload {
         },
       },
       {
+        method: "GET",
+        path: "/api/features/geo/state",
+        summary: "Read the latest GEO audit run snapshot for the standalone GEO workbench",
+        response: {
+          ok: "boolean",
+          state:
+            "{ runId, status, startedAt?, finishedAt?, exitCode?, message?, warnings[], params{ url?, brandName?, maxPages?, insecure?, outputDir?, outputDirResolved? }, outputDir?, stdoutTail, stderrTail, artifacts[] }",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/features/geo/summary",
+        summary:
+          "Read the latest bounded standalone-audit.json summary that powers GEO suite overview cards and detail panels",
+        response: {
+          ok: "boolean",
+          summary:
+            "{ available, artifactName:'standalone-audit.json', artifactPath?, artifactRelativePath?, artifactUpdatedAt?, loadedAt, error?, data? }",
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/features/geo/run",
+        summary:
+          "Start one controlled standalone GEO audit run. Only one run may be active at a time and outputDir must stay within approved GEO output roots.",
+        body: {
+          url: "required target URL",
+          brandName: "optional brand name override",
+          maxPages: "optional integer 1..50",
+          insecure: "optional boolean",
+          outputDir: "optional absolute approved path or relative path under runtime/geo-audits/outputs",
+        },
+        response: {
+          ok: "boolean",
+          state:
+            "{ runId, status:'running', startedAt, params{ url, brandName?, maxPages, insecure, outputDir?, outputDirResolved? }, command{ file, args[] } }",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/features/control",
+        summary: "Read which standalone feature cards currently allow scoped OpenClaw AI takeover",
+        response: {
+          ok: "boolean",
+          state: "{ version, updatedAt, features{ geo{ aiTakeoverEnabled, mode, updatedAt } } }",
+          path: "string",
+          issues: "string[]",
+        },
+      },
+      {
+        method: "PATCH",
+        path: "/api/features/control",
+        summary:
+          "Update scoped AI takeover permission for one standalone feature card. This does not grant unbounded repository or history access.",
+        body: {
+          feature: "required feature key; currently geo",
+          aiTakeoverEnabled: "required boolean",
+        },
+        response: {
+          ok: "boolean",
+          state: "{ version, updatedAt, features{ geo{ aiTakeoverEnabled, mode, updatedAt } } }",
+          path: "string",
+          issues: "string[]",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/features/geo/artifact",
+        summary: "Read one artifact from the latest GEO audit run by whitelist name only",
+        query: {
+          artifact: "required whitelist artifact name",
+          download: "optional 1 to force attachment download",
+        },
+        response: {
+          ok: "binary or text stream",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/features/geo/module/state",
+        summary: "Read one GEO suite module runner state by controlled module key",
+        query: {
+          module: "required module key: citability|crawlers|llms|brand|technical|schema|content|report",
+        },
+        response: {
+          ok: "boolean",
+          state:
+            "{ module, action?, runId, status, startedAt?, finishedAt?, exitCode?, message?, warnings[], params{ url?, brandName?, domain?, sourceAuditPath? }, stdoutTail, stderrTail, artifacts[] }",
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/features/geo/module/run",
+        summary:
+          "Start one controlled GEO suite module runner. The runner stays inside the fixed GEO repo and controlled runtime output boundary.",
+        body: {
+          module: "required module key: citability|crawlers|llms|brand|technical|schema|content|report",
+          action: "optional module action; currently llms supports validate|generate and report uses generate_pdf",
+          url: "optional URL required by most modules except report",
+          brandName: "optional brand name override for the brand module",
+          domain: "optional domain override for the brand module",
+        },
+        response: {
+          ok: "boolean",
+          state:
+            "{ module, action?, runId, status:'running', startedAt, params{ url?, brandName?, domain?, sourceAuditPath? }, command{ file, args[] } }",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/features/geo/module/artifact",
+        summary:
+          "Read one artifact from the latest run of a GEO suite module. Access is bounded to artifacts registered under that module runtime only.",
+        query: {
+          module: "required module key",
+          artifact: "required artifact name from the module state artifact list",
+          download: "optional 1 to force attachment download",
+        },
+        response: {
+          ok: "binary or text stream",
+        },
+      },
+      {
         method: "PUT",
         path: "/api/files/content",
         summary: "Write one editable file back to disk (requires local token gate if enabled)",

@@ -42,6 +42,9 @@ const import_chat_markdown = require("../runtime/chat-markdown");
 const import_audit_timeline = require("../runtime/audit-timeline");
 const import_digest_renderer = require("../runtime/digest-renderer");
 const import_export_bundle = require("../runtime/export-bundle");
+const import_feature_control = require("../runtime/feature-control");
+const import_geo_audit = require("../runtime/geo-audit");
+const import_geo_suite = require("../runtime/geo-suite");
 const import_healthz = require("../runtime/healthz");
 const import_import_live = require("../runtime/import-live");
 const import_local_safety_settings = require("../runtime/local-safety-settings");
@@ -90,8 +93,9 @@ const { createDashboardRuntimeHelpers } = require("./server-dashboard-runtime");
 const { createReadModelHelpers } = require("./server-read-model");
 const { createStaffModelHelpers } = require("./server-staff-models");
 const { createStaffOverviewHelpers } = require("./server-staff-overview");
+const { createFeatureRenderers } = require("./server-features");
 const { badge, escapeHtml, extractDateFromName, formatInt, formatPercent, formatTimeAgoFromNow, pickUiText, safeTruncate, toPlainSummary, toSortableMs, uniqueSorted } = require("./server-shared");
-const { renderAgentVisualEnhancerScript, renderCardHelpTooltipsScript, renderCollaborationFilterScript, renderDashboardRefreshScript, renderFileWorkbenchScript, renderNativeMotionScript, renderQuotaResetScript, renderSettingsBudgetLimitScript, renderSettingsSafetyScript, renderStaffModelScript, renderTaskBoardScript } = require("./server-inline-scripts");
+const { renderAgentVisualEnhancerScript, renderCardHelpTooltipsScript, renderCollaborationFilterScript, renderDashboardRefreshScript, renderFeaturesScript, renderFileWorkbenchScript, renderNativeMotionScript, renderQuotaResetScript, renderSettingsBudgetLimitScript, renderSettingsSafetyScript, renderStaffModelScript, renderTaskBoardScript } = require("./server-inline-scripts");
 const { agentTeamActionLabel, agentTeamEmbeddedUpdatedLabel, agentTeamFactLabel, agentTeamFreshnessTone, agentTeamPhaseLabel, agentTeamPreviewSourceLabel, agentTeamRunStatusLabel, agentTeamRuntimeSummary, agentTeamSuggestedPanelHref, hasFreshRuntimeTimestamp, isSameLocalCalendarDay, isStaleRuntimeTimestamp, pickLatestSessionActivityTimestamp, pickLatestTimestamp, renderAgentTeamArtifactPreviewCard, renderAgentTeamDocsBlock, renderAgentTeamInspectorCard, renderAgentTeamMemoryBlock, renderAgentTeamOverviewBlock, renderAgentTeamProjectsBlock, renderAgentTeamRunSummaryCard, renderAgentTeamSettingsBlock, renderAgentTeamTeamBlock } = require("./server-agent-team");
 const { createDetailPageRenderers } = require("./server-detail-pages");
 const { createDashboardFragmentHelpers } = require("./server-dashboard-fragments");
@@ -107,6 +111,14 @@ const navigationHelpers = createNavigationHelpers({
     uiQuickFilters: import_ui_preferences.UI_QUICK_FILTERS
 });
 const { agentTeamSidebarLinks, buildCronDetailHref, buildHomeHref, buildHomeQuery, buildSessionDetailHref, buildTaskDetailHref, dashboardSectionLinks, hasAnyQueryKey, joinDisplayList, matchesQuickFilter, normalizeDashboardSectionForNav, projectStateLabel, quickFilterLabel, renderDashboardRefreshControls, renderLanguageToggle, renderQuickFilters, resolveDashboardSectionTitle, searchScopeLabel, taskStateLabel } = navigationHelpers;
+const featureRenderers = createFeatureRenderers({
+    buildHomeQuery,
+    escapeHtml,
+    formatInt,
+    formatTimeAgoFromNow,
+    pickUiText
+});
+const { buildFeaturesHref, normalizeDashboardFeature, renderFeaturesSection } = featureRenderers;
 const dashboardFragmentHelpers = createDashboardFragmentHelpers({
     badge,
     escapeHtml,
@@ -221,7 +233,7 @@ const SHARED_DOCUMENT_FILE_CANDIDATES = ["AGENTS.md", "IDENTITY.md", "SOUL.md", 
 const AGENT_DOCUMENT_FILE_CANDIDATES = ["AGENTS.md", "IDENTITY.md", "SOUL.md", "USER.md", "TASKS.md", "HEARTBEAT.md", "TOOLS.md", "README.md", "BOOTSTRAP.md", "NOTEBOOK.md", "focus.md", "inbox.md", "routines.md"];
 const STAFF_ROLE_EVIDENCE_FILE_CANDIDATES = ["IDENTITY.md", "SOUL.md", "AGENTS.md", "BOOTSTRAP.md", "HEARTBEAT.md", "TOOLS.md", "README.md", "MEMORY.md", "focus.md", "routines.md", "inbox.md"];
 const DASHBOARD_SEARCH_SCOPES = ["tasks", "projects", "sessions", "exceptions"];
-const DASHBOARD_SECTIONS = ["overview", "calendar", "team", "collaboration", "memory", "docs", "usage-cost", "office-space", "projects-tasks", "alerts", "replay-audit", "settings"];
+const DASHBOARD_SECTIONS = ["overview", "calendar", "team", "collaboration", "memory", "docs", "features", "usage-cost", "office-space", "projects-tasks", "alerts", "replay-audit", "settings"];
 const CONTROL_CENTER_MAPPING_TASK_IDS = new Set(["due-fast", "todo-second", "already-running", "unassigned"]);
 const LEGACY_DASHBOARD_ROUTE_SECTION = { "/calendar": "projects-tasks", "/heartbeat": "overview", "/tools": "settings" };
 const LEGACY_DASHBOARD_ROUTE_ANCHOR = { "/calendar": "calendar-board", "/heartbeat": "heartbeat-health", "/tools": "tool-connectors" };
@@ -649,6 +661,7 @@ function startUiServer(port, toolClient) {
                 const compactStatusStrip = resolveCompactStatusStrip(url.searchParams, prefs.preferences.compactStatusStrip);
                 const usageView = resolveUsageView(url.searchParams);
                 const search = resolveDashboardSearchQuery(url.searchParams);
+                const feature = section === "features" ? normalizeDashboardFeature(normalizeQueryString(url.searchParams.get("feature"), "feature", 40, false)) : void 0;
                 const requestedCollaborationRoomId = (0, import_collaboration_room.normalizeCollaborationRoomId)(url.searchParams.get("roomId"));
                 const hasTaskFilterQuery = hasAnyQueryKey(url.searchParams, ["quick", "status", "owner", "project"]);
                 if (section === "projects-tasks" && !hasTaskFilterQuery) {
@@ -673,7 +686,7 @@ function startUiServer(port, toolClient) {
                         }
                     }
                     : prefs.preferences.collaborationChat;
-                const html = await renderHtml(filters, toolClient, { section, language, compactStatusStrip, usageView, preferencesPath: prefs.path, taskCardOrder: prefs.preferences.taskCardOrder, taskBoardViewMode: prefs.preferences.taskBoardViewMode, localMutationUnlock: prefs.preferences.localMutationUnlock, collaborationChat: collaborationChatPreferences, search });
+                const html = await renderHtml(filters, toolClient, { section, feature, language, compactStatusStrip, usageView, preferencesPath: prefs.path, taskCardOrder: prefs.preferences.taskCardOrder, taskBoardViewMode: prefs.preferences.taskBoardViewMode, localMutationUnlock: prefs.preferences.localMutationUnlock, collaborationChat: collaborationChatPreferences, search });
                 return writeText(res, 200, html, "text/html; charset=utf-8");
             }
             if (method === "POST" && path === "/api/dashboard/refresh") {
@@ -815,6 +828,110 @@ function startUiServer(port, toolClient) {
                 }
                 return writeJson(res, 200, { ok: true, scope, entry: saved.entry, content: saved.content });
             }
+            if (method === "GET" && path === "/api/features/geo/state") {
+                assertAllowedQueryParams(url.searchParams, [], true);
+                const state = await (0, import_geo_audit.getGeoAuditState)();
+                return writeJson(res, 200, { ok: true, state });
+            }
+            if (method === "GET" && path === "/api/features/geo/summary") {
+                assertAllowedQueryParams(url.searchParams, [], true);
+                const summary = await (0, import_geo_audit.getGeoAuditSummary)();
+                return writeJson(res, 200, { ok: true, summary });
+            }
+            if (method === "GET" && path === "/api/features/geo/module/state") {
+                assertAllowedQueryParams(url.searchParams, ["module"], true);
+                const moduleKey = normalizeQueryString(url.searchParams.get("module"), "module", 40, true);
+                if (!moduleKey) {
+                    throw new RequestValidationError("module is required.", 400);
+                }
+                const state = await (0, import_geo_suite.getGeoSuiteModuleState)(moduleKey);
+                return writeJson(res, 200, { ok: true, state });
+            }
+            if (method === "POST" && path === "/api/features/geo/module/run") {
+                assertMutationAuthorized(req, "/api/features/geo/module/run");
+                assertJsonContentType(req);
+                const payload = expectObject(await readJsonBody(req), "geo suite module payload");
+                const moduleKey = requiredBoundedString(payload.module, "module", 40).toLowerCase();
+                const action = optionalBoundedString(payload.action, "action", 40);
+                const urlValue = optionalBoundedString(payload.url, "url", 4096);
+                const brandName = optionalBoundedString(payload.brandName, "brandName", 240);
+                const domain = optionalBoundedString(payload.domain, "domain", 240);
+                const state = await (0, import_geo_suite.startGeoSuiteModuleRun)({
+                    module: moduleKey,
+                    action,
+                    url: urlValue,
+                    brandName,
+                    domain,
+                });
+                return writeJson(res, 202, { ok: true, state });
+            }
+            if (method === "GET" && path === "/api/features/geo/module/artifact") {
+                assertAllowedQueryParams(url.searchParams, ["module", "artifact", "download"], true);
+                const moduleKey = normalizeQueryString(url.searchParams.get("module"), "module", 40, true);
+                const artifactName = normalizeQueryString(url.searchParams.get("artifact"), "artifact", 120, true);
+                if (!moduleKey) {
+                    throw new RequestValidationError("module is required.", 400);
+                }
+                if (!artifactName) {
+                    throw new RequestValidationError("artifact is required.", 400);
+                }
+                const artifact = await (0, import_geo_suite.readGeoSuiteModuleArtifact)(moduleKey, artifactName);
+                const download = url.searchParams.get("download") === "1";
+                return writeBinary(res, 200, artifact.buffer, {
+                    contentType: artifact.descriptor.contentType,
+                    fileName: download ? artifact.descriptor.name : undefined,
+                    download,
+                });
+            }
+            if (method === "POST" && path === "/api/features/geo/run") {
+                assertMutationAuthorized(req, "/api/features/geo/run");
+                assertJsonContentType(req);
+                const payload = expectObject(await readJsonBody(req), "geo audit payload");
+                const urlValue = requiredBoundedString(payload.url, "url", 4096);
+                const brandName = optionalBoundedString(payload.brandName, "brandName", 240);
+                const maxPages = optionalIntegerField(payload.maxPages, "maxPages", 1, 50);
+                const outputDir = optionalBoundedString(payload.outputDir, "outputDir", 4096);
+                const insecure = payload.insecure === true;
+                let state;
+                try {
+                    state = await (0, import_geo_audit.startGeoAuditRun)({
+                        url: urlValue,
+                        brandName,
+                        maxPages,
+                        insecure,
+                        outputDir
+                    });
+                }
+                catch (error) {
+                    const message = error instanceof Error ? error.message : "Failed to start GEO audit.";
+                    const statusCode = /already running/i.test(message) ? 409 : /outputDir|required/i.test(message) ? 400 : 503;
+                    const code = statusCode === 409 ? "GEO_RUN_ALREADY_ACTIVE" : statusCode === 400 ? "VALIDATION_ERROR" : "GEO_RUN_UNAVAILABLE";
+                    return writeApiError(res, statusCode, code, message);
+                }
+                return writeJson(res, 202, { ok: true, state });
+            }
+            if (method === "GET" && path === "/api/features/geo/artifact") {
+                assertAllowedQueryParams(url.searchParams, ["artifact", "download"], true);
+                const artifactName = normalizeQueryString(url.searchParams.get("artifact"), "artifact", 120, true);
+                if (!artifactName) {
+                    throw new RequestValidationError("artifact is required.", 400);
+                }
+                let artifact;
+                try {
+                    artifact = await (0, import_geo_audit.readGeoAuditArtifact)(artifactName);
+                }
+                catch (error) {
+                    const message = error instanceof Error ? error.message : "Requested GEO artifact is not available.";
+                    const statusCode = /unsupported/i.test(message) ? 400 : 404;
+                    return writeApiError(res, statusCode, statusCode === 400 ? "VALIDATION_ERROR" : "NOT_FOUND", message);
+                }
+                if (url.searchParams.get("download") === "1") {
+                    res.setHeader("content-disposition", `attachment; filename="${sanitizeHeaderFileName(artifact.descriptor.name)}"`);
+                } else if (artifact.descriptor.contentType === "application/pdf") {
+                    res.setHeader("content-disposition", `inline; filename="${sanitizeHeaderFileName(artifact.descriptor.name)}"`);
+                }
+                return writeBinary(res, 200, artifact.buffer, artifact.descriptor.contentType);
+            }
             if ((method === "POST" || method === "PATCH") && path === "/api/settings/budget-limit") {
                 assertMutationAuthorized(req, "/api/settings/budget-limit");
                 assertJsonContentType(req);
@@ -942,6 +1059,28 @@ function startUiServer(port, toolClient) {
                 const merged = mergeUiPreferencesPatch(current.preferences, payload);
                 const saved = await (0, import_ui_preferences.saveUiPreferences)(merged);
                 return writeJson(res, 200, { ok: true, path: saved.path, preferences: saved.preferences, issues: saved.issues });
+            }
+            if (method === "GET" && path === "/api/features/control") {
+                assertAllowedQueryParams(url.searchParams, [], true);
+                const state = await (0, import_feature_control.loadFeatureControlState)();
+                return writeJson(res, 200, { ok: true, path: state.path, state: state.state, issues: state.issues });
+            }
+            if (method === "PATCH" && path === "/api/features/control") {
+                assertMutationAuthorized(req, "/api/features/control");
+                assertJsonContentType(req);
+                const payload = expectObject(await readJsonBody(req), "feature control payload");
+                const feature = requiredBoundedString(payload.feature, "feature", 40).toLowerCase();
+                if (!(0, import_feature_control.isFeatureControlKey)(feature)) {
+                    throw new RequestValidationError("feature must be one of: geo", 400);
+                }
+                if (typeof payload.aiTakeoverEnabled !== "boolean") {
+                    throw new RequestValidationError("aiTakeoverEnabled must be a boolean.", 400);
+                }
+                const saved = await (0, import_feature_control.patchFeatureControl)({
+                    feature,
+                    aiTakeoverEnabled: payload.aiTakeoverEnabled
+                });
+                return writeJson(res, 200, { ok: true, path: saved.path, state: saved.state, issues: saved.issues });
             }
             if (method === "GET" && path === "/api/collaboration/participants") {
                 assertAllowedQueryParams(url.searchParams, [], true);
@@ -1667,8 +1806,8 @@ async function renderHtml(filters, toolClient, options) {
     const activeSection = normalizeDashboardSectionForNav(options.section);
     const usageCostMode = activeSection === "usage-cost" || activeSection === "settings" ? "full" : "summary";
     const sectionMeta = sectionLinks.find(item => item.key === activeSection) ?? sectionLinks[0];
-    const sectionTitle = resolveDashboardSectionTitle(sectionMeta, options.language);
-    const sectionLeadText = activeSection === "overview" ? t("Decide from one screen: system health, items needing your intervention, who is active, and AI burn.", "\u4E00\u4E2A\u9996\u9875\u53EA\u56DE\u7B54\u56DB\u4EF6\u4E8B\uFF1A\u7CFB\u7EDF\u662F\u5426\u6B63\u5E38\u3001\u54EA\u91CC\u9700\u8981\u4F60\u4ECB\u5165\u3001\u8C01\u5728\u5FD9\u3001AI \u7528\u91CF\u662F\u5426\u5F02\u5E38\u3002") : activeSection === "collaboration" ? t("Follow how work moves between agents: who accepted it, who received the handoff, and where collaboration is currently waiting.", "\u76F4\u63A5\u770B\u4EFB\u52A1\u662F\u600E\u4E48\u5728\u667A\u80FD\u4F53\u4E4B\u95F4\u6D41\u8F6C\u7684\uFF1A\u8C01\u5148\u63A5\u5355\u3001\u540E\u6765\u4EA4\u7ED9\u4E86\u8C01\u3001\u5F53\u524D\u5361\u5728\u54EA\u4E00\u6BB5\u534F\u4F5C\u91CC\u3002") : activeSection === "projects-tasks" ? t("Start with the task and schedule card wall. It now merges tracked tasks, due times, and timed jobs into one place before you drill into execution detail.", "\u5148\u770B\u4EFB\u52A1\u4E0E\u6392\u7A0B\u5361\u7247\u5899\u3002\u73B0\u5728\u4F1A\u5148\u628A\u8DDF\u8E2A\u4EFB\u52A1\u3001\u622A\u6B62\u65F6\u95F4\u548C\u5B9A\u65F6\u4EFB\u52A1\u5408\u5230\u4E00\u8D77\uFF0C\u518D\u5F80\u4E0B\u94BB\u6267\u884C\u7EC6\u8282\u3002") : sectionMeta.blurb;
+    const sectionTitle = activeSection === "features" && options.feature === "geo" ? t("GEO Suite", "GEO \u5957\u4EF6") : resolveDashboardSectionTitle(sectionMeta, options.language);
+    const sectionLeadText = activeSection === "overview" ? t("Decide from one screen: system health, items needing your intervention, who is active, and AI burn.", "\u4E00\u4E2A\u9996\u9875\u53EA\u56DE\u7B54\u56DB\u4EF6\u4E8B\uFF1A\u7CFB\u7EDF\u662F\u5426\u6B63\u5E38\u3001\u54EA\u91CC\u9700\u8981\u4F60\u4ECB\u5165\u3001\u8C01\u5728\u5FD9\u3001AI \u7528\u91CF\u662F\u5426\u5F02\u5E38\u3002") : activeSection === "collaboration" ? t("Follow how work moves between agents: who accepted it, who received the handoff, and where collaboration is currently waiting.", "\u76F4\u63A5\u770B\u4EFB\u52A1\u662F\u600E\u4E48\u5728\u667A\u80FD\u4F53\u4E4B\u95F4\u6D41\u8F6C\u7684\uFF1A\u8C01\u5148\u63A5\u5355\u3001\u540E\u6765\u4EA4\u7ED9\u4E86\u8C01\u3001\u5F53\u524D\u5361\u5728\u54EA\u4E00\u6BB5\u534F\u4F5C\u91CC\u3002") : activeSection === "projects-tasks" ? t("Start with the task and schedule card wall. It now merges tracked tasks, due times, and timed jobs into one place before you drill into execution detail.", "\u5148\u770B\u4EFB\u52A1\u4E0E\u6392\u7A0B\u5361\u7247\u5899\u3002\u73B0\u5728\u4F1A\u5148\u628A\u8DDF\u8E2A\u4EFB\u52A1\u3001\u622A\u6B62\u65F6\u95F4\u548C\u5B9A\u65F6\u4EFB\u52A1\u5408\u5230\u4E00\u8D77\uFF0C\u518D\u5F80\u4E0B\u94BB\u6267\u884C\u7EC6\u8282\u3002") : activeSection === "features" ? t("Open focused capability pages inside the AI employee system shell. GEO is the first suite entry and now defaults to one-click full-suite execution, while advanced tools stay folded until needed.", "\u5728 AI \u5458\u5DE5\u7CFB\u7EDF\u58F3\u5185\u6253\u5F00\u805A\u7126\u80FD\u529B\u9875\u3002GEO \u662F\u7B2C\u4E00\u4E2A\u5957\u4EF6\u5165\u53E3\uFF0C\u9ED8\u8BA4\u8D70\u4E00\u952E\u5B8C\u6574\u5957\u4EF6\u6D41\u7A0B\uFF0C\u53EA\u6709\u5728\u9700\u8981\u65F6\u624D\u5C55\u5F00\u9AD8\u7EA7\u5DE5\u5177\u3002") : sectionMeta.blurb;
     const needsSessionPreview = activeSection === "projects-tasks" || activeSection === "overview";
     const needsTaskEvidence = activeSection === "projects-tasks";
     const needsTeamSnapshot = activeSection === "team";
@@ -1683,6 +1822,8 @@ async function renderHtml(filters, toolClient, options) {
     const needsMemorySection = needsMemoryFiles;
     const needsDocsHub = needsWorkspaceFiles;
     const needsSettingsInsights = activeSection === "settings";
+    const needsGeoAuditState = activeSection === "features";
+    const needsGeoAuditSummary = activeSection === "features" && options.feature === "geo";
     markRenderPhase("snapshot");
     const exceptions = (0, import_commander.commanderExceptions)(snapshot);
     const exceptionsFeed = (0, import_commander.commanderExceptionsFeed)(snapshot);
@@ -1703,7 +1844,7 @@ async function renderHtml(filters, toolClient, options) {
     markRenderPhase("session-preview");
     const [cronOverview, openclawCronJobs, replayPreview, usageCost, officeRoster, officePresence, agentTeamEmbed] = await Promise.all([(0, import_cron_overview.buildCronOverview)(snapshot, import_config.POLLING_INTERVALS_MS.cron), loadOpenclawCronCatalog(options.language), loadCachedReplayPreview(), loadCachedUsageCost(snapshot, usageCostMode), (0, import_agent_roster.loadBestEffortAgentRoster)(), loadCachedOfficeSessionPresence(), (0, import_agent_team_embed.loadAgentTeamEmbedSnapshot)()]);
     markRenderPhase("shared-data");
-    const [teamSnapshot, memoryFiles, memoryFacetOptions, workspaceFiles, settingsBudgetPolicy, workspaceFacetOptions, workspaceAgentScopes, docHubSnapshot, taskEvidenceItems, connectionHealthSummary, securitySummary, updateSummary, memoryStateSummary] = await Promise.all([needsTeamSnapshot ? loadTeamSnapshot(officeRoster) : Promise.resolve({ missionStatement: t("No shared mission loaded.", "\u5C1A\u672A\u52A0\u8F7D\u5171\u540C\u76EE\u6807\u3002"), members: [], sourcePath: OPENCLAW_CONFIG_PATH, detail: t("Loaded on the staff page only.", "\u4EC5\u5728\u5458\u5DE5\u9875\u52A0\u8F7D\u3002"), modelOptions: [], modelEditable: false }), needsMemorySection ? listEditableFiles("memory") : Promise.resolve([]), needsMemorySection ? listMemoryFacetOptions() : Promise.resolve([]), needsDocsHub ? listEditableFiles("workspace") : Promise.resolve([]), (0, import_budget_policy.loadBudgetPolicy)(), needsDocsHub ? listWorkspaceFacetOptions() : Promise.resolve([]), needsDocsHub ? loadEditableAgentScopes() : Promise.resolve([]), needsDocsHub ? (0, import_docs_hub.loadStructuredDocHubSnapshot)(snapshot, toolClient) : Promise.resolve({ generatedAt: snapshot.generatedAt, sourcePath: (0, import_node_path.join)(process.cwd(), "runtime", "doc-hub-chat.json"), detail: t("Loaded on the docs page only.", "\u4EC5\u5728\u6587\u6863\u9875\u52A0\u8F7D\u3002"), items: [] }), needsTaskEvidence ? loadCachedTaskEvidenceSessions(snapshot, toolClient, tasks.flatMap(task => task.sessionKeys), 24) : Promise.resolve([]), needsSettingsInsights ? (0, import_openclaw_cli_insights.loadCachedOpenClawConnectionSummary)() : Promise.resolve(void 0), needsSettingsInsights ? (0, import_openclaw_cli_insights.loadCachedOpenClawSecuritySummary)() : Promise.resolve(void 0), needsSettingsInsights ? (0, import_openclaw_cli_insights.loadCachedOpenClawUpdateSummary)() : Promise.resolve(void 0), needsMemorySection ? (0, import_openclaw_cli_insights.loadCachedOpenClawMemorySummary)() : Promise.resolve(void 0)]);
+    const [teamSnapshot, memoryFiles, memoryFacetOptions, workspaceFiles, settingsBudgetPolicy, workspaceFacetOptions, workspaceAgentScopes, docHubSnapshot, taskEvidenceItems, connectionHealthSummary, securitySummary, updateSummary, memoryStateSummary, geoAuditState, geoAuditSummary, featureControlState] = await Promise.all([needsTeamSnapshot ? loadTeamSnapshot(officeRoster) : Promise.resolve({ missionStatement: t("No shared mission loaded.", "\u5C1A\u672A\u52A0\u8F7D\u5171\u540C\u76EE\u6807\u3002"), members: [], sourcePath: OPENCLAW_CONFIG_PATH, detail: t("Loaded on the staff page only.", "\u4EC5\u5728\u5458\u5DE5\u9875\u52A0\u8F7D\u3002"), modelOptions: [], modelEditable: false }), needsMemorySection ? listEditableFiles("memory") : Promise.resolve([]), needsMemorySection ? listMemoryFacetOptions() : Promise.resolve([]), needsDocsHub ? listEditableFiles("workspace") : Promise.resolve([]), (0, import_budget_policy.loadBudgetPolicy)(), needsDocsHub ? listWorkspaceFacetOptions() : Promise.resolve([]), needsDocsHub ? loadEditableAgentScopes() : Promise.resolve([]), needsDocsHub ? (0, import_docs_hub.loadStructuredDocHubSnapshot)(snapshot, toolClient) : Promise.resolve({ generatedAt: snapshot.generatedAt, sourcePath: (0, import_node_path.join)(process.cwd(), "runtime", "doc-hub-chat.json"), detail: t("Loaded on the docs page only.", "\u4EC5\u5728\u6587\u6863\u9875\u52A0\u8F7D\u3002"), items: [] }), needsTaskEvidence ? loadCachedTaskEvidenceSessions(snapshot, toolClient, tasks.flatMap(task => task.sessionKeys), 24) : Promise.resolve([]), needsSettingsInsights ? (0, import_openclaw_cli_insights.loadCachedOpenClawConnectionSummary)() : Promise.resolve(void 0), needsSettingsInsights ? (0, import_openclaw_cli_insights.loadCachedOpenClawSecuritySummary)() : Promise.resolve(void 0), needsSettingsInsights ? (0, import_openclaw_cli_insights.loadCachedOpenClawUpdateSummary)() : Promise.resolve(void 0), needsMemorySection ? (0, import_openclaw_cli_insights.loadCachedOpenClawMemorySummary)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_geo_audit.getGeoAuditState)() : Promise.resolve(void 0), needsGeoAuditSummary ? (0, import_geo_audit.getGeoAuditSummary)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_feature_control.loadFeatureControlState)() : Promise.resolve(void 0)]);
     markRenderPhase("section-assets");
     const collaborationDirectory = await loadCollaborationParticipantDirectory();
     const dashboardRefreshGeneratedAt = pickLatestSessionActivityTimestamp(snapshot.generatedAt, sessionPreview.generatedAt, collaborationPreview.generatedAt, docHubSnapshot.generatedAt, agentTeamEmbed.runtime.updatedAt) ?? snapshot.generatedAt;
@@ -1898,7 +2039,10 @@ async function renderHtml(filters, toolClient, options) {
           </span>
         </a>`;
     }).join("");
-    const languageToggle = renderLanguageToggle(filters, options);
+    const languageToggle = renderLanguageToggle(filters, {
+        ...options,
+        extraQuery: activeSection === "features" && options.feature ? { feature: options.feature } : void 0
+    });
     const dashboardRefreshControls = renderDashboardRefreshControls(options.language, { localMutationUnlock: options.localMutationUnlock, localTokenAuthRequired: import_config.LOCAL_TOKEN_AUTH_REQUIRED, localTokenConfigured: import_config.LOCAL_API_TOKEN !== "" });
     const agentTeamLinks = agentTeamSidebarLinks(filters, options);
     const agentTeamOverviewBlock = renderAgentTeamOverviewBlock(agentTeamEmbed, options.language, agentTeamLinks);
@@ -2479,6 +2623,24 @@ async function renderHtml(filters, toolClient, options) {
     ${agentTeamMemoryBlock}
   `;
     const docsSection = await (0, import_docs_hub.renderDocsSection)({ language: options.language, workspaceFiles, workspaceFacetOptions, projectSummaries: snapshot.projectSummaries, agentScopes: workspaceAgentScopes, docHubSnapshot, agentTeamDocsBlockHtml: agentTeamDocsBlock });
+    const featuresSection = renderFeaturesSection({
+        compactStatusStrip: options.compactStatusStrip,
+        feature: options.feature,
+        featureControl: featureControlState?.state?.features ?? (0, import_feature_control.defaultFeatureControlState)().features,
+        filters,
+        geoProjectRoot: (0, import_geo_audit.getGeoAuditProjectRootForUi)(),
+        geoSummary: geoAuditSummary,
+        geoState: geoAuditState ?? {
+            status: "idle",
+            warnings: [],
+            params: {},
+            artifacts: [],
+            stdoutTail: "",
+            stderrTail: ""
+        },
+        language: options.language,
+        usageView: options.usageView
+    });
     const usageSection = `
     <section class="card">
       <h2>${escapeHtml(t("Measurement scope", "\u7EDF\u8BA1\u53E3\u5F84"))}</h2>
@@ -2889,6 +3051,8 @@ async function renderHtml(filters, toolClient, options) {
         sectionBody = memorySection;
     if (options.section === "docs")
         sectionBody = docsSection;
+    if (options.section === "features")
+        sectionBody = featuresSection;
     if (options.section === "usage-cost")
         sectionBody = usageSection;
     if (options.section === "office-space")
@@ -2921,6 +3085,7 @@ async function renderHtml(filters, toolClient, options) {
     const settingsBudgetLimitScript = renderSettingsBudgetLimitScript(options.language);
     const settingsSafetyScript = renderSettingsSafetyScript(options.language);
     const cardHelpTooltipsScript = renderCardHelpTooltipsScript(options.language);
+    const featuresScript = renderFeaturesScript(options.language);
     const collaborationChatBootPreferences = await buildCollaborationChatBootPreferences({
         preferences: options.collaborationChat,
         directory: collaborationDirectory
@@ -6695,6 +6860,440 @@ async function renderHtml(filters, toolClient, options) {
       border-color: rgba(0, 113, 227, 0.24);
       box-shadow: var(--ring-soft), inset 0 1px 0 rgba(255, 255, 255, 0.78);
     }
+    .feature-card-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    .feature-card {
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 22px;
+      padding: 18px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(248, 250, 255, 0.97)),
+        radial-gradient(circle at 100% 0%, rgba(0, 113, 227, 0.08), transparent 42%);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.82),
+        0 18px 34px rgba(17, 24, 39, 0.06);
+      display: grid;
+      gap: 12px;
+    }
+    .feature-card-head,
+    .geo-form-actions,
+    .geo-artifact-row,
+    .geo-artifact-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .feature-card-kicker {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 24px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: rgba(0, 113, 227, 0.1);
+      color: #0b5fc1;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .feature-card h3,
+    .geo-secondary-card h3 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.25;
+      color: #1d1d1f;
+    }
+    .feature-card-actions {
+      display: flex;
+      justify-content: flex-start;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .feature-toggle-shell {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 18px;
+      padding: 12px 14px;
+      background: linear-gradient(180deg, rgba(248, 250, 253, 0.98), rgba(255, 255, 255, 0.96));
+    }
+    .feature-toggle-copy {
+      display: grid;
+      gap: 4px;
+      flex: 1 1 240px;
+      min-width: 0;
+    }
+    .feature-toggle-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .feature-toggle-state {
+      font-weight: 700;
+      color: #1d1d1f;
+    }
+    .feature-toggle {
+      border: 0;
+      padding: 0;
+      background: transparent;
+      cursor: pointer;
+    }
+    .feature-toggle:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+    .feature-toggle-track {
+      position: relative;
+      display: inline-flex;
+      width: 52px;
+      height: 30px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.34);
+      box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+      transition: background-color 160ms ease, box-shadow 160ms ease;
+    }
+    .feature-toggle.is-on .feature-toggle-track {
+      background: rgba(0, 113, 227, 0.72);
+      box-shadow: inset 0 0 0 1px rgba(0, 88, 177, 0.16);
+    }
+    .feature-toggle-thumb {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      background: #ffffff;
+      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.16);
+      transition: transform 160ms ease;
+    }
+    .feature-toggle.is-on .feature-toggle-thumb {
+      transform: translateX(22px);
+    }
+    .geo-status-strip {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+    }
+    .geo-primary-card {
+      display: grid;
+      gap: 16px;
+    }
+    .geo-run-form {
+      margin-top: 16px;
+      display: grid;
+      gap: 14px;
+    }
+    .geo-collapsible {
+      margin-top: 0;
+    }
+    .geo-form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .geo-field {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .geo-field-wide {
+      grid-column: 1 / -1;
+    }
+    .geo-field span {
+      font-size: 12px;
+      font-weight: 700;
+      color: #5c6570;
+      letter-spacing: 0.02em;
+    }
+    .geo-field input {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid rgba(17, 24, 39, 0.1);
+      border-radius: 16px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(249, 251, 255, 0.97));
+      padding: 0 14px;
+      font: inherit;
+      color: #17202a;
+      box-sizing: border-box;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+    }
+    .geo-field input:focus {
+      outline: none;
+      border-color: rgba(0, 113, 227, 0.24);
+      box-shadow: var(--ring-soft), inset 0 1px 0 rgba(255, 255, 255, 0.88);
+    }
+    .geo-checkbox {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 13px;
+      color: #334155;
+      font-weight: 560;
+    }
+    .geo-checkbox input {
+      margin: 0;
+      accent-color: #0f62fe;
+    }
+    .geo-run-status {
+      min-height: 20px;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .geo-layout {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .geo-results-grid {
+      margin-top: 14px;
+    }
+    .geo-secondary-card {
+      min-height: 0;
+      display: grid;
+      gap: 10px;
+    }
+    .geo-artifact-list {
+      display: grid;
+      gap: 10px;
+    }
+    .geo-artifact-row {
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 18px;
+      padding: 14px;
+      background: linear-gradient(180deg, rgba(250, 251, 253, 0.97), rgba(255, 255, 255, 0.97));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.84);
+    }
+    .geo-artifact-copy {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+      flex: 1 1 220px;
+    }
+    .geo-artifact-copy strong {
+      font-size: 14px;
+      color: #17202a;
+    }
+    .geo-artifact-actions {
+      justify-content: flex-end;
+    }
+    .geo-preview-card,
+    .geo-log-output {
+      min-height: 0;
+    }
+    .geo-preview-content,
+    .geo-log-output {
+      margin: 0;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(250, 251, 253, 0.98), rgba(246, 248, 252, 0.96));
+      padding: 15px 16px;
+      font: 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      color: #16202b;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    }
+    .geo-suite-root {
+      margin-top: 14px;
+      display: grid;
+      gap: 12px;
+    }
+    .geo-suite-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .geo-suite-chip {
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 248, 252, 0.96));
+      color: #314155;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.1;
+      padding: 10px 14px;
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+    }
+    .geo-suite-chip.is-active {
+      border-color: rgba(15, 98, 254, 0.2);
+      box-shadow: var(--ring-soft);
+      color: #0f62fe;
+    }
+    .geo-suite-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+    }
+    .geo-suite-card {
+      width: 100%;
+      text-align: left;
+      cursor: pointer;
+      transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+    }
+    .geo-suite-card:hover,
+    .geo-suite-chip:hover {
+      transform: translateY(-1px);
+    }
+    .geo-suite-card.is-active {
+      border-color: rgba(15, 98, 254, 0.16);
+      box-shadow: var(--ring-soft);
+    }
+    .geo-suite-card-metric {
+      font-weight: 700;
+      color: #0f172a;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .geo-suite-detail {
+      min-height: 0;
+    }
+    .geo-suite-actions {
+      min-height: 0;
+      display: grid;
+      gap: 12px;
+    }
+    .geo-suite-panel {
+      display: grid;
+      gap: 12px;
+    }
+    .geo-suite-summary {
+      line-height: 1.7;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .geo-suite-fact-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+    }
+    .geo-suite-fact {
+      display: grid;
+      gap: 4px;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 16px;
+      padding: 12px;
+      background: linear-gradient(180deg, rgba(250, 251, 253, 0.97), rgba(255, 255, 255, 0.96));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+    }
+    .geo-suite-fact span {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #5c6570;
+      text-transform: uppercase;
+    }
+    .geo-suite-fact strong {
+      font-size: 15px;
+      color: #17202a;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .geo-suite-table-shell {
+      overflow: auto;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(250, 251, 253, 0.97), rgba(255, 255, 255, 0.97));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+    }
+    .geo-suite-table {
+      width: 100%;
+      min-width: 420px;
+      border-collapse: collapse;
+    }
+    .geo-suite-table th,
+    .geo-suite-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(17, 24, 39, 0.08);
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .geo-suite-table th {
+      font-size: 12px;
+      font-weight: 700;
+      color: #5c6570;
+      background: rgba(248, 250, 252, 0.88);
+    }
+    .geo-suite-table td {
+      font-size: 13px;
+      color: #17202a;
+    }
+    .geo-suite-table tr:last-child td {
+      border-bottom: none;
+    }
+    .geo-suite-inline-actions {
+      align-items: center;
+      justify-content: flex-start;
+    }
+    .geo-module-status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+    }
+    .geo-module-artifact-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .geo-module-output-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .geo-suite-subgrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+    .geo-suite-subcard {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 18px;
+      padding: 14px;
+      background: linear-gradient(180deg, rgba(250, 251, 253, 0.97), rgba(255, 255, 255, 0.97));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+    }
+    .geo-suite-subcard h4 {
+      margin: 0;
+    }
+    .geo-suite-story-list {
+      margin: 0;
+      padding-left: 18px;
+    }
+    .geo-suite-story-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+    .geo-suite-story-head strong {
+      color: #17202a;
+    }
+    .geo-suite-empty {
+      margin: 0;
+    }
     .docs-toolbar {
       margin-top: 10px;
       display: grid;
@@ -7884,6 +8483,20 @@ async function renderHtml(filters, toolClient, options) {
       .inspector-compact-metrics {
         grid-template-columns: 1fr;
       }
+      .geo-layout,
+      .geo-form-grid {
+        grid-template-columns: 1fr;
+      }
+      .geo-suite-card-grid,
+      .geo-module-artifact-list,
+      .geo-module-output-grid,
+      .geo-suite-subgrid,
+      .geo-suite-fact-grid {
+        grid-template-columns: 1fr;
+      }
+      .geo-suite-table {
+        min-width: 0;
+      }
       .inspector-agent-row,
       .office-head,
       .staff-brief-head,
@@ -7903,6 +8516,10 @@ async function renderHtml(filters, toolClient, options) {
       .app-shell {
         padding-left: 12px;
         padding-right: 12px;
+      }
+      .feature-card,
+      .geo-artifact-row {
+        padding: 14px;
       }
       .sidebar-primary,
       .inspector-sidebar,
@@ -8002,6 +8619,7 @@ async function renderHtml(filters, toolClient, options) {
   ${settingsSafetyScript}
   ${cardHelpTooltipsScript}
   ${agentVisualEnhancerScript}
+  ${featuresScript}
   ${taskBoardScript}
   ${fileWorkbenchScript}
   ${staffModelScript}
@@ -8362,6 +8980,8 @@ function renderShellIcon(key, label = "") {
             return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><path d="M6 8.2L12 5L18 8.2L12 11.4L6 8.2Z" fill="#4D82E4" /><path d="M6 12.1L12 15.3L18 12.1" stroke="#8EADE7" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /><path d="M6 15.8L12 19L18 15.8" stroke="#2F5FBE" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /></svg>`;
         case "docs":
             return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><path d="M8.2 4.8H13.8L18.2 9.2V18.2C18.2 19.1941 17.3941 20 16.4 20H8.2C7.20589 20 6.4 19.1941 6.4 18.2V6.6C6.4 5.60589 7.20589 4.8 8.2 4.8Z" stroke="#2F5FBE" stroke-width="2.1" /><path d="M13.6 5V9.3H17.9" stroke="#8EADE7" stroke-width="2.1" stroke-linejoin="round" /><path d="M9.3 12.3H14.9" stroke="#4D82E4" stroke-width="2.1" stroke-linecap="round" /><path d="M9.3 15.8H14" stroke="#A6C0F1" stroke-width="2.1" stroke-linecap="round" /></svg>`;
+        case "spark":
+            return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><path d="M12 4.8L13.9 9.2L18.2 11.1L13.9 13L12 17.4L10.1 13L5.8 11.1L10.1 9.2L12 4.8Z" fill="#4D82E4" /><path d="M18.2 4.8L18.9 6.4L20.5 7.1L18.9 7.8L18.2 9.4L17.5 7.8L15.9 7.1L17.5 6.4L18.2 4.8Z" fill="#A6C0F1" /><path d="M6.1 14.6L6.7 16L8.1 16.6L6.7 17.2L6.1 18.6L5.5 17.2L4.1 16.6L5.5 16L6.1 14.6Z" fill="#D0DDF5" /></svg>`;
         case "tasks":
             return `<svg class="shell-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"${ariaLabel}><rect x="5.6" y="4.8" width="12.8" height="14.8" rx="3" stroke="#8EADE7" stroke-width="2.1" /><path d="M8.8 9.4L10.4 11L13.7 7.7" stroke="#4D82E4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /><path d="M9.1 14.4H15" stroke="#2F5FBE" stroke-width="2.1" stroke-linecap="round" /></svg>`;
         case "settings":
