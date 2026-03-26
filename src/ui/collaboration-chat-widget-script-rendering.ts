@@ -542,16 +542,30 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     const lock = roomLockMessage();
     const uploadsBusy = hasUploadingFiles();
     const writable = !lock;
-    inputNode.disabled = !writable || state.sending || state.terminating;
-    terminateButton.disabled = !writable || state.sending || state.terminating || state.roomMutationPending || uploadsBusy || !roomHasTerminableWork();
+    inputNode.disabled = !writable || state.sending || state.terminating || state.adjudicating;
+    terminateButton.disabled = !writable || state.sending || state.terminating || state.adjudicating || state.roomMutationPending || uploadsBusy || !roomHasTerminableWork();
     sendButton.disabled =
       !writable ||
       state.sending ||
       state.terminating ||
+      state.adjudicating ||
       uploadsBusy ||
       (!inputNode.value.trim() && state.uploads.length === 0);
-    fileInput.disabled = !writable || state.sending || state.terminating || uploadsBusy;
-    createButton.disabled = !writable || state.sending || state.terminating || state.roomMutationPending || uploadsBusy;
+    fileInput.disabled = !writable || state.sending || state.terminating || state.adjudicating || uploadsBusy;
+    createButton.disabled = !writable || state.sending || state.terminating || state.adjudicating || state.roomMutationPending || uploadsBusy;
+    adjudicateButtons.forEach((button) => {
+      const activeOutcome = String(state.room?.manualOutcome?.outcome || '').trim().toLowerCase();
+      const buttonOutcome = String(button.dataset.collabRoomAdjudicateOutcome || '').trim().toLowerCase();
+      button.disabled =
+        !writable ||
+        state.sending ||
+        state.terminating ||
+        state.adjudicating ||
+        state.roomMutationPending ||
+        uploadsBusy ||
+        !String(state.activeRoomId || '').trim();
+      button.classList.toggle('is-active', Boolean(activeOutcome) && activeOutcome === buttonOutcome);
+    });
     writeStateNode.textContent = lock || labels.writeReady;
     syncDeleteDialog();
   };
@@ -562,6 +576,7 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     const meta = [];
     if (room && room.roomId) meta.push(room.roomId);
     if (room && room.updatedAt) meta.push(formatTime(room.updatedAt));
+    if (room && room.manualOutcome && room.manualOutcome.label) meta.push(String(room.manualOutcome.label));
     roomMeta.textContent = meta.join(' | ') || labels.subtitle;
     routeNode.textContent = routeLabelForText(inputNode.value);
     syncComposerState();

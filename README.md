@@ -13,7 +13,7 @@ OpenClaw 的安全优先、本地优先控制中心。
 如果你接手的是“基于本项目改出来的 AI 员工系统”，请先读这一节，再继续看后面的标准项目说明。
 详细工程交接请看：
 
-- [docs/ai-employee-system-handoff-2026-03-24.md](docs/ai-employee-system-handoff-2026-03-24.md)
+- [docs/ai-employee-system-handoff-2026-03-26.md](docs/ai-employee-system-handoff-2026-03-26.md)
 
 ### 这套 AI 员工系统现在的真实定位
 

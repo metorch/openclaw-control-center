@@ -120,14 +120,43 @@ function createOfficeRuntimeHelpers(deps) {
     return [...agentIds];
   }
 
-  function resolveOfficeCardStatus(states, activeSessionCount, activeTaskCount) {
-    if (states.includes("error")) return "error";
-    if (states.includes("blocked")) return "blocked";
-    if (states.includes("waiting_approval")) return "waiting_approval";
-    if (states.includes("running")) return "running";
+  function officeSessionStateRank(state) {
+    if (state === "error") return 0;
+    if (state === "blocked") return 1;
+    if (state === "waiting_approval") return 2;
+    if (state === "running") return 3;
+    if (state === "idle") return 4;
+    return 5;
+  }
+
+  function compareOfficeSessionsByFreshness(left, right) {
+    const leftMs = Number.isFinite(Date.parse(left?.lastMessageAt ?? "")) ? Date.parse(left?.lastMessageAt ?? "") : 0;
+    const rightMs = Number.isFinite(Date.parse(right?.lastMessageAt ?? "")) ? Date.parse(right?.lastMessageAt ?? "") : 0;
+    if (leftMs !== rightMs) return rightMs - leftMs;
+    const rank = officeSessionStateRank(left?.state) - officeSessionStateRank(right?.state);
+    if (rank !== 0) return rank;
+    return String(left?.sessionKey ?? "").localeCompare(String(right?.sessionKey ?? ""));
+  }
+
+  function resolveLatestOfficeSessionState(sessions) {
+    const latestNonIdle = (Array.isArray(sessions) ? sessions : [])
+      .filter((session) => session?.state && session.state !== "idle")
+      .sort(compareOfficeSessionsByFreshness)[0];
+    if (latestNonIdle?.state) {
+      return latestNonIdle.state;
+    }
+    return (Array.isArray(sessions) ? sessions : []).some((session) => session?.state === "idle") ? "idle" : "";
+  }
+
+  function resolveOfficeCardStatus(sessions, activeSessionCount, activeTaskCount) {
+    const latestState = resolveLatestOfficeSessionState(sessions);
+    if (latestState === "error") return "error";
+    if (latestState === "blocked") return "blocked";
+    if (latestState === "waiting_approval") return "waiting_approval";
+    if (latestState === "running") return "running";
     if (activeSessionCount > 0) return "running";
     if (activeTaskCount > 0) return "idle";
-    if (states.includes("idle")) return "idle";
+    if (latestState === "idle") return "idle";
     return "inactive";
   }
 
@@ -232,7 +261,7 @@ function createOfficeRuntimeHelpers(deps) {
       const focusItems = [...sessionActiveTasks.map((task) => task.title), ...ownedActiveTasks.map((task) => task.title)].filter(
         (value, idx, arr) => arr.indexOf(value) === idx,
       );
-      const status = resolveOfficeCardStatus(sessions.map((item) => item.state), activeSessions, focusItems.length);
+      const status = resolveOfficeCardStatus(sessions, activeSessions, focusItems.length);
       const statusLabel = officeStatusLabel(status, language);
       const officeZone = officeZoneFromStatus(status);
       const summary = buildOfficeSummary(status, focusItems, activeSessions, language);

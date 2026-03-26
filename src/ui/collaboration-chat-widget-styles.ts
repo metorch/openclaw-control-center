@@ -252,6 +252,13 @@ function renderCollaborationChatStyles(): string {
   max-width: min(21rem, 100%);
 }
 
+.collab-chat-room-outcomes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.38rem;
+  align-items: center;
+}
+
 .collab-chat-ghost,
 .collab-chat-toggle,
 .collab-chat-send {
@@ -305,6 +312,67 @@ function renderCollaborationChatStyles(): string {
   border-color: rgba(0, 113, 227, 0.22);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 252, 0.94));
   box-shadow: 0 10px 22px rgba(15, 23, 42, 0.1);
+}
+
+.collab-chat-room-outcome[data-collab-room-adjudicate-outcome="done"] {
+  border-color: rgba(22, 163, 74, 0.18);
+  background: linear-gradient(180deg, rgba(240, 253, 244, 0.98), rgba(220, 252, 231, 0.94));
+  color: #166534;
+}
+
+.collab-chat-room-outcome[data-collab-room-adjudicate-outcome="done"]:hover {
+  border-color: rgba(22, 163, 74, 0.28);
+  background: linear-gradient(180deg, rgba(236, 253, 245, 1), rgba(209, 250, 229, 0.96));
+  box-shadow: 0 10px 22px rgba(22, 163, 74, 0.12);
+}
+
+.collab-chat-room-outcome[data-collab-room-adjudicate-outcome="follow_up"] {
+  border-color: rgba(217, 119, 6, 0.18);
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(254, 243, 199, 0.94));
+  color: #b45309;
+}
+
+.collab-chat-room-outcome[data-collab-room-adjudicate-outcome="follow_up"]:hover {
+  border-color: rgba(217, 119, 6, 0.28);
+  background: linear-gradient(180deg, rgba(255, 247, 237, 1), rgba(253, 230, 138, 0.96));
+  box-shadow: 0 10px 22px rgba(217, 119, 6, 0.12);
+}
+
+.collab-chat-room-outcome[data-collab-room-adjudicate-outcome="error"] {
+  border-color: rgba(220, 38, 38, 0.18);
+  background: linear-gradient(180deg, rgba(254, 242, 242, 0.98), rgba(254, 226, 226, 0.94));
+  color: #b91c1c;
+}
+
+.collab-chat-room-outcome[data-collab-room-adjudicate-outcome="error"]:hover {
+  border-color: rgba(220, 38, 38, 0.28);
+  background: linear-gradient(180deg, rgba(254, 242, 242, 1), rgba(254, 202, 202, 0.96));
+  box-shadow: 0 10px 22px rgba(220, 38, 38, 0.12);
+}
+
+.collab-chat-room-outcome.is-active {
+  font-weight: 700;
+}
+
+.collab-chat-room-outcome[data-collab-room-adjudicate-outcome="done"].is-active {
+  border-color: rgba(22, 163, 74, 0.3);
+  background: linear-gradient(180deg, rgba(220, 252, 231, 1), rgba(187, 247, 208, 0.96));
+  color: #166534;
+  box-shadow: 0 10px 22px rgba(22, 163, 74, 0.16);
+}
+
+.collab-chat-room-outcome[data-collab-room-adjudicate-outcome="follow_up"].is-active {
+  border-color: rgba(217, 119, 6, 0.3);
+  background: linear-gradient(180deg, rgba(254, 243, 199, 1), rgba(253, 230, 138, 0.96));
+  color: #92400e;
+  box-shadow: 0 10px 22px rgba(217, 119, 6, 0.16);
+}
+
+.collab-chat-room-outcome[data-collab-room-adjudicate-outcome="error"].is-active {
+  border-color: rgba(220, 38, 38, 0.26);
+  background: linear-gradient(180deg, rgba(254, 226, 226, 0.98), rgba(254, 202, 202, 0.94));
+  color: #b91c1c;
+  box-shadow: 0 10px 22px rgba(220, 38, 38, 0.16);
 }
 
 .collab-chat-send:hover {
@@ -1647,6 +1715,10 @@ function renderCollaborationChatStyles(): string {
   .collab-chat-header-actions > .collab-chat-ghost,
   .collab-chat-header-actions > .collab-chat-toggle {
     flex: 1 1 calc(50% - 0.24rem);
+  }
+
+  .collab-chat-room-outcomes > .collab-chat-room-outcome {
+    flex: 1 1 calc(33.333% - 0.26rem);
   }
 
   .collab-chat-toolbar {

@@ -27,6 +27,7 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     rooms: '/api/collaboration/rooms',
     uploads: '/api/collaboration/room/uploads',
     messages: '/api/collaboration/room/messages',
+    adjudicate: '/api/collaboration/room/adjudicate',
     terminate: '/api/collaboration/room/terminate',
     preferences: '/api/ui/preferences',
   };
@@ -56,6 +57,9 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
   const inputShell = root.querySelector('[data-collab-chat-input-shell]');
   const inputNode = root.querySelector('[data-collab-chat-input]');
   const terminateButton = root.querySelector('[data-collab-chat-terminate]');
+  const adjudicateButtons = Array.from(root.querySelectorAll('[data-collab-room-adjudicate]')).filter(
+    (button) => button instanceof HTMLButtonElement,
+  );
   const sendButton = root.querySelector('[data-collab-chat-send]');
   const fileInput = root.querySelector('[data-collab-chat-files]');
   const mentionsNode = root.querySelector('[data-collab-mentions]');
@@ -100,6 +104,7 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     !(inputShell instanceof HTMLElement) ||
     !(inputNode instanceof HTMLTextAreaElement) ||
     !(terminateButton instanceof HTMLButtonElement) ||
+    adjudicateButtons.length === 0 ||
     !(sendButton instanceof HTMLButtonElement) ||
     !(fileInput instanceof HTMLInputElement) ||
     !(mentionsNode instanceof HTMLElement) ||
@@ -135,6 +140,7 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     loading: false,
     sending: false,
     terminating: false,
+    adjudicating: false,
     roomStream: null,
     roomStreamKey: '',
     roomStreamLastSnapshotAt: 0,

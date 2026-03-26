@@ -559,11 +559,73 @@ function createCollaborationRoomHelpers(deps) {
 
   const COLLABORATION_EXECUTION_ATTENTION_WINDOW_MS = 12 * 60 * 60 * 1000;
 
+  function normalizeManualOutcome(value) {
+    if (value === "done" || value === "follow_up" || value === "error") {
+      return value;
+    }
+    return "";
+  }
+
+  function manualOutcomeExecutionState(receipt) {
+    switch (normalizeManualOutcome(receipt?.manualOutcome)) {
+      case "done":
+        return "done";
+      case "follow_up":
+        return "in_progress";
+      case "error":
+        return "failed";
+      default:
+        return "";
+    }
+  }
+
+  function manualOutcomeExecutionLabel(outcome, language) {
+    switch (normalizeManualOutcome(outcome)) {
+      case "done":
+        return pickUiText(language, "Manually marked complete", "人工判定：已完成");
+      case "follow_up":
+        return pickUiText(language, "Manually marked for follow-up", "人工判定：待继续");
+      case "error":
+        return pickUiText(language, "Manually marked as error", "人工判定：报错");
+      default:
+        return "";
+    }
+  }
+
+  function collaborationReceiptActivitySortValue(receipt) {
+    const manualOutcomeAt = toSortableMs(receipt?.manualOutcomeAt);
+    const lastReportedAt = toSortableMs(receipt?.lastReportedAt);
+    return Math.max(manualOutcomeAt, lastReportedAt);
+  }
+
+  function buildCollaborationManualOutcomeView(receipts, language) {
+    const latestReceipt = (Array.isArray(receipts) ? receipts : [])
+      .filter((receipt) => normalizeManualOutcome(receipt?.manualOutcome))
+      .sort((left, right) => collaborationReceiptActivitySortValue(right) - collaborationReceiptActivitySortValue(left))[0];
+    if (!latestReceipt) {
+      return void 0;
+    }
+    const label = manualOutcomeExecutionLabel(latestReceipt.manualOutcome, language);
+    return label
+      ? {
+          outcome: latestReceipt.manualOutcome,
+          label,
+          at: latestReceipt.manualOutcomeAt || latestReceipt.lastReportedAt,
+          by: latestReceipt.manualOutcomeBy || "user",
+          note: latestReceipt.manualOutcomeNote || "",
+          taskId: latestReceipt.taskId,
+          projectId: latestReceipt.projectId,
+        }
+      : void 0;
+  }
+
   function deriveCollaborationExecutionState(input) {
     const latestActivityAt =
       input.receipt?.lastReportedAt || input.dispatch?.createdAt || input.task?.updatedAt || "";
     const latestActivityMs = toSortableMs(latestActivityAt);
     const stale = latestActivityMs > 0 && Date.now() - latestActivityMs > 20 * 60 * 1000;
+    const manualState = manualOutcomeExecutionState(input.receipt);
+    if (manualState) return manualState;
     if (input.receipt?.reviewState === "awaiting_review") return "awaiting_review";
     if (input.receipt?.reviewState === "approved" || input.task?.status === "done") return "done";
     if (input.receipt?.lastResultState === "failed") {
@@ -594,6 +656,10 @@ function createCollaborationRoomHelpers(deps) {
   }
 
   function collaborationExecutionLabel(state, language, receipt) {
+    const manualLabel = manualOutcomeExecutionLabel(receipt?.manualOutcome, language);
+    if (manualLabel) {
+      return manualLabel;
+    }
     const waitingFor = receipt?.waitingFor;
     switch (state) {
       case "in_progress":
@@ -2208,6 +2274,155 @@ function createCollaborationRoomHelpers(deps) {
       }));
   }
 
+  function shouldDegradeToLocalCollaborationRoomHistory(input) {
+    return Boolean(
+      input?.selectedRoom?.hasLocalRoom === true ||
+      (Array.isArray(input?.state?.events) && input.state.events.length > 0) ||
+      (Array.isArray(input?.state?.attachments) && input.state.attachments.length > 0),
+    );
+  }
+
+  function buildDegradedLocalCollaborationRoomApiEvent(event, directory, attachmentsById, language, roomId) {
+    const described = describeCollaborationRoomEvent(event, language, directory, attachmentsById);
+    const visibleMessage = sanitizeCollaborationDisplayText(event?.message, language, "", 12_000, true) || void 0;
+    const attachments =
+      event?.attachmentIds
+        ?.map((attachmentId) => attachmentsById.get(attachmentId))
+        .filter((attachment) => Boolean(attachment))
+        .map((attachment) => toCollaborationApiAttachment(attachment, roomId)) ?? [];
+    const targetAgentIds = Array.isArray(event?.targetAgentIds) ? event.targetAgentIds : [];
+    return {
+      sequence: event.sequence,
+      eventId: event.eventId,
+      type: event.type,
+      createdAt: event.createdAt,
+      authorRole: event.authorRole,
+      agentId: event.agentId,
+      agentDisplayName: event.agentId
+        ? resolveCollaborationParticipantName(directory, event.agentId)
+        : void 0,
+      label: described.label,
+      message: visibleMessage,
+      messageHtml: visibleMessage ? import_chat_markdown.renderChatMarkdownToHtml(visibleMessage) : void 0,
+      detail: described.detail,
+      detailHtml: described.detail ? import_chat_markdown.renderChatMarkdownToHtml(described.detail) : void 0,
+      failureReason: event.failureReason,
+      sourceEventId: event.sourceEventId,
+      targetAgentIds,
+      targetDisplayNames: targetAgentIds.map((agentId) =>
+        resolveCollaborationParticipantName(directory, agentId),
+      ),
+      fallbackAgentId: event.fallbackAgentId,
+      fallbackDisplayName: event.fallbackAgentId
+        ? resolveCollaborationParticipantName(directory, event.fallbackAgentId)
+        : void 0,
+      attachmentIds: event.attachmentIds ?? [],
+      attachments,
+      relatedSessionId: event.relatedSessionId,
+      relatedSessionKey: event.relatedSessionKey,
+      relatedSessionHref: event.relatedSessionKey
+        ? buildSessionDetailHref(event.relatedSessionKey, language)
+        : void 0,
+    };
+  }
+
+  function buildDegradedLocalCollaborationRoomApiView(input) {
+    const effectiveLimit = Math.max(1, Math.min(getSearchLimitMax(), input.limit));
+    const attachmentsById = new Map((input.state.attachments ?? []).map((item) => [item.attachmentId, item]));
+    const localEvents = (input.state.events ?? []).map((event) =>
+      buildDegradedLocalCollaborationRoomApiEvent(
+        event,
+        input.directory,
+        attachmentsById,
+        input.language,
+        input.state.roomId,
+      ),
+    );
+    const visibleTimeline = filterVisibleCollaborationApiEvents(localEvents);
+    const effectiveLastSequence = visibleTimeline.at(-1)?.sequence ?? input.state.lastSequence ?? 0;
+    const effectiveReadSequenceInput = Math.max(0, Number(input.readSequence) || 0);
+    const translatedAfterSequence = Math.max(0, Number(input.afterSequence) || 0);
+    const normalizedReadSequence = Math.max(0, Math.min(effectiveLastSequence, effectiveReadSequenceInput));
+    const events = visibleTimeline
+      .filter((event) => event.sequence > translatedAfterSequence)
+      .slice(-effectiveLimit);
+    const unreadCount = visibleTimeline.filter(
+      (event) => event.sequence > normalizedReadSequence && shouldCountUnreadCollaborationApiEvent(event),
+    ).length;
+    const fallbackProjectId =
+      normalizeProjectIdCandidate(input.state.projectId) ||
+      normalizeProjectIdCandidate(input.selectedRoom?.projectId) ||
+      `room-${String(input.effectiveRoomId || input.state.roomId || "local").slice(0, 32)}`;
+    const fallbackTitle = resolveDisplayedRoomTitle(input.state, input.selectedRoom);
+    const participants =
+      input.participants ??
+      input.directory.entries.map((entry) => ({
+        agentId: entry.agentId,
+        displayName: entry.displayName,
+        aliases: entry.aliases,
+        mention: import_collaboration_room.preferredMentionAlias(
+          entry.agentId,
+          entry.displayName,
+          entry.aliases,
+        ),
+        primary: entry.primary,
+        identity: entry.identity,
+        statusTone: "idle",
+        statusDotLabel: pickUiText(input.language, "Standby", "待命"),
+        currentWorkLabel: pickUiText(input.language, "Current task", "当前任务"),
+        currentWork: pickUiText(input.language, "Local room history only", "当前仅显示本地房间历史"),
+        recentOutput: pickUiText(input.language, "No recent output yet.", "最近暂无产出。"),
+      }));
+
+    return {
+      roomId: input.selectedRoom?.roomId ?? input.state.roomId,
+      title: fallbackTitle,
+      titleMode: input.state.titleMode,
+      projectId: fallbackProjectId,
+      createdAt: input.selectedRoom?.createdAt ?? input.state.createdAt,
+      updatedAt:
+        pickLatestSessionActivityTimestamp(
+          input.selectedRoom?.updatedAt,
+          input.state.updatedAt,
+          visibleTimeline.at(-1)?.createdAt,
+        ) ??
+        input.selectedRoom?.updatedAt ??
+        input.state.updatedAt ??
+        input.state.createdAt,
+      lastSequence: effectiveLastSequence,
+      unreadCount,
+      readSequence: normalizedReadSequence,
+      returnedCount: events.length,
+      rooms: input.rooms,
+      degraded: true,
+      degradedReason: pickUiText(
+        input.language,
+        "Showing local room history only while live room enrichment recovers.",
+        "当前仅显示本地房间历史，正在等待房间增强数据恢复。",
+      ),
+      project: {
+        projectId: fallbackProjectId,
+        title: fallbackTitle,
+        status: "active",
+        owner: input.directory.primaryAgentId,
+        summary: pickUiText(
+          input.language,
+          "Showing local room history only while live room enrichment recovers.",
+          "当前仅显示本地房间历史，正在等待房间增强数据恢复。",
+        ),
+        openTaskCount: 0,
+        lastStageAt:
+          input.state.updatedAt ??
+          input.selectedRoom?.updatedAt ??
+          input.selectedRoom?.createdAt ??
+          input.state.createdAt,
+      },
+      manualOutcome: buildCollaborationManualOutcomeView(input.state.taskReceipts, input.language),
+      participants,
+      events,
+    };
+  }
+
   async function buildCollaborationRoomApiView(input) {
     const selection = await resolveCollaborationRoomSelection(input.roomId, input.directory);
     const directory = selection.directory;
@@ -2226,175 +2441,111 @@ function createCollaborationRoomHelpers(deps) {
         projectId: selectedRoom?.projectId,
         now: selectedRoom?.createdAt,
       });
-    const { project, memory } = await ensureCollaborationRoomProjectBinding({
-      directory,
-      selectedRoom,
-      state,
-    });
-    const roomScopeContext = buildCollaborationRoomScopeContext({
-      roomId: effectiveRoomId,
-      projectId: project?.projectId ?? state.projectId ?? selectedRoom?.projectId,
-      state,
-    });
-    const effectiveLimit = Math.max(1, Math.min(getSearchLimitMax(), input.limit));
-    const attachmentsById = new Map(state.attachments.map((item) => [item.attachmentId, item]));
-    const taskStore = await import_task_store.loadTaskStore();
-    const transcriptHistory = await import_openclaw_chat_rooms
-      .readOpenClawChatRoomHistory({
-        agentId: directory.primaryAgentId,
-        roomId: effectiveRoomId,
-        openclawHomeDir: getOpenClawHomeDir(),
-        limit: effectiveLimit,
-      })
-      .catch(() => void 0);
-    const normalizedTranscriptMessages = transcriptHistory
-      ? normalizeSessionHistoryMessages(transcriptHistory, effectiveLimit)
-      : [];
-    const requireRoomScopedTranscriptBackfill = selectedRoom?.hasLocalRoom === true;
-    const transcriptMessages =
-      requireRoomScopedTranscriptBackfill
-        ? filterRoomScopedTranscriptMessages(normalizedTranscriptMessages, effectiveRoomId, roomScopeContext)
-        : normalizedTranscriptMessages;
-    const transcriptEvents =
-      transcriptMessages.length > 0
-        ? buildCollaborationTranscriptBackfillEvents({
-            messages: transcriptMessages,
-            language: input.language,
-            primaryAgentId: input.primaryAgentId,
-            primaryDisplayName: input.primaryDisplayName,
-            directory,
-          })
-        : [];
-    const localEvents = state.events.map((event) =>
-      buildCollaborationRoomApiEvent(event, directory, attachmentsById, input.language, state.roomId),
-    );
-    const mergedTimeline = mergeCollaborationRoomApiEvents({
-      localEvents,
-      transcriptEvents,
-      lastLocalSequence: state.lastSequence,
-    });
-    const visibleTimeline = filterVisibleCollaborationApiEvents(mergedTimeline.events);
-    const effectiveLastSequence = visibleTimeline.at(-1)?.sequence ?? 0;
-    const effectiveReadSequenceInput = Math.max(0, input.readSequence);
-    const translatedAfterSequence =
-      state.events.length > 0 && input.afterSequence > 0 && input.afterSequence <= state.lastSequence
-        ? input.afterSequence + mergedTimeline.localSequenceOffset
-        : input.afterSequence;
-    const translatedReadSequence =
-      state.events.length > 0 &&
-      effectiveReadSequenceInput > 0 &&
-      effectiveReadSequenceInput <= state.lastSequence
-        ? effectiveReadSequenceInput + mergedTimeline.localSequenceOffset
-        : effectiveReadSequenceInput;
-    const normalizedReadSequence = Math.max(0, Math.min(effectiveLastSequence, translatedReadSequence));
-    const realEvents = visibleTimeline
-      .filter((event) => event.sequence > translatedAfterSequence)
-      .slice(-effectiveLimit);
-    const liveDraftEvents = buildCollaborationLiveDraftEvents({
-      roomId: effectiveRoomId,
-      directory,
-      language: input.language,
-      visibleTimeline,
-      baseSequence: effectiveLastSequence,
-    });
-    const liveSessionEvents = await buildCollaborationLiveSessionBackfillEvents({
-      client: input.client,
-      state,
-      roomId: effectiveRoomId,
-      directory,
-      transcriptEvents,
-      visibleTimeline: [...visibleTimeline, ...liveDraftEvents],
-      primaryAgentId: input.primaryAgentId,
-      primaryDisplayName: input.primaryDisplayName,
-      language: input.language,
-      limit: effectiveLimit,
-      baseSequence: effectiveLastSequence + liveDraftEvents.length,
-      roomScopeContext,
-    });
-    const pendingDraftEvents = buildCollaborationPendingDraftEvents({
-      state,
-      roomId: effectiveRoomId,
-      directory,
-      language: input.language,
-      currentEvents: [...visibleTimeline, ...liveDraftEvents, ...liveSessionEvents],
-      baseSequence: effectiveLastSequence + liveDraftEvents.length + liveSessionEvents.length,
-    });
-    const events = await upgradeCollaborationApiEventsFromSessionHistory({
-      client: input.client,
-      events: [...realEvents, ...liveDraftEvents, ...liveSessionEvents, ...pendingDraftEvents],
-      roomId: effectiveRoomId,
-      language: input.language,
-    });
-    const unreadCount = visibleTimeline.filter(
-      (event) => event.sequence > normalizedReadSequence && shouldCountUnreadCollaborationApiEvent(event),
-    ).length;
-    const baseParticipants =
-      input.participants ??
-      directory.entries.map((entry) => ({
-        agentId: entry.agentId,
-        displayName: entry.displayName,
-        aliases: entry.aliases,
-        mention: import_collaboration_room.preferredMentionAlias(
-          entry.agentId,
-          entry.displayName,
-          entry.aliases,
-        ),
-        primary: entry.primary,
-        identity: entry.identity,
-        statusTone: "idle",
-        statusDotLabel: staffStatusDotLabel("idle", input.language),
-        currentWorkLabel: pickUiText(input.language, "Current task", "当前任务"),
-        currentWork: pickUiText(input.language, "No live work right now", "当前无实时任务"),
-        recentOutput: pickUiText(input.language, "No recent output yet.", "最近暂无产出。"),
-      }));
-    const participants = mergeParticipantsWithCollaborationState({
-      participants: baseParticipants,
-      state,
-      project,
-      tasks: taskStore.tasks,
-      language: input.language,
-    });
-    const openTasks = taskStore.tasks.filter(
-      (task) => task.projectId === project.projectId && task.status !== "done",
-    );
 
-    return {
-      roomId: selectedRoom?.roomId ?? state.roomId,
-      title: resolveDisplayedRoomTitle(state, selectedRoom),
-      titleMode: state.titleMode,
-      projectId: project.projectId,
-      createdAt: selectedRoom?.createdAt ?? state.createdAt,
-      updatedAt:
-        pickLatestSessionActivityTimestamp(
-          selectedRoom?.updatedAt,
-          persistedState?.updatedAt,
-          visibleTimeline.at(-1)?.createdAt,
-          liveDraftEvents.at(-1)?.createdAt,
-          liveSessionEvents.at(-1)?.createdAt,
-          pendingDraftEvents.at(-1)?.createdAt,
-        ) ??
-        selectedRoom?.updatedAt ??
-        state.updatedAt,
-      lastSequence: effectiveLastSequence,
-      unreadCount,
-      readSequence: normalizedReadSequence,
-      returnedCount: events.length,
-      rooms,
-      project: {
-        projectId: project.projectId,
-        title: project.title,
-        status: project.status,
-        owner: project.owner,
-        summary: extractProjectSummaryExcerpt(memory.summaryText, input.language),
-        openTaskCount: openTasks.length,
-        lastStageAt:
-          memory.recentStageLogs.at(-1)?.approvedAt ||
-          memory.recentStageLogs.at(-1)?.reportedAt ||
-          project.updatedAt,
-      },
-      participants,
-      /*
-      participants:
+    try {
+      const { project, memory } = await ensureCollaborationRoomProjectBinding({
+        directory,
+        selectedRoom,
+        state,
+      });
+      const roomScopeContext = buildCollaborationRoomScopeContext({
+        roomId: effectiveRoomId,
+        projectId: project?.projectId ?? state.projectId ?? selectedRoom?.projectId,
+        state,
+      });
+      const effectiveLimit = Math.max(1, Math.min(getSearchLimitMax(), input.limit));
+      const attachmentsById = new Map(state.attachments.map((item) => [item.attachmentId, item]));
+      const taskStore = await import_task_store.loadTaskStore();
+      const transcriptHistory = await import_openclaw_chat_rooms
+        .readOpenClawChatRoomHistory({
+          agentId: directory.primaryAgentId,
+          roomId: effectiveRoomId,
+          openclawHomeDir: getOpenClawHomeDir(),
+          limit: effectiveLimit,
+        })
+        .catch(() => void 0);
+      const normalizedTranscriptMessages = transcriptHistory
+        ? normalizeSessionHistoryMessages(transcriptHistory, effectiveLimit)
+        : [];
+      const requireRoomScopedTranscriptBackfill = selectedRoom?.hasLocalRoom === true;
+      const transcriptMessages =
+        requireRoomScopedTranscriptBackfill
+          ? filterRoomScopedTranscriptMessages(normalizedTranscriptMessages, effectiveRoomId, roomScopeContext)
+          : normalizedTranscriptMessages;
+      const transcriptEvents =
+        transcriptMessages.length > 0
+          ? buildCollaborationTranscriptBackfillEvents({
+              messages: transcriptMessages,
+              language: input.language,
+              primaryAgentId: input.primaryAgentId,
+              primaryDisplayName: input.primaryDisplayName,
+              directory,
+            })
+          : [];
+      const localEvents = state.events.map((event) =>
+        buildCollaborationRoomApiEvent(event, directory, attachmentsById, input.language, state.roomId),
+      );
+      const mergedTimeline = mergeCollaborationRoomApiEvents({
+        localEvents,
+        transcriptEvents,
+        lastLocalSequence: state.lastSequence,
+      });
+      const visibleTimeline = filterVisibleCollaborationApiEvents(mergedTimeline.events);
+      const effectiveLastSequence = visibleTimeline.at(-1)?.sequence ?? 0;
+      const effectiveReadSequenceInput = Math.max(0, input.readSequence);
+      const translatedAfterSequence =
+        state.events.length > 0 && input.afterSequence > 0 && input.afterSequence <= state.lastSequence
+          ? input.afterSequence + mergedTimeline.localSequenceOffset
+          : input.afterSequence;
+      const translatedReadSequence =
+        state.events.length > 0 &&
+        effectiveReadSequenceInput > 0 &&
+        effectiveReadSequenceInput <= state.lastSequence
+          ? effectiveReadSequenceInput + mergedTimeline.localSequenceOffset
+          : effectiveReadSequenceInput;
+      const normalizedReadSequence = Math.max(0, Math.min(effectiveLastSequence, translatedReadSequence));
+      const realEvents = visibleTimeline
+        .filter((event) => event.sequence > translatedAfterSequence)
+        .slice(-effectiveLimit);
+      const liveDraftEvents = buildCollaborationLiveDraftEvents({
+        roomId: effectiveRoomId,
+        directory,
+        language: input.language,
+        visibleTimeline,
+        baseSequence: effectiveLastSequence,
+      });
+      const liveSessionEvents = await buildCollaborationLiveSessionBackfillEvents({
+        client: input.client,
+        state,
+        roomId: effectiveRoomId,
+        directory,
+        transcriptEvents,
+        visibleTimeline: [...visibleTimeline, ...liveDraftEvents],
+        primaryAgentId: input.primaryAgentId,
+        primaryDisplayName: input.primaryDisplayName,
+        language: input.language,
+        limit: effectiveLimit,
+        baseSequence: effectiveLastSequence + liveDraftEvents.length,
+        roomScopeContext,
+      });
+      const pendingDraftEvents = buildCollaborationPendingDraftEvents({
+        state,
+        roomId: effectiveRoomId,
+        directory,
+        language: input.language,
+        currentEvents: [...visibleTimeline, ...liveDraftEvents, ...liveSessionEvents],
+        baseSequence: effectiveLastSequence + liveDraftEvents.length + liveSessionEvents.length,
+      });
+      const events = await upgradeCollaborationApiEventsFromSessionHistory({
+        client: input.client,
+        events: [...realEvents, ...liveDraftEvents, ...liveSessionEvents, ...pendingDraftEvents],
+        roomId: effectiveRoomId,
+        language: input.language,
+      });
+      const unreadCount = visibleTimeline.filter(
+        (event) => event.sequence > normalizedReadSequence && shouldCountUnreadCollaborationApiEvent(event),
+      ).length;
+      const baseParticipants =
         input.participants ??
         directory.entries.map((entry) => ({
           agentId: entry.agentId,
@@ -2409,13 +2560,93 @@ function createCollaborationRoomHelpers(deps) {
           identity: entry.identity,
           statusTone: "idle",
           statusDotLabel: staffStatusDotLabel("idle", input.language),
-          currentWorkLabel: pickUiText(input.language, "Working on", "正在处理什么"),
+          currentWorkLabel: pickUiText(input.language, "Current task", "当前任务"),
           currentWork: pickUiText(input.language, "No live work right now", "当前无实时任务"),
           recentOutput: pickUiText(input.language, "No recent output yet.", "最近暂无产出。"),
-        })),
-      */
-      events,
-    };
+        }));
+      const participants = mergeParticipantsWithCollaborationState({
+        participants: baseParticipants,
+        state,
+        project,
+        tasks: taskStore.tasks,
+        language: input.language,
+      });
+      const openTasks = taskStore.tasks.filter(
+        (task) => task.projectId === project.projectId && task.status !== "done",
+      );
+
+      return {
+        roomId: selectedRoom?.roomId ?? state.roomId,
+        title: resolveDisplayedRoomTitle(state, selectedRoom),
+        titleMode: state.titleMode,
+        projectId: project.projectId,
+        createdAt: selectedRoom?.createdAt ?? state.createdAt,
+        updatedAt:
+          pickLatestSessionActivityTimestamp(
+            selectedRoom?.updatedAt,
+            persistedState?.updatedAt,
+            visibleTimeline.at(-1)?.createdAt,
+            liveDraftEvents.at(-1)?.createdAt,
+            liveSessionEvents.at(-1)?.createdAt,
+            pendingDraftEvents.at(-1)?.createdAt,
+          ) ??
+          selectedRoom?.updatedAt ??
+          state.updatedAt,
+        lastSequence: effectiveLastSequence,
+        unreadCount,
+        readSequence: normalizedReadSequence,
+        returnedCount: events.length,
+        rooms,
+        project: {
+          projectId: project.projectId,
+          title: project.title,
+          status: project.status,
+          owner: project.owner,
+          summary: extractProjectSummaryExcerpt(memory.summaryText, input.language),
+          openTaskCount: openTasks.length,
+          lastStageAt:
+            memory.recentStageLogs.at(-1)?.approvedAt ||
+            memory.recentStageLogs.at(-1)?.reportedAt ||
+            project.updatedAt,
+        },
+        manualOutcome: buildCollaborationManualOutcomeView(state.taskReceipts, input.language),
+        participants,
+        /*
+        participants:
+          input.participants ??
+          directory.entries.map((entry) => ({
+            agentId: entry.agentId,
+            displayName: entry.displayName,
+            aliases: entry.aliases,
+            mention: import_collaboration_room.preferredMentionAlias(
+              entry.agentId,
+              entry.displayName,
+              entry.aliases,
+            ),
+            primary: entry.primary,
+            identity: entry.identity,
+            statusTone: "idle",
+            statusDotLabel: staffStatusDotLabel("idle", input.language),
+            currentWorkLabel: pickUiText(input.language, "Working on", "正在处理什么"),
+            currentWork: pickUiText(input.language, "No live work right now", "当前无实时任务"),
+            recentOutput: pickUiText(input.language, "No recent output yet.", "最近暂无产出。"),
+          })),
+        */
+        events,
+      };
+    } catch (error) {
+      if (!shouldDegradeToLocalCollaborationRoomHistory({ selectedRoom, state })) {
+        throw error;
+      }
+      return buildDegradedLocalCollaborationRoomApiView({
+        ...input,
+        directory,
+        rooms,
+        selectedRoom,
+        effectiveRoomId,
+        state,
+      });
+    }
   }
 
   function buildCollaborationRoomStreamSignature(roomView) {
@@ -2488,7 +2719,9 @@ function createCollaborationRoomHelpers(deps) {
       const attachmentsById = new Map((roomState.attachments ?? []).map((item) => [item.attachmentId, item]));
       const eventsBySessionKey = new Map();
       const eventsById = new Map();
+      const eventsByNormalizedEventId = new Map();
       const eventsBySourceEventId = new Map();
+      const eventsByNormalizedSourceEventId = new Map();
       const eventRefCache = new Map();
       const events = Array.isArray(roomState.events) ? roomState.events : [];
 
@@ -2496,6 +2729,10 @@ function createCollaborationRoomHelpers(deps) {
         const eventId = String(event?.eventId ?? "").trim();
         if (eventId) {
           eventsById.set(eventId, event);
+          const normalizedEventId = normalizeLookupKey(eventId);
+          if (normalizedEventId) {
+            eventsByNormalizedEventId.set(normalizedEventId, event);
+          }
         }
         const relatedSessionKey = normalizeLookupKey(event?.relatedSessionKey ?? "");
         if (relatedSessionKey) {
@@ -2508,6 +2745,12 @@ function createCollaborationRoomHelpers(deps) {
           const bucket = eventsBySourceEventId.get(sourceEventId) ?? [];
           bucket.push(event);
           eventsBySourceEventId.set(sourceEventId, bucket);
+          const normalizedSourceEventId = normalizeLookupKey(sourceEventId);
+          if (normalizedSourceEventId) {
+            const normalizedBucket = eventsByNormalizedSourceEventId.get(normalizedSourceEventId) ?? [];
+            normalizedBucket.push(event);
+            eventsByNormalizedSourceEventId.set(normalizedSourceEventId, normalizedBucket);
+          }
         }
       }
 
@@ -2536,8 +2779,10 @@ function createCollaborationRoomHelpers(deps) {
 
       return {
         eventsById,
+        eventsByNormalizedEventId,
         eventsBySessionKey,
         eventsBySourceEventId,
+        eventsByNormalizedSourceEventId,
         getRoomRef,
       };
     });
@@ -2593,8 +2838,17 @@ function createCollaborationRoomHelpers(deps) {
           continue;
         }
         for (const relatedSourceEventId of relatedSourceEventIds) {
-          pushRoomRef(roomIndex.getRoomRef(roomIndex.eventsById.get(relatedSourceEventId)));
-          const linkedEvents = roomIndex.eventsBySourceEventId.get(relatedSourceEventId) ?? [];
+          const normalizedRelatedSourceEventId = normalizeLookupKey(relatedSourceEventId);
+          pushRoomRef(
+            roomIndex.getRoomRef(
+              roomIndex.eventsById.get(relatedSourceEventId) ??
+                roomIndex.eventsByNormalizedEventId.get(normalizedRelatedSourceEventId),
+            ),
+          );
+          const linkedEvents = [
+            ...(roomIndex.eventsBySourceEventId.get(relatedSourceEventId) ?? []),
+            ...(roomIndex.eventsByNormalizedSourceEventId.get(normalizedRelatedSourceEventId) ?? []),
+          ];
           for (const event of linkedEvents) {
             pushRoomRef(roomIndex.getRoomRef(event));
           }

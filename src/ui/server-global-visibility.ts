@@ -86,7 +86,7 @@ function createGlobalVisibilityRenderers(deps) {
       return `${buildHomeHref({ quick: "all" }, true, "overview", language)}#heartbeat-health`;
     }
     if (taskType === "current_task") {
-      return `${buildHomeHref({ quick: "all" }, true, "projects-tasks", language)}#tracked-task-view`;
+      return buildHomeHref({ quick: "all" }, true, "projects-tasks", language);
     }
     return `${buildHomeHref({ quick: "all" }, true, "overview", language)}#tool-activity`;
   }

@@ -95,13 +95,14 @@ const { createStaffModelHelpers } = require("./server-staff-models");
 const { createStaffOverviewHelpers } = require("./server-staff-overview");
 const { createFeatureRenderers } = require("./server-features");
 const { badge, escapeHtml, extractDateFromName, formatInt, formatPercent, formatTimeAgoFromNow, pickUiText, safeTruncate, toPlainSummary, toSortableMs, uniqueSorted } = require("./server-shared");
-const { renderAgentVisualEnhancerScript, renderCardHelpTooltipsScript, renderCollaborationFilterScript, renderDashboardRefreshScript, renderFeaturesScript, renderFileWorkbenchScript, renderNativeMotionScript, renderQuotaResetScript, renderSettingsBudgetLimitScript, renderSettingsSafetyScript, renderStaffModelScript, renderTaskBoardScript } = require("./server-inline-scripts");
+const { renderAgentVisualEnhancerScript, renderCardHelpTooltipsScript, renderCollaborationFilterScript, renderCollaborationRoomOpenScript, renderDashboardRefreshScript, renderFeaturesScript, renderFileWorkbenchScript, renderNativeMotionScript, renderQuotaResetScript, renderSettingsBudgetLimitScript, renderSettingsSafetyScript, renderStaffModelScript, renderTaskBoardScript } = require("./server-inline-scripts");
 const { agentTeamActionLabel, agentTeamEmbeddedUpdatedLabel, agentTeamFactLabel, agentTeamFreshnessTone, agentTeamPhaseLabel, agentTeamPreviewSourceLabel, agentTeamRunStatusLabel, agentTeamRuntimeSummary, agentTeamSuggestedPanelHref, hasFreshRuntimeTimestamp, isSameLocalCalendarDay, isStaleRuntimeTimestamp, pickLatestSessionActivityTimestamp, pickLatestTimestamp, renderAgentTeamArtifactPreviewCard, renderAgentTeamDocsBlock, renderAgentTeamInspectorCard, renderAgentTeamMemoryBlock, renderAgentTeamOverviewBlock, renderAgentTeamProjectsBlock, renderAgentTeamRunSummaryCard, renderAgentTeamSettingsBlock, renderAgentTeamTeamBlock } = require("./server-agent-team");
 const { createDetailPageRenderers } = require("./server-detail-pages");
 const { createDashboardFragmentHelpers } = require("./server-dashboard-fragments");
 const { createInsightRenderers } = require("./server-insight-panels");
 const { createTaskPageRenderers } = require("./server-task-pages");
 const { createTeamPanelRenderers } = require("./server-team-panels");
+const { buildSessionLinkAttrs } = require("./server-session-room-links");
 const { createUsageRenderers } = require("./server-usage-rendering");
 const { createNavigationHelpers } = require("./server-navigation");
 const navigationHelpers = createNavigationHelpers({
@@ -175,10 +176,12 @@ const collaborationRoomHelpers = createCollaborationRoomHelpers({
     toSortableMs
 });
 const collaborationChatHelpers = createCollaborationChatHelpers({
+    acknowledgeActionQueueItem: import_notification_center.acknowledgeActionQueueItem,
     abortCollaborationSessionRun: async (sessionKey, runId) => {
         return await import_openclaw_gateway_stream.abortOpenClawGatewayChatRun({ sessionKey, runId, timeoutMs: 5000 });
     },
     buildCollaborationAttachmentSummary: (attachment) => collaborationRoomHelpers.buildCollaborationAttachmentSummary(attachment),
+    buildCollaborationBootstrapSourceKey,
     buildSessionDetailHref,
     createRequestValidationError: (message, statusCode) => new RequestValidationError(message, statusCode),
     describeCollaborationRoomEvent: (event, language, directory, attachmentsById) => collaborationRoomHelpers.describeCollaborationRoomEvent(event, language, directory, attachmentsById),
@@ -187,6 +190,10 @@ const collaborationChatHelpers = createCollaborationChatHelpers({
     getOpenClawHomeDir: () => OPENCLAW_HOME_DIR,
     getOpenClawWorkspaceRoot: () => OPENCLAW_WORKSPACE_ROOT,
     isUiLanguage: import_ui_preferences.isUiLanguage,
+    loadNotificationCenter: async () => {
+        const snapshot = await readReadModelSnapshot();
+        return await readNotificationCenter(snapshot);
+    },
     normalizeCollaborationAttachmentIds: (input) => collaborationRoomHelpers.normalizeCollaborationAttachmentIds(input),
     normalizeCollaborationRoomIdPayload: (roomId, directory) => collaborationRoomHelpers.normalizeCollaborationRoomIdPayload(roomId, directory),
     normalizeLookupKey,
@@ -199,7 +206,7 @@ const collaborationChatHelpers = createCollaborationChatHelpers({
 });
 const { renderCollaborationThreadCards, renderOfficeCards, renderOfficeFloor, renderStaffOverviewCards, renderSubscriptionStatusCard, renderTaskExecutionChainCards } = createTeamPanelRenderers({ asPercent, collaborationParticipantRoleLabel: collaborationThreadHelpers.collaborationParticipantRoleLabel, collaborationRoleAgentLabel: collaborationThreadHelpers.collaborationRoleAgentLabel, deriveAgentAnimalIdentity: (agentId) => officeRuntimeHelpers.deriveAgentAnimalIdentity(agentId), executionChainCardTitle: (item, language) => executionChainHelpers.executionChainCardTitle(item, language), executionChainSourceLabel: (chain, language = "zh") => executionChainHelpers.executionChainSourceLabel(chain, language), executionChainStageLabel: (stage, language = "zh") => executionChainHelpers.executionChainStageLabel(stage, language), formatSubscriptionNumericField, humanizeOperatorLabel, normalizeQuotaWindowLabel, officeZoneLabel: (zone, language = "zh") => officeRuntimeHelpers.officeZoneLabel(zone, language), renderAgentAvatarFrame: (input) => officeRuntimeHelpers.renderAgentAvatarFrame({ ...input, escapeHtml }), renderQuotaWindowRow, sessionStateLabel, summarizeVisibleSessionSnippet: (rawSnippet, language = "zh", maxLength = 96) => executionChainHelpers.summarizeVisibleSessionSnippet(rawSnippet, language, maxLength) });
 const { attachCollaborationRoomRefsToCards, buildCollaborationAttachmentSummary, buildCollaborationChatBootPreferences, buildCollaborationChatParticipantViews, buildCollaborationEventSyncSignature, buildCollaborationRoomApiView, buildCollaborationRoomStreamSignature, buildCollaborationTranscriptBackfillEvent, buildCollaborationTranscriptBackfillEvents, buildTranscriptBackfillDetail, compareCollaborationApiEventsByTime, describeCollaborationRoomEvent, extractCollaborationMentionTokens, findUnknownCollaborationMentions, formatBytesCompact, formatCollaborationDuration, isCollaborationRelayPromptMessage, isDuplicateCollaborationSyncEvent, listCollaborationTranscriptRooms, loadCollaborationParticipantDirectory, mergeCollaborationRoomApiEvents, normalizeCollaborationAttachmentIds, normalizeCollaborationEventSyncText, normalizeCollaborationRoomIdPayload, normalizeCollaborationRoomIdQuery, registerCollaborationSyncEventSignature, resolveCollaborationParticipantName, shouldCountUnreadCollaborationApiEvent, shouldCountUnreadCollaborationEvent, summarizeCollaborationAttachmentNames, toCollaborationApiAttachment } = collaborationRoomHelpers;
-const { buildCollaborationAgentPrompt, buildCollaborationAgentPromptV2, buildCollaborationAgentReplyDetail, buildCollaborationPromptContextLines, buildCollaborationRoomApiEvent, collectCollaborationAgentReplyAttachments, createCollaborationRoomMessage, terminateCollaborationRoomWork, dispatchCollaborationRoomMessage, dispatchCollaborationTurnToAgent, dispatchCollaborationTurnToAgentV2, isAbsoluteLikePath, isPathInsideAnyRoot, isPathInsideRoot, isReadableCollaborationArtifactPath, isSupportedCollaborationArtifactPath, resolveCollaborationArtifactPaths, resolveCollaborationParticipantWorkspaceRoot, shouldHintCollaborationArtifactReply } = collaborationChatHelpers;
+const { buildCollaborationAgentPrompt, buildCollaborationAgentPromptV2, buildCollaborationAgentReplyDetail, buildCollaborationPromptContextLines, buildCollaborationRoomApiEvent, collectCollaborationAgentReplyAttachments, createCollaborationRoomMessage, adjudicateCollaborationRoomOutcome, terminateCollaborationRoomWork, dispatchCollaborationRoomMessage, dispatchCollaborationTurnToAgent, dispatchCollaborationTurnToAgentV2, isAbsoluteLikePath, isPathInsideAnyRoot, isPathInsideRoot, isReadableCollaborationArtifactPath, isSupportedCollaborationArtifactPath, resolveCollaborationArtifactPaths, resolveCollaborationParticipantWorkspaceRoot, shouldHintCollaborationArtifactReply } = collaborationChatHelpers;
 const { buildCollaborationThreadCards, buildCollaborationTimelineSteps, buildInterSessionCollaborationCards, buildInterSessionCollaborationTimelineSteps, collaborationInterSessionCurrentOwnerLabel, collaborationInterSessionRouteLabel, collaborationInterSessionSummary, collaborationParticipantRoleLabel, collaborationRoleAgentLabel, collaborationRouteLabel, collaborationStatusRank, collaborationThreadKindLabel, collaborationThreadStatusLabel, collaborationThreadSummary, deriveCollaborationTaskTitle, deriveInterSessionTaskTitle, extractCollaborationTaskLabel, foldCollaborationThreadCards, mergeCollaborationThreadCards, normalizeAgentIdCandidate, resolveCollaborationCurrentOwner, resolveInterSessionCollaborationStatus, resolveCollaborationThreadStatus } = collaborationThreadHelpers;
 const SNAPSHOT_PATH = (0, import_node_path.join)(process.cwd(), "runtime", "last-snapshot.json");
 const OPENCLAW_HOME_DIR = process.env.OPENCLAW_HOME?.trim() || (0, import_node_path.join)((0, import_node_os.homedir)(), ".openclaw");
@@ -318,6 +325,7 @@ const readModelHelpers = createReadModelHelpers({
     htmlLiveSessionsCacheTtlMs: HTML_LIVE_SESSIONS_CACHE_TTL_MS,
     htmlSnapshotCacheTtlMs: HTML_SNAPSHOT_CACHE_TTL_MS,
     loadBudgetPolicy: import_budget_policy.loadBudgetPolicy,
+    listCollaborationRooms: import_collaboration_room.listCollaborationRooms,
     loadProjectStore: import_project_store.loadProjectStore,
     loadTaskStore: import_task_store.loadTaskStore,
     mapSessionsListToSummaries: import_openclaw_mappers.mapSessionsListToSummaries,
@@ -625,8 +633,198 @@ function writeSseComment(res, comment) {
     res.flush?.();
 }
 __name(writeSseComment, "writeSseComment");
+function buildCollaborationBootstrapSourceKey(kind, id) {
+    const normalizedKind = String(kind ?? "").trim().toLowerCase();
+    const normalizedId = String(id ?? "").trim();
+    if (!normalizedKind || !normalizedId) {
+        return "";
+    }
+    const digest = (0, import_node_crypto.createHash)("sha1").update(`${normalizedKind}:${normalizedId}`).digest("hex");
+    return `bootstrap:${normalizedKind}:${digest}`;
+}
+__name(buildCollaborationBootstrapSourceKey, "buildCollaborationBootstrapSourceKey");
+function collaborationRoomHasMeaningfulConversation(roomState) {
+    return Array.isArray(roomState?.events) && roomState.events.some((event) => event?.type === "user_message" || event?.type === "agent_reply");
+}
+__name(collaborationRoomHasMeaningfulConversation, "collaborationRoomHasMeaningfulConversation");
 function startUiServer(port, toolClient) {
     const approvalActions = new import_approval_action_service.ApprovalActionService(toolClient);
+    const splitActionQueueBootstrapScopeId = (sourceId) => {
+        const normalized = String(sourceId ?? "").trim();
+        const separatorIndex = normalized.indexOf(":");
+        if (separatorIndex <= 0 || separatorIndex === normalized.length - 1) {
+            return ["unknown", normalized];
+        }
+        return [normalized.slice(0, separatorIndex), normalized.slice(separatorIndex + 1)];
+    };
+    const collectActionQueueBootstrapSessionKeys = (item, allTasksById, approvalsById) => {
+        const directSessionKeys = [];
+        if (item.source === "session") {
+            directSessionKeys.push(item.sourceId);
+        }
+        if (item.source === "task") {
+            const linkedTask = allTasksById.get(item.sourceId);
+            if (linkedTask) {
+                directSessionKeys.push(...linkedTask.sessionKeys);
+            }
+        }
+        if (item.source === "approval") {
+            const linkedApproval = approvalsById.get(item.sourceId);
+            if (linkedApproval?.sessionKey) {
+                directSessionKeys.push(linkedApproval.sessionKey);
+            }
+        }
+        if (item.source === "budget") {
+            const [scope, scopeId] = splitActionQueueBootstrapScopeId(item.sourceId);
+            if (scope === "task") {
+                const linkedTask = allTasksById.get(scopeId);
+                if (linkedTask) {
+                    directSessionKeys.push(...linkedTask.sessionKeys);
+                }
+            }
+        }
+        const linkedSessionKeys = Array.isArray(item.links) ? item.links.filter((link) => link.type === "session" && typeof link.href === "string" && link.href.startsWith("/session/")).map((link) => link.id) : [];
+        return [...new Set([...directSessionKeys, ...linkedSessionKeys].map((value) => String(value ?? "").trim()).filter(Boolean))];
+    };
+    const resolveQueueBootstrapTask = (item, allTasksById) => {
+        if (item.source === "task") {
+            return allTasksById.get(item.sourceId);
+        }
+        if (item.source === "budget") {
+            const [scope, scopeId] = splitActionQueueBootstrapScopeId(item.sourceId);
+            if (scope === "task") {
+                return allTasksById.get(scopeId);
+            }
+        }
+        return undefined;
+    };
+    const resolveQueueBootstrapTitle = (input) => {
+        if (input.task?.title) {
+            return safeTruncate(`待处理：${input.task.title}`, 72);
+        }
+        if (input.approval?.command) {
+            return safeTruncate(`审批处理：${input.approval.command}`, 72);
+        }
+        if (input.message) {
+            return safeTruncate(`待处理：${input.message}`, 72);
+        }
+        if (input.sessionKey) {
+            return safeTruncate(`会话接手：${input.sessionKey}`, 72);
+        }
+        return "待处理协作";
+    };
+    const buildBootstrapRequestEventId = (sourceEventId) => {
+        const normalizedSourceEventId = String(sourceEventId ?? "").trim();
+        return normalizedSourceEventId ? `bootstrap-request:${normalizedSourceEventId}` : `bootstrap-request:${Date.now().toString(36)}`;
+    };
+    const buildBootstrapHistoryEventSeed = (sourceEventId, sessionKey) => {
+        return (0, import_node_crypto.createHash)("sha1").update(`${String(sourceEventId ?? "").trim()}:${String(sessionKey ?? "").trim()}`).digest("hex").slice(0, 16);
+    };
+    const roomHasMeaningfulConversation = (roomState) => {
+        return Array.isArray(roomState?.events) && roomState.events.some((event) => event?.type === "user_message" || event?.type === "agent_reply");
+    };
+    const ensureBootstrapRoomSeeded = async (input) => {
+        const normalizedSourceEventId = normalizeLookupKey(input.sourceEventId);
+        if (!input.roomId || !normalizedSourceEventId) {
+            return await (0, import_collaboration_room.loadCollaborationRoom)(input.roomId);
+        }
+        const roomState = await (0, import_collaboration_room.loadCollaborationRoom)(input.roomId);
+        const existingEvents = Array.isArray(roomState?.events) ? roomState.events : [];
+        const existingEventIds = new Set(existingEvents.map((event) => String(event?.eventId ?? "").trim()).filter(Boolean));
+        const existingBootstrapEvents = existingEvents.filter((event) => normalizeLookupKey(event?.sourceEventId ?? "") === normalizedSourceEventId);
+        const seedMessage = String(input.seedMessage ?? "").trim();
+        const noteExists = existingBootstrapEvents.some((event) => event?.type === "system_note");
+        const requestEventId = buildBootstrapRequestEventId(input.sourceEventId);
+        const requestExists = existingEventIds.has(requestEventId) || existingBootstrapEvents.some((event) => event?.type === "user_message");
+        const historySeed = input.sessionKey ? buildBootstrapHistoryEventSeed(input.sourceEventId, input.sessionKey) : "";
+        const historyAlreadySeeded = historySeed ? existingEvents.some((event) => String(event?.eventId ?? "").startsWith(`bootstrap-history:${historySeed}:`)) : false;
+        const eventsToAppend = [];
+        const maybeAppendNote = () => {
+            if (noteExists || eventsToAppend.some((event) => event.type === "system_note")) {
+                return;
+            }
+            eventsToAppend.push({
+                eventId: `bootstrap-note:${input.sourceEventId}`,
+                type: "system_note",
+                authorRole: "system",
+                sourceEventId: input.sourceEventId,
+                relatedSessionId: input.sessionId || undefined,
+                relatedSessionKey: input.sessionKey || undefined,
+                message: "Manual intervention room bootstrapped from the pending queue.",
+                detail: safeTruncate(input.detailSummary || input.roomTitle || "Pending queue bootstrap", 240)
+            });
+        };
+        const maybeAppendRequest = () => {
+            if (!seedMessage || requestExists || eventsToAppend.some((event) => event.eventId === requestEventId)) {
+                return;
+            }
+            maybeAppendNote();
+            eventsToAppend.push({
+                eventId: requestEventId,
+                type: "user_message",
+                authorRole: "user",
+                sourceEventId: input.sourceEventId,
+                relatedSessionId: input.sessionId || undefined,
+                relatedSessionKey: input.sessionKey || undefined,
+                message: seedMessage,
+                detail: pickUiText("zh", "Imported from the pending queue so you can intervene in the shared room timeline.", "已从待处理队列导入原始任务内容，方便你直接在共享协作时间线里接手。")
+            });
+        };
+        let historyEventsToAppend = [];
+        if (input.sessionKey && !historyAlreadySeeded) {
+            try {
+                const historyResponse = await toolClient.sessionsHistory({
+                    sessionKey: input.sessionKey,
+                    limit: 16
+                });
+                const historyMessages = (0, import_session_conversations.normalizeSessionHistoryMessages)(historyResponse, 16);
+                const backfillEvents = buildCollaborationTranscriptBackfillEvents({
+                    messages: historyMessages,
+                    language: "zh",
+                    primaryAgentId: input.directory.primaryAgentId,
+                    primaryDisplayName: input.directory.primaryDisplayName,
+                    directory: input.directory
+                }).slice(-12);
+                historyEventsToAppend = backfillEvents.map((event, index) => ({
+                    eventId: `bootstrap-history:${historySeed}:${index + 1}`,
+                    type: event.type,
+                    authorRole: event.authorRole,
+                    agentId: event.agentId,
+                    sourceEventId: input.sourceEventId,
+                    relatedSessionId: input.sessionId || undefined,
+                    relatedSessionKey: event.relatedSessionKey || input.sessionKey || undefined,
+                    message: event.message,
+                    detail: event.detail,
+                    createdAt: event.createdAt
+                })).filter((event) => {
+                    if (existingEventIds.has(event.eventId)) {
+                        return false;
+                    }
+                    return Boolean(String(event.message ?? "").trim() || String(event.detail ?? "").trim());
+                });
+            }
+            catch {
+                historyEventsToAppend = [];
+            }
+        }
+        const historyIncludesUserPrompt = historyEventsToAppend.some((event) => event.type === "user_message");
+        if (!historyIncludesUserPrompt) {
+            maybeAppendRequest();
+        } else {
+            maybeAppendNote();
+        }
+        if (historyEventsToAppend.length > 0) {
+            maybeAppendNote();
+            eventsToAppend.push(...historyEventsToAppend);
+        } else if (!requestExists) {
+            maybeAppendRequest();
+        }
+        if (eventsToAppend.length === 0) {
+            return roomState;
+        }
+        await (0, import_collaboration_room.appendCollaborationRoomEvents)(input.roomId, eventsToAppend);
+        return await (0, import_collaboration_room.loadCollaborationRoom)(input.roomId);
+    };
     const server = (0, import_node_http.createServer)(async (req, res) => {
         const method = req.method ?? "GET";
         const requestId = resolveRequestId(req);
@@ -662,6 +860,8 @@ function startUiServer(port, toolClient) {
                 const usageView = resolveUsageView(url.searchParams);
                 const search = resolveDashboardSearchQuery(url.searchParams);
                 const feature = section === "features" ? normalizeDashboardFeature(normalizeQueryString(url.searchParams.get("feature"), "feature", 40, false)) : void 0;
+                const taskBoardPage = normalizeOptionalPositiveInt(url.searchParams.get("task_board_page"), "task_board_page") ?? 1;
+                const taskFollowupPage = normalizeOptionalPositiveInt(url.searchParams.get("task_followup_page"), "task_followup_page") ?? 1;
                 const requestedCollaborationRoomId = (0, import_collaboration_room.normalizeCollaborationRoomId)(url.searchParams.get("roomId"));
                 const hasTaskFilterQuery = hasAnyQueryKey(url.searchParams, ["quick", "status", "owner", "project"]);
                 if (section === "projects-tasks" && !hasTaskFilterQuery) {
@@ -686,7 +886,7 @@ function startUiServer(port, toolClient) {
                         }
                     }
                     : prefs.preferences.collaborationChat;
-                const html = await renderHtml(filters, toolClient, { section, feature, language, compactStatusStrip, usageView, preferencesPath: prefs.path, taskCardOrder: prefs.preferences.taskCardOrder, taskBoardViewMode: prefs.preferences.taskBoardViewMode, localMutationUnlock: prefs.preferences.localMutationUnlock, collaborationChat: collaborationChatPreferences, search });
+                const html = await renderHtml(filters, toolClient, { section, feature, language, compactStatusStrip, usageView, preferencesPath: prefs.path, taskCardOrder: prefs.preferences.taskCardOrder, taskBoardViewMode: prefs.preferences.taskBoardViewMode, taskBoardPage, taskFollowupPage, localMutationUnlock: prefs.preferences.localMutationUnlock, collaborationChat: collaborationChatPreferences, search });
                 return writeText(res, 200, html, "text/html; charset=utf-8");
             }
             if (method === "POST" && path === "/api/dashboard/refresh") {
@@ -1165,6 +1365,173 @@ function startUiServer(port, toolClient) {
                     project
                 });
             }
+            if (method === "POST" && path === "/api/collaboration/rooms/bootstrap") {
+                assertMutationAuthorized(req, "/api/collaboration/rooms/bootstrap");
+                assertJsonContentType(req);
+                const payload = expectObject(await readJsonBody(req), "collaboration room bootstrap payload");
+                const kind = requiredBoundedString(payload.kind, "kind", 40).toLowerCase();
+                if (kind !== "action_queue" && kind !== "approval") {
+                    throw new RequestValidationError("kind must be 'action_queue' or 'approval'.", 400, ["kind"]);
+                }
+                const snapshot = await readReadModelSnapshotWithLiveSessions(toolClient);
+                const queue = await readNotificationCenter(snapshot);
+                const directory = await loadCollaborationParticipantDirectory();
+                const allTasks = (0, import_task_store.listTasks)(snapshot.tasks, projectTitleMap(snapshot));
+                const allTasksById = new Map(allTasks.map((task) => [task.taskId, task]));
+                const approvalsById = new Map((snapshot.approvals ?? []).map((approval) => [approval.approvalId, approval]));
+                const liveSessions = await loadCachedLiveSessions(toolClient).catch(() => ({ sessions: [] }));
+                const liveSessionsByKey = new Map((liveSessions.sessions ?? [])
+                    .map((item) => {
+                    const sessionKey = String(item?.sessionKey ?? item?.key ?? "").trim();
+                    return sessionKey ? [sessionKey, item] : undefined;
+                })
+                    .filter(Boolean));
+                let queueItem = undefined;
+                let approval = undefined;
+                let task = undefined;
+                let sessionKeys = [];
+                let preferredAgentId = "";
+                let roomTitle = "";
+                let projectId = undefined;
+                let sourceEventId = "";
+                let detailSummary = "";
+                if (kind === "action_queue") {
+                    const itemId = requiredBoundedString(payload.itemId, "itemId", 260);
+                    queueItem = queue.queue.find((item) => item.itemId === itemId);
+                    if (!queueItem) {
+                        throw new RequestValidationError(`itemId '${itemId}' was not found in the current action queue.`, 404, ["itemId"]);
+                    }
+                    task = resolveQueueBootstrapTask(queueItem, allTasksById);
+                    approval = queueItem.source === "approval" ? approvalsById.get(queueItem.sourceId) : undefined;
+                    sessionKeys = collectActionQueueBootstrapSessionKeys(queueItem, allTasksById, approvalsById);
+                    preferredAgentId =
+                        task?.owner?.trim() ||
+                            approval?.agentId?.trim() ||
+                            (queueItem.source === "session" ? extractAgentIdFromSessionKey(queueItem.sourceId)?.trim() ?? "" : "");
+                    roomTitle = resolveQueueBootstrapTitle({
+                        task,
+                        approval,
+                        message: queueItem.message,
+                        sessionKey: sessionKeys[0]
+                    });
+                    projectId = task?.projectId;
+                    sourceEventId = buildCollaborationBootstrapSourceKey("action_queue", itemId);
+                    detailSummary = [queueItem.code, queueItem.source, queueItem.sourceId].filter(Boolean).join(" | ");
+                }
+                else {
+                    const approvalId = requiredBoundedString(payload.approvalId, "approvalId", 260);
+                    approval = approvalsById.get(approvalId);
+                    if (!approval) {
+                        throw new RequestValidationError(`approvalId '${approvalId}' was not found in the current approvals list.`, 404, ["approvalId"]);
+                    }
+                    sessionKeys = approval.sessionKey ? [approval.sessionKey] : [];
+                    preferredAgentId = approval.agentId?.trim() ?? "";
+                    roomTitle = resolveQueueBootstrapTitle({
+                        approval,
+                        message: approval.command,
+                        sessionKey: approval.sessionKey
+                    });
+                    sourceEventId = buildCollaborationBootstrapSourceKey("approval", approvalId);
+                    detailSummary = [approval.approvalId, approval.command, approval.status].filter(Boolean).join(" | ");
+                }
+                const bootstrapRefCard = {
+                    sessionKeys,
+                    sourceEventIds: sourceEventId ? [sourceEventId] : []
+                };
+                const bootstrapSessionKey = sessionKeys.find((key) => liveSessionsByKey.has(key)) ?? sessionKeys[0];
+                const bootstrapLiveSession = bootstrapSessionKey ? liveSessionsByKey.get(bootstrapSessionKey) : undefined;
+                const bootstrapSessionId = typeof bootstrapLiveSession?.sessionId === "string" ? bootstrapLiveSession.sessionId.trim() : "";
+                const roomStates = await (0, import_collaboration_room.loadAllCollaborationRooms)();
+                const existingCard = attachCollaborationRoomRefsToCards([bootstrapRefCard], roomStates, "zh")?.[0];
+                const existingRoomId = typeof existingCard?.linkedRoomId === "string" ? existingCard.linkedRoomId.trim() : "";
+                if (existingRoomId) {
+                    const existingRoom = roomStates.find((roomState) => roomState.roomId === existingRoomId);
+                    if (existingRoom) {
+                        const hydratedRoom = await ensureBootstrapRoomSeeded({
+                            roomId: existingRoom.roomId,
+                            sourceEventId,
+                            seedMessage: queueItem?.message || approval?.command || roomTitle,
+                            sessionKey: typeof bootstrapSessionKey === "string" ? bootstrapSessionKey.trim() : "",
+                            sessionId: bootstrapSessionId,
+                            roomTitle,
+                            detailSummary,
+                            directory
+                        });
+                        return writeJson(res, 200, {
+                            ok: true,
+                            existing: true,
+                            room: {
+                                roomId: hydratedRoom.roomId,
+                                title: hydratedRoom.title,
+                                titleMode: hydratedRoom.titleMode,
+                                projectId: hydratedRoom.projectId,
+                                createdAt: hydratedRoom.createdAt,
+                                updatedAt: hydratedRoom.updatedAt,
+                                active: true
+                            }
+                        });
+                    }
+                }
+                const room = await (0, import_collaboration_room.createCollaborationRoom)({
+                    roomId: import_node_crypto.randomUUID(),
+                    title: roomTitle,
+                    titleMode: "manual",
+                    projectId
+                });
+                const transcriptSidecar = await (0, import_openclaw_chat_rooms.createOpenClawChatRoom)({
+                    agentId: directory.primaryAgentId,
+                    roomId: room.roomId,
+                    workspaceRoot: OPENCLAW_WORKSPACE_ROOT,
+                    openclawHomeDir: OPENCLAW_HOME_DIR,
+                    title: roomTitle
+                }).catch(() => undefined);
+                const chosenSessionKey = bootstrapSessionKey;
+                const liveSession = bootstrapLiveSession;
+                const relatedSessionKey = typeof chosenSessionKey === "string" ? chosenSessionKey.trim() : "";
+                const relatedSessionId = typeof liveSession?.sessionId === "string" ? liveSession.sessionId.trim() : "";
+                const bindingAgentId = (typeof liveSession?.agentId === "string" ? liveSession.agentId.trim() : "") || preferredAgentId || (relatedSessionKey ? extractAgentIdFromSessionKey(relatedSessionKey)?.trim() ?? "" : "");
+                if (task?.taskId && task?.projectId) {
+                    await (0, import_collaboration_room.upsertCollaborationDispatchRecord)(room.roomId, {
+                        taskId: task.taskId,
+                        projectId: task.projectId,
+                        stage: task.status || "queued",
+                        ownerAgentId: task.owner || directory.primaryAgentId,
+                        title: task.title,
+                        goal: queueItem?.message || approval?.command || task.title,
+                        definitionOfDone: [],
+                        requiredContextRefs: [`task:${task.taskId}`],
+                        expectedArtifacts: [],
+                        createdAt: new Date().toISOString(),
+                        createdBy: "jarvis"
+                    }).catch(() => undefined);
+                }
+                const hydratedRoom = await ensureBootstrapRoomSeeded({
+                    roomId: room.roomId,
+                    sourceEventId,
+                    seedMessage: queueItem?.message || approval?.command || roomTitle,
+                    sessionKey: relatedSessionKey || undefined,
+                    sessionId: relatedSessionId || undefined,
+                    roomTitle,
+                    detailSummary,
+                    directory
+                });
+                if (bindingAgentId && relatedSessionId) {
+                    await (0, import_collaboration_room.setCollaborationSessionBinding)(room.roomId, bindingAgentId, relatedSessionId, relatedSessionKey || undefined).catch(() => undefined);
+                }
+                return writeJson(res, 201, {
+                    ok: true,
+                    existing: false,
+                    room: {
+                        roomId: hydratedRoom.roomId,
+                        title: hydratedRoom.title,
+                        titleMode: hydratedRoom.titleMode,
+                        projectId: hydratedRoom.projectId,
+                        createdAt: hydratedRoom.createdAt,
+                        updatedAt: hydratedRoom.updatedAt,
+                        active: transcriptSidecar?.active ?? true
+                    }
+                });
+            }
             if (method === "DELETE" && path.startsWith("/api/collaboration/rooms/")) {
                 assertMutationAuthorized(req, "/api/collaboration/rooms/:roomId");
                 assertAllowedQueryParams(url.searchParams, [], true);
@@ -1178,9 +1545,14 @@ function startUiServer(port, toolClient) {
                     openclawHomeDir: OPENCLAW_HOME_DIR,
                     ensureFallback: false
                 }).catch(() => undefined);
+                await import_openclaw_chat_rooms.purgeOpenClawRoomScopedSessionEntries({
+                    roomId,
+                    openclawHomeDir: OPENCLAW_HOME_DIR
+                }).catch(() => undefined);
                 if (!deletedLocal && !deletedTranscript) {
                     return writeApiError(res, 404, "NOT_FOUND", "Collaboration room not found.");
                 }
+                invalidateUiRenderCaches();
                 const fallbackRoomId = deletedLocal?.fallbackRoomId ?? await normalizeCollaborationRoomIdQuery(null, directory);
                 const deleted = {
                     deletedRoomId: roomId,
@@ -1382,6 +1754,14 @@ function startUiServer(port, toolClient) {
                 const directory = await loadCollaborationParticipantDirectory();
                 const termination = await terminateCollaborationRoomWork(payload, directory, "zh");
                 return writeJson(res, 200, { ok: true, terminated: termination });
+            }
+            if (method === "POST" && path === "/api/collaboration/room/adjudicate") {
+                assertMutationAuthorized(req, "/api/collaboration/room/adjudicate");
+                assertJsonContentType(req);
+                const payload = expectObject(await readJsonBody(req), "collaboration room adjudication payload");
+                const directory = await loadCollaborationParticipantDirectory();
+                const adjudicated = await adjudicateCollaborationRoomOutcome(payload, directory, "zh");
+                return writeJson(res, 200, { ok: true, adjudicated });
             }
             if (method === "GET" && path.startsWith("/api/collaboration/room/attachments/") && path.endsWith("/content")) {
                 assertAllowedQueryParams(url.searchParams, ["download", "roomId"], true);
@@ -1829,10 +2209,12 @@ async function renderHtml(filters, toolClient, options) {
     const exceptionsFeed = (0, import_commander.commanderExceptionsFeed)(snapshot);
     const actionQueue = await readNotificationCenter(snapshot);
     const allTasks = (0, import_task_store.listTasks)(snapshot.tasks, projectTitleMap(snapshot));
+    const allTasksById = new Map(allTasks.map(task => [task.taskId, task]));
     const controlCenterMappingTasks = allTasks.filter(isControlCenterMappingTask);
     const realTasks = allTasks.filter(task => !isControlCenterMappingTask(task));
     const tasks = applyTaskFilters(realTasks, filters);
     const allApprovals = [...snapshot.approvals ?? []].sort(compareApprovals);
+    const approvalsById = new Map(allApprovals.map(approval => [approval.approvalId, approval]));
     const topApprovals = allApprovals.slice(0, 5);
     const budgets = snapshot.budgetSummary ?? { total: 0, ok: 0, warn: 0, over: 0, evaluations: [] };
     const nonOkBudgets = (budgets.evaluations ?? []).filter(item => item.status === "warn" || item.status === "over").slice(0, 8);
@@ -1864,16 +2246,18 @@ async function renderHtml(filters, toolClient, options) {
     const taskExecutionChainCards = buildTaskExecutionChainCards({ tasks: collaborationScopedTasks, sessions: snapshot.sessions, sessionItems: needsCollaborationThreads ? collaborationSignalItems : taskSignalItems, language: options.language, includeSnapshotUnmappedSessions: !needsCollaborationThreads });
     const collaborationThreadCards = needsCollaborationThreads ? mergeCollaborationThreadCards(buildCollaborationThreadCards({ cards: taskExecutionChainCards, sessionItems: collaborationSignalItems, language: options.language, primaryAgentId: collaborationDirectory.primaryAgentId }), buildInterSessionCollaborationCards({ sessionItems: collaborationSignalItems, language: options.language, primaryAgentId: collaborationDirectory.primaryAgentId })) : [];
     const collaborationRoomStates = needsCollaborationRoomRefs ? await (0, import_collaboration_room.loadAllCollaborationRooms)() : [];
+    const collaborationRoomStateById = new Map(collaborationRoomStates.map((roomState) => [roomState.roomId, roomState]));
+    const taskExecutionChainCardsWithRoomRefs = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(taskExecutionChainCards, collaborationRoomStates, options.language) : taskExecutionChainCards;
     const collaborationThreadCardsWithRoomRefs = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(collaborationThreadCards, collaborationRoomStates, options.language) : collaborationThreadCards;
     const taskCertaintyCards = buildTaskCertaintyCards({ tasks, sessions: snapshot.sessions, sessionItems: taskSignalItems, approvals: snapshot.approvals, language: options.language });
     const taskSpotlightCards = buildTaskSpotlightCards({ tasks, certaintyCards: taskCertaintyCards, sessions: snapshot.sessions, sessionItems: taskSignalItems, approvals: snapshot.approvals, manualOrder: options.taskCardOrder, language: options.language });
     const taskCertaintyStrongCount = taskCertaintyCards.filter(item => item.tone === "ok").length;
     const taskCertaintyFollowupCount = taskCertaintyCards.filter(item => item.tone === "warn").length;
     const taskCertaintyWeakCount = taskCertaintyCards.filter(item => item.tone === "blocked").length;
-    const spawnedExecutionChainCount = taskExecutionChainCards.filter(item => item.executionChain.spawned).length;
-    const runningExecutionChainCount = taskExecutionChainCards.filter(item => item.executionChain.stage === "running").length;
-    const mappedExecutionChainCount = taskExecutionChainCards.filter(item => !item.unmapped).length;
-    const taskExecutionChainHtml = renderTaskExecutionChainCards(taskExecutionChainCards, options.language);
+    const spawnedExecutionChainCount = taskExecutionChainCardsWithRoomRefs.filter(item => item.executionChain.spawned).length;
+    const runningExecutionChainCount = taskExecutionChainCardsWithRoomRefs.filter(item => item.executionChain.stage === "running").length;
+    const mappedExecutionChainCount = taskExecutionChainCardsWithRoomRefs.filter(item => !item.unmapped).length;
+    const taskExecutionChainHtml = renderTaskExecutionChainCards(taskExecutionChainCardsWithRoomRefs, options.language);
     const collaborationThreadHtml = renderCollaborationThreadCards(collaborationThreadCardsWithRoomRefs, options.language);
     const collaborationThreadVisibleCount = collaborationThreadCardsWithRoomRefs.length;
     const collaborationThreadTotalCount = collaborationThreadCardsWithRoomRefs.reduce((sum, item) => sum + item.aggregateCount, 0);
@@ -1914,8 +2298,8 @@ async function renderHtml(filters, toolClient, options) {
     const pendingDecisionCount = actionQueue.counts.unacked;
     const budgetRiskCount = nonOkBudgets.length;
     const focusSummary = [`${t("Review queue", "\u5BA1\u9605\u961F\u5217")} ${pendingDecisionCount}`, `${t("Runtime issues", "\u8FD0\u884C\u5F02\u5E38")} ${runtimeIssueCount}`, `${t("Budget risks", "\u9884\u7B97\u98CE\u9669")} ${budgetRiskCount}`].join(" \xB7 ");
-    const focusHref = `${buildHomeHref({ quick: "all" }, options.compactStatusStrip, "projects-tasks", options.language, options.usageView)}#tracked-task-view`;
-    const currentTaskHealthHref = `${buildHomeHref({ quick: "all" }, true, "projects-tasks", options.language, options.usageView)}#tracked-task-view`;
+    const focusHref = buildHomeHref({ quick: "all" }, options.compactStatusStrip, "projects-tasks", options.language, options.usageView);
+    const currentTaskHealthHref = buildHomeHref({ quick: "all" }, true, "projects-tasks", options.language, options.usageView);
     const runtimeCronById = new Map(cronOverview.jobs.map(job => [job.jobId, job]));
     const catalogMatchedRuntimeIds = new Set;
     const catalogCronRows = openclawCronJobs.map(job => {
@@ -1931,12 +2315,13 @@ async function renderHtml(filters, toolClient, options) {
     const allCronRows = [...catalogCronRows, ...runtimeOnlyCronRows];
     const timedJobSpotlightCards = buildTimedJobSpotlightCards({ jobs: allCronRows, language: options.language });
     const taskSpotlightCardsWithRoomRefs = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(taskSpotlightCards, collaborationRoomStates, options.language) : taskSpotlightCards;
+    const taskFollowupCards = taskSpotlightCardsWithRoomRefs.filter(card => card.cardKind === "task" && card.taskStatus !== "done");
     const taskBoardCards = buildUnifiedTaskBoardCards({ taskCards: taskSpotlightCardsWithRoomRefs, timedJobCards: timedJobSpotlightCards, manualOrder: options.taskCardOrder });
     const cronRows = allCronRows.slice(0, 20).map(job => { const dueIn = Number.isFinite(job.dueInSeconds) ? formatSeconds(job.dueInSeconds, options.language) : "-"; const purpose = sanitizeCronPurposeText(job.purpose, options.language, 56); return `<tr><td><div>${escapeHtml(job.name)}</div><div class="meta">${escapeHtml(job.jobId)}</div></td><td>${escapeHtml(job.owner)}</td><td>${escapeHtml(purpose)}</td><td>${badge(job.status, job.statusLabel)}</td><td>${escapeHtml(job.nextRun)}</td><td>${escapeHtml(dueIn)}</td></tr>`; }).join("");
     const agentJobCatalogRows = allCronRows;
     const agentJobRowsHtml = agentJobCatalogRows.length === 0 ? `<tr><td colspan="7">${escapeHtml(t("No visible jobs yet.", "\u6682\u65E0\u53EF\u89C1 job\u3002"))}</td></tr>` : agentJobCatalogRows.slice(0, 40).map(item => `<tr><td>${escapeHtml(item.sourceLabel)}</td><td><div>${escapeHtml(item.name)}</div><div class="meta">${escapeHtml(item.jobId)}</div></td><td>${escapeHtml(item.owner)}</td><td>${escapeHtml(sanitizeCronPurposeText(item.purpose, options.language, 48))}</td><td>${escapeHtml(humanizeTimedJobScheduleLabel(item.schedule, options.language))}</td><td>${escapeHtml(item.nextRun)}</td><td>${badge(item.status, item.statusLabel)}</td></tr>`).join("");
     const toolSessions = sessionPreview.items.filter(item => (item.toolEventCount ?? 0) > 0 || item.latestKind === "tool_event").slice(0, 12);
-    const toolRows = toolSessions.length === 0 ? `<tr><td colspan="5">${escapeHtml(t("No tool-call sessions yet.", "\u6682\u65E0\u5DE5\u5177\u8C03\u7528\u4F1A\u8BDD\u3002"))}</td></tr>` : toolSessions.map(item => { const toolCount = item.toolEventCount ?? (item.latestKind === "tool_event" ? 1 : 0); return `<tr><td><a href="${escapeHtml(buildSessionDetailHref(item.sessionKey, options.language))}">${escapeHtml(item.label ?? item.sessionKey)}</a></td><td>${escapeHtml(item.agentId ?? t("Unassigned", "\u672A\u5206\u914D"))}</td><td>${toolCount}</td><td>${badge(item.state, sessionStateLabel(item.state))}</td><td>${escapeHtml(item.lastMessageAt ?? "-")}</td></tr>`; }).join("");
+    const toolRows = toolSessions.length === 0 ? `<tr><td colspan="5">${escapeHtml(t("No tool-call sessions yet.", "\u6682\u65E0\u5DE5\u5177\u8C03\u7528\u4F1A\u8BDD\u3002"))}</td></tr>` : toolSessions.map(item => { const toolCount = item.toolEventCount ?? (item.latestKind === "tool_event" ? 1 : 0); return `<tr><td><a ${buildSessionLinkAttrs({ sessionKey: item.sessionKey, language: options.language, buildSessionDetailHref, escapeHtml, source: "usage-tool-sessions-table" })}>${escapeHtml(item.label ?? item.sessionKey)}</a></td><td>${escapeHtml(item.agentId ?? t("Unassigned", "\u672A\u5206\u914D"))}</td><td>${toolCount}</td><td>${badge(item.state, sessionStateLabel(item.state))}</td><td>${escapeHtml(item.lastMessageAt ?? "-")}</td></tr>`; }).join("");
     const importGuard = (0, import_import_live.readImportMutationGuardState)();
     const runtimeSafetySettings = (0, import_local_safety_settings.readCurrentLocalSafetySettings)();
     const tokenGateStatus = import_config.LOCAL_TOKEN_AUTH_REQUIRED ? import_config.LOCAL_API_TOKEN !== "" ? "armed" : "blocked_no_token" : "disabled";
@@ -1975,7 +2360,7 @@ async function renderHtml(filters, toolClient, options) {
               <div class="group-item-head"><strong>${escapeHtml(item.label ?? item.sessionKey)}</strong>${badge(item.state, sessionStateLabel(item.state))}</div>
               <div class="meta">${escapeHtml(t("Agent", "\u667A\u80FD\u4F53"))} ${escapeHtml(item.agentId ?? t("Unassigned", "\u672A\u5206\u914D"))} \xB7 ${escapeHtml(t("Calls", "\u8C03\u7528"))} ${toolCount} ${escapeHtml(t("times", "\u6B21"))}</div>
               <div class="meta">${escapeHtml(t("Latest activity", "\u6700\u8FD1\u6D3B\u52A8"))} ${escapeHtml(item.lastMessageAt ?? "-")}</div>
-              <div class="meta"><a href="${escapeHtml(buildSessionDetailHref(item.sessionKey, options.language))}">${escapeHtml(t("Open session detail", "\u67E5\u770B\u4F1A\u8BDD\u8BE6\u60C5\u9875"))}</a></div>
+              <div class="meta"><a ${buildSessionLinkAttrs({ sessionKey: item.sessionKey, language: options.language, buildSessionDetailHref, escapeHtml, source: "usage-tool-session-groups" })}>${escapeHtml(t("Open session detail", "\u67E5\u770B\u4F1A\u8BDD\u8BE6\u60C5\u9875"))}</a></div>
             </li>`;
     }).join("")}</ul></details></div>`;
     const heartbeatGroupedListHtml = heartbeatJobs.length === 0 ? `<div class="empty-state">${escapeHtml(t("No heartbeat timed jobs found yet.", "\u5C1A\u672A\u53D1\u73B0\u5FC3\u8DF3\u5B9A\u65F6\u4EFB\u52A1\u3002"))}</div>` : `<div class="group-list"><details class="group-section" open><summary>${escapeHtml(t("Heartbeat checks", "\u5FC3\u8DF3\u68C0\u67E5\u9879"))} (${heartbeatJobs.length})</summary><ul class="group-items">${heartbeatJobs.slice(0, 16).map(job => {
@@ -2001,7 +2386,16 @@ async function renderHtml(filters, toolClient, options) {
         return `<details class="group-section" open><summary>${escapeHtml(owner)} (${jobs.length})</summary><ul class="group-items">${rows}</ul></details>`;
     }).join("")}</div>`;
     const exceptionsItems = renderExceptionsList(exceptionsFeed);
-    const taskBoard = renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel, options.taskBoardViewMode);
+    const taskBoard = renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel, options.taskBoardViewMode, {
+        currentPage: options.taskBoardPage,
+        pageSize: 20,
+        filters,
+        section: options.section,
+        compactStatusStrip: options.compactStatusStrip,
+        usageView: options.usageView,
+        anchorId: "task-timeline",
+        extraParams: options.taskFollowupPage > 1 ? { task_followup_page: String(options.taskFollowupPage) } : {}
+    });
     const projectBoard = renderProjectBoard(snapshot.projectSummaries, options.language);
     const actionQueueItems = renderActionQueue(actionQueue);
     const effectiveQuick = filters.quick ?? "all";
@@ -2246,11 +2640,178 @@ async function renderHtml(filters, toolClient, options) {
     const enabledCronCount = allCronRows.filter(item => item.status !== "disabled").length;
     const upcomingTaskDueCount = realTasks.filter(task => task.dueAt && task.status !== "done").length;
     const taskHubHref = buildHomeHref({ quick: "all" }, options.compactStatusStrip, "projects-tasks", options.language, options.usageView);
-    const cronHubHref = `${taskHubHref}#cron-execution-board`;
-    const timelineHubHref = `${taskHubHref}#calendar-board`;
-    const decisionHubHref = `${taskHubHref}#task-decision-center`;
-    const executionChainHubHref = `${taskHubHref}#task-execution-chain`;
+    const cronHubHref = taskHubHref;
+    const timelineHubHref = taskHubHref;
+    const decisionHubHref = taskHubHref;
+    const executionChainHubHref = taskHubHref;
     const staffHubHref = buildHomeHref({ quick: "all" }, options.compactStatusStrip, "team", options.language, options.usageView);
+    const buildTrackedTaskPanelHref = (extraParams = {}, anchor = "") => {
+        const href = buildHomeHref(filters, options.compactStatusStrip, "projects-tasks", options.language, options.usageView, extraParams);
+        return anchor ? `${href}#${anchor}` : href;
+    };
+    const clampPanelPage = (value, totalPages) => {
+        const parsed = Number.parseInt(String(value ?? ""), 10);
+        if (!Number.isFinite(parsed) || parsed < 1)
+            return 1;
+        if (parsed > totalPages)
+            return totalPages;
+        return parsed;
+    };
+    const splitActionQueueScopeId = (sourceId) => {
+        const normalized = String(sourceId ?? "").trim();
+        const separatorIndex = normalized.indexOf(":");
+        if (separatorIndex <= 0 || separatorIndex === normalized.length - 1)
+            return ["unknown", normalized];
+        return [normalized.slice(0, separatorIndex), normalized.slice(separatorIndex + 1)];
+    };
+    const collectActionQueueSessionKeys = (item) => {
+        const directSessionKeys = [];
+        if (item.source === "session") {
+            directSessionKeys.push(item.sourceId);
+        }
+        if (item.source === "task") {
+            const linkedTask = allTasksById.get(item.sourceId);
+            if (linkedTask)
+                directSessionKeys.push(...linkedTask.sessionKeys);
+        }
+        if (item.source === "approval") {
+            const linkedApproval = approvalsById.get(item.sourceId);
+            if (linkedApproval?.sessionKey)
+                directSessionKeys.push(linkedApproval.sessionKey);
+        }
+        if (item.source === "budget") {
+            const [scope, scopeId] = splitActionQueueScopeId(item.sourceId);
+            if (scope === "task") {
+                const linkedTask = allTasksById.get(scopeId);
+                if (linkedTask)
+                    directSessionKeys.push(...linkedTask.sessionKeys);
+            }
+        }
+        const linkedSessionKeys = Array.isArray(item.links) ? item.links.filter(link => link.type === "session" && typeof link.href === "string" && link.href.startsWith("/session/")).map(link => link.id) : [];
+        return [...new Set([...directSessionKeys, ...linkedSessionKeys].map(value => String(value ?? "").trim()).filter(Boolean))];
+    };
+    const renderInlinePager = (input) => {
+        if (input.totalPages <= 1)
+            return "";
+        const summary = t(`Showing ${input.startIndex}-${input.endIndex} of ${input.totalItems}.`, `当前显示 ${input.startIndex}-${input.endIndex} / ${input.totalItems}。`);
+        return `<nav class="inline-pager" data-inline-pager aria-label="${escapeHtml(input.label)}">
+          <div class="meta inline-pager-summary" data-inline-page-summary>${escapeHtml(summary)}</div>
+          <div class="inline-pager-links">${Array.from({ length: input.totalPages }, (_, index) => {
+            const page = index + 1;
+            const activeClass = page === input.currentPage ? " is-active" : "";
+            const currentAttr = page === input.currentPage ? ' aria-current="page"' : "";
+            return `<button class="inline-pager-link${activeClass}" type="button" data-inline-page-button data-inline-page="${page}"${currentAttr}>${page}</button>`;
+        }).join("")}</div>
+        </nav>`;
+    };
+    const visibleActionQueueItems = actionQueue.queue.filter(item => !item.acknowledged);
+    const actionQueuePreviewCards = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(visibleActionQueueItems.map(item => ({
+        itemId: item.itemId,
+        message: item.message,
+        level: item.level,
+        links: item.links,
+        detailHref: item.links[0]?.href ?? decisionHubHref,
+        sessionKeys: collectActionQueueSessionKeys(item),
+        sourceEventIds: [buildCollaborationBootstrapSourceKey("action_queue", item.itemId)]
+    })), collaborationRoomStates, options.language) : visibleActionQueueItems.map(item => ({
+        itemId: item.itemId,
+        message: item.message,
+        level: item.level,
+        links: item.links,
+        detailHref: item.links[0]?.href ?? decisionHubHref,
+        sessionKeys: collectActionQueueSessionKeys(item),
+        sourceEventIds: [buildCollaborationBootstrapSourceKey("action_queue", item.itemId)]
+    }));
+    const approvalPreviewCards = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(topApprovals.map(approval => ({
+        approvalId: approval.approvalId,
+        command: approval.command,
+        status: approval.status,
+        agentId: approval.agentId,
+        sessionKey: approval.sessionKey,
+        requestedAt: approval.requestedAt,
+        detailHref: decisionHubHref,
+        sessionKeys: approval.sessionKey ? [approval.sessionKey] : [],
+        sourceEventIds: [buildCollaborationBootstrapSourceKey("approval", approval.approvalId)]
+    })), collaborationRoomStates, options.language) : topApprovals.map(approval => ({
+        approvalId: approval.approvalId,
+        command: approval.command,
+        status: approval.status,
+        agentId: approval.agentId,
+        sessionKey: approval.sessionKey,
+        requestedAt: approval.requestedAt,
+        detailHref: decisionHubHref,
+        sessionKeys: approval.sessionKey ? [approval.sessionKey] : [],
+        sourceEventIds: [buildCollaborationBootstrapSourceKey("approval", approval.approvalId)]
+    }));
+    const isNoisyTrackedTaskProjectId = (projectId) => {
+        const normalized = String(projectId ?? "").trim().toLowerCase();
+        if (!normalized)
+            return false;
+        return normalized === "p-live" || normalized === "codex-smoke-room" || normalized === "delayed-history-recovery" || normalized.startsWith("project-mn");
+    };
+    const hasBrokenTrackedRoomTitle = (title) => /\?{3,}/.test(String(title ?? "").trim());
+    const buildFollowupCardsForPanel = (cards, roomStates) => {
+        const roomStateById = new Map(roomStates.map(roomState => [roomState.roomId, roomState]));
+        const latestByRoomId = new Map();
+        cards.forEach((card) => {
+            if (card.cardKind !== "task" || card.taskStatus === "done")
+                return;
+            const linkedRoomId = typeof card.linkedRoomId === "string" ? card.linkedRoomId.trim() : "";
+            if (!linkedRoomId || isNoisyTrackedTaskProjectId(card.projectId))
+                return;
+            const roomState = roomStateById.get(linkedRoomId);
+            if (!roomState || !Array.isArray(roomState.events) || roomState.events.length === 0 || hasBrokenTrackedRoomTitle(roomState.title))
+                return;
+            const previous = latestByRoomId.get(linkedRoomId);
+            const previousSort = Number.isFinite(previous?.updatedSortValue) ? previous.updatedSortValue : 0;
+            const nextSort = Number.isFinite(card.updatedSortValue) ? card.updatedSortValue : 0;
+            if (previous && previousSort > nextSort)
+                return;
+            latestByRoomId.set(linkedRoomId, { ...card, linkedRoomTitle: roomState.title });
+        });
+        return [...latestByRoomId.values()].sort((left, right) => compareTaskSpotlightCards(left, right) || ((right.updatedSortValue ?? 0) - (left.updatedSortValue ?? 0)));
+    };
+    const taskFollowupCardsForPanel = buildFollowupCardsForPanel(taskFollowupCards, collaborationRoomStates);
+    const taskFollowupPageSize = 10;
+    const taskFollowupTotalPages = Math.max(1, Math.ceil(taskFollowupCardsForPanel.length / taskFollowupPageSize));
+    const taskFollowupCurrentPage = clampPanelPage(options.taskFollowupPage, taskFollowupTotalPages);
+    const taskFollowupPageStart = taskFollowupCardsForPanel.length === 0 ? 0 : (taskFollowupCurrentPage - 1) * taskFollowupPageSize + 1;
+    const taskFollowupPageEnd = taskFollowupCardsForPanel.length === 0 ? 0 : Math.min(taskFollowupCardsForPanel.length, taskFollowupCurrentPage * taskFollowupPageSize);
+    const taskFollowupPagerHtml = renderInlinePager({
+        label: t("Task follow-up pages", "\u4EFB\u52A1\u8DDF\u8FDB\u5206\u9875"),
+        currentPage: taskFollowupCurrentPage,
+        totalPages: taskFollowupTotalPages,
+        totalItems: taskFollowupCardsForPanel.length,
+        startIndex: taskFollowupPageStart,
+        endIndex: taskFollowupPageEnd
+    });
+    const taskFollowupListHtml = taskFollowupCardsForPanel.length === 0 ? `<div class="empty-state">${escapeHtml(t("There are no tracked tasks needing follow-up right now.", "\u5F53\u524D\u6CA1\u6709\u9700\u8981\u8DDF\u8FDB\u7684\u8DDF\u8E2A\u4EFB\u52A1\u3002"))}</div>` : `<div class="meta">${escapeHtml(t("Open the room first to inspect the shared timeline, then use task detail only when you need the full task record.", "\u4F18\u5148\u6253\u5F00\u623F\u95F4\u67E5\u770B\u5171\u4EAB\u65F6\u95F4\u7EBF\uFF0C\u53EA\u5728\u9700\u8981\u5B8C\u6574\u4EFB\u52A1\u8BB0\u5F55\u65F6\u518D\u8FDB\u8BE6\u60C5\u9875\u3002"))}</div>
+      <div data-inline-page-root data-language="${escapeHtml(options.language)}" data-inline-page-size="${taskFollowupPageSize}" data-inline-current-page="${taskFollowupCurrentPage}">
+      <div class="decision-list">${taskFollowupCardsForPanel.map(card => {
+        const primaryAction = card.linkedRoomId ? `<button class="btn" type="button" data-collaboration-room-open="${escapeHtml(card.linkedRoomId)}" data-collaboration-room-source="task-followup-center">${escapeHtml(t("Open room", "\u67E5\u770B\u4F1A\u8BDD"))}</button>` : `<a class="btn" href="${escapeHtml(card.detailHref)}">${escapeHtml(t("Task detail", "\u4EFB\u52A1\u8BE6\u60C5"))}</a>`;
+        const secondaryAction = card.linkedRoomId ? `<a class="btn" href="${escapeHtml(card.detailHref)}">${escapeHtml(t("Task detail", "\u4EFB\u52A1\u8BE6\u60C5"))}</a>` : "";
+        const normalizedTitle = String(card.title ?? "").trim();
+        const looksLikePlaceholderTitle = normalizedTitle.length <= 6 || normalizedTitle === "继续" || normalizedTitle === "可以" || normalizedTitle === "检查一下";
+        const displayTitle = looksLikePlaceholderTitle && card.linkedRoomTitle ? card.linkedRoomTitle : normalizedTitle;
+        const roomMeta = card.linkedRoomTitle && card.linkedRoomTitle !== displayTitle ? `<div class="meta">${escapeHtml(t("Room", "\u623F\u95F4"))}\uFF1A${escapeHtml(card.linkedRoomTitle)}</div>` : "";
+        return `<div class="decision-row decision-row-detail" data-inline-page-item>
+            <div class="decision-row-copy">
+              <strong>${escapeHtml(displayTitle || card.title)}</strong>
+              <div class="meta">${badge(card.statusTone === "issue" ? "warn" : card.statusTone === "working" ? "ok" : "enabled", card.statusLabel)} ${badge(card.boardStatusTone ?? "enabled", card.boardStatusLabel)} \xB7 ${escapeHtml(card.projectTitle)} \xB7 ${escapeHtml(t("Owner", "\u8D1F\u8D23\u4EBA"))} ${escapeHtml(card.ownerLabel)}</div>
+              ${roomMeta}
+              <div class="meta">${escapeHtml(card.summary)}</div>
+              <div class="meta">${escapeHtml(t("Recent signal", "\u6700\u8FD1\u4FE1\u53F7"))}\uFF1A${escapeHtml(card.recentSignal)}</div>
+              <div class="meta">${escapeHtml(t("Next step", "\u4E0B\u4E00\u6B65"))}\uFF1A${escapeHtml(card.nextStep)}</div>
+            </div>
+            <div class="decision-row-side">
+              <div class="decision-row-value">${escapeHtml(card.priorityLabel)}</div>
+              <div class="meta decision-row-subvalue">${escapeHtml(card.dueLabel)}</div>
+              <div class="decision-row-actions">${primaryAction}${secondaryAction}</div>
+            </div>
+          </div>`;
+    }).join("")}</div>
+      ${taskFollowupPagerHtml}
+      </div>`;
     const overviewNextOpsSummary = `Cron ${cronOverview.nextRunAt ?? t("None", "\u6682\u65E0")} \xB7 ${t("Heartbeat", "\u5FC3\u8DF3")} ${heartbeatNextRun}`;
     const calendarEvents = [...allCronRows.map(row => ({ at: row.nextRun, day: extractDateFromName(row.nextRun) ?? row.nextRun.slice(0, 10), type: "Cron", title: row.name, status: row.status, detail: sanitizeCronPurposeText(row.purpose, options.language, 64), owner: row.owner })), ...realTasks.filter(task => task.status !== "done" && task.dueAt).map(task => ({ at: task.dueAt ?? "-", day: task.dueAt ? task.dueAt.slice(0, 10) : "-", type: t("Task due", "\u4EFB\u52A1\u622A\u6B62"), title: task.title, status: task.status, detail: `${task.projectId} \xB7 ${task.owner}`, owner: task.owner }))].filter(item => item.day && item.day !== "-").sort((a, b) => a.at.localeCompare(b.at));
     const overviewUpcomingRows = calendarEvents.slice(0, 4).map(item => `<div class="decision-row">
@@ -2310,25 +2871,76 @@ async function renderHtml(filters, toolClient, options) {
       <div class="decision-row-value">${runningExecutionChainCount}/${spawnedExecutionChainCount}</div>
     </a>
   </div>`;
-    const taskDecisionPreviewHtml = actionQueue.queue.length > 0 ? `<div class="decision-list">${actionQueue.queue.slice(0, 4).map(item => {
-        const link = item.links[0]?.href ?? decisionHubHref;
-        return `<a class="decision-row" href="${escapeHtml(link)}">
+    const describeTaskQueueDetailCta = (href) => {
+        const normalized = String(href ?? "").trim();
+        if (normalized.startsWith("/session/") || normalized.startsWith("/sessions/"))
+            return t("Session detail", "\u539F\u59CB\u4F1A\u8BDD\u8BE6\u60C5");
+        if (normalized.includes("section=projects-tasks"))
+            return t("Queue detail", "\u961F\u5217\u8BE6\u60C5");
+        return t("Diagnostic detail", "\u8BCA\u65AD\u8BE6\u60C5");
+    };
+    const taskDecisionCards = [...actionQueuePreviewCards.map(item => ({
+            kind: "action",
+            linkedRoomId: item.linkedRoomId,
+            linkedRoomNeedsHydration: item.linkedRoomId ? !collaborationRoomHasMeaningfulConversation(collaborationRoomStateById.get(item.linkedRoomId)) : true,
+            detailHref: item.detailHref,
+            itemId: item.itemId,
+            itemLabel: item.message,
+            statusTone: item.level,
+            statusLabel: badge(item.level),
+            linkedSessionMeta: item.sessionKeys.length > 0 ? ` \xB7 ${escapeHtml(t("Linked sessions", "\u5173\u8054\u4F1A\u8BDD"))} ${item.sessionKeys.length}` : "",
+            primaryLabel: item.linkedRoomId ? !collaborationRoomHasMeaningfulConversation(collaborationRoomStateById.get(item.linkedRoomId)) ? t("Fill room", "\u8865\u9F50\u8BB0\u5F55") : t("Open room", "\u67E5\u770B\u4F1A\u8BDD") : t("Start room", "\u8865\u5F00\u623F\u95F4"),
+            secondaryLabel: describeTaskQueueDetailCta(item.detailHref),
+            roomSource: "task-decision-center",
+            bootstrapKind: "action_queue",
+            bootstrapId: item.itemId
+        })), ...approvalPreviewCards.map(approval => ({
+            kind: "approval",
+            linkedRoomId: approval.linkedRoomId,
+            linkedRoomNeedsHydration: approval.linkedRoomId ? !collaborationRoomHasMeaningfulConversation(collaborationRoomStateById.get(approval.linkedRoomId)) : true,
+            detailHref: approval.detailHref,
+            approvalId: approval.approvalId,
+            itemId: approval.agentId ?? approval.sessionKey ?? t("Unknown target", "\u672A\u77E5\u76EE\u6807"),
+            itemLabel: approval.command || t("Approval action", "\u5BA1\u6279\u52A8\u4F5C"),
+            statusTone: approval.status ?? "unknown",
+            statusLabel: badge(approval.status ?? "unknown"),
+            linkedSessionMeta: "",
+            primaryLabel: approval.linkedRoomId ? !collaborationRoomHasMeaningfulConversation(collaborationRoomStateById.get(approval.linkedRoomId)) ? t("Fill room", "\u8865\u9F50\u8BB0\u5F55") : t("Open room", "\u67E5\u770B\u4F1A\u8BDD") : t("Start room", "\u8865\u5F00\u623F\u95F4"),
+            secondaryLabel: describeTaskQueueDetailCta(approval.detailHref),
+            roomSource: "task-decision-approval",
+            bootstrapKind: "approval",
+            bootstrapId: approval.approvalId
+        }))];
+    const taskDecisionPageSize = 10;
+    const taskDecisionTotalPages = Math.max(1, Math.ceil(taskDecisionCards.length / taskDecisionPageSize));
+    const taskDecisionCurrentPage = 1;
+    const taskDecisionPageStart = taskDecisionCards.length === 0 ? 0 : (taskDecisionCurrentPage - 1) * taskDecisionPageSize + 1;
+    const taskDecisionPageEnd = taskDecisionCards.length === 0 ? 0 : Math.min(taskDecisionCards.length, taskDecisionCurrentPage * taskDecisionPageSize);
+    const taskDecisionPagerHtml = renderInlinePager({
+        label: t("Decision queue pages", "\u51B3\u7B56\u961F\u5217\u5206\u9875"),
+        currentPage: taskDecisionCurrentPage,
+        totalPages: taskDecisionTotalPages,
+        totalItems: taskDecisionCards.length,
+        startIndex: taskDecisionPageStart,
+        endIndex: taskDecisionPageEnd
+    });
+    const taskDecisionPreviewHtml = taskDecisionCards.length > 0 ? `<div class="meta">${escapeHtml(t("Put approvals and decision items together here so you can clear the highest-friction blockers first. If a row has no room yet, use Start room; if the room exists but is still an empty shell, use Fill room first. Raw session detail stays secondary.", "\u628A\u5BA1\u6279\u8BF7\u6C42\u4E0E\u5F85\u51B3\u7B56\u4E8B\u9879\u653E\u5728\u4E00\u8D77\uFF0C\u4F18\u5148\u6E05\u6389\u6700\u963B\u585E\u63A8\u8FDB\u7684\u9879\u3002\u5982\u679C\u8FD9\u4E00\u884C\u8FD8\u6CA1\u6709\u623F\u95F4\uFF0C\u8BF7\u5148\u70B9\u201C\u8865\u5F00\u623F\u95F4\u201D\uFF1B\u5982\u679C\u623F\u95F4\u5DF2\u5B58\u5728\u4F46\u8FD8\u662F\u7A7A\u58F3\uFF0C\u8BF7\u5148\u70B9\u201C\u8865\u9F50\u8BB0\u5F55\u201D\u3002\u539F\u59CB\u4F1A\u8BDD\u8BE6\u60C5\u4ECD\u7136\u53EA\u662F\u6B21\u8981\u8BCA\u65AD\u5165\u53E3\u3002"))}</div>
+      <div data-inline-page-root data-language="${escapeHtml(options.language)}" data-inline-page-size="${taskDecisionPageSize}" data-inline-current-page="${taskDecisionCurrentPage}">
+      <div class="decision-list">${taskDecisionCards.map(item => {
+        const primaryAction = item.linkedRoomId && !item.linkedRoomNeedsHydration ? `<button class="btn" type="button" data-collaboration-room-open="${escapeHtml(item.linkedRoomId)}" data-collaboration-room-source="${escapeHtml(item.roomSource)}">${escapeHtml(item.primaryLabel)}</button>` : `<button class="btn" type="button" data-collaboration-room-bootstrap="${escapeHtml(item.bootstrapKind)}" data-collaboration-room-bootstrap-id="${escapeHtml(item.bootstrapId)}" data-collaboration-room-bootstrap-source="${escapeHtml(item.roomSource)}">${escapeHtml(item.primaryLabel)}</button>`;
+        const secondaryAction = `<a class="btn" href="${escapeHtml(item.detailHref)}">${escapeHtml(item.secondaryLabel)}</a>`;
+        return `<div class="decision-row decision-row-detail" data-inline-page-item>
               <div class="decision-row-copy">
-                <strong>${escapeHtml(item.message)}</strong>
-                <div class="meta">${badge(item.level)} <code>${escapeHtml(item.itemId)}</code></div>
+                <strong>${escapeHtml(item.itemLabel)}</strong>
+                <div class="meta">${item.statusLabel} <code>${escapeHtml(item.itemId)}</code>${item.linkedSessionMeta}</div>
               </div>
-              <div class="decision-row-link">${escapeHtml(t("Open", "\u6253\u5F00"))}</div>
-            </a>`;
-    }).join("")}</div>` : topApprovals.length > 0 ? `<div class="decision-list">${topApprovals.slice(0, 4).map(approval => {
-        const target = approval.agentId ?? approval.sessionKey ?? t("Unknown target", "\u672A\u77E5\u76EE\u6807");
-        return `<a class="decision-row" href="${escapeHtml(decisionHubHref)}">
-                <div class="decision-row-copy">
-                  <strong>${escapeHtml(approval.command || t("Approval action", "\u5BA1\u6279\u52A8\u4F5C"))}</strong>
-                  <div class="meta">${badge(approval.status ?? "unknown")} ${escapeHtml(target)}</div>
-                </div>
-                <div class="decision-row-link">${escapeHtml(t("Review", "\u5BA1\u9605"))}</div>
-              </a>`;
-    }).join("")}</div>` : `<div class="empty-state">${escapeHtml(t("Nothing is waiting for your review right now.", "\u5F53\u524D\u6CA1\u6709\u7B49\u5F85\u4F60\u51B3\u7B56\u7684\u4E8B\u9879\u3002"))}</div>`;
+              <div class="decision-row-side">
+                <div class="decision-row-actions">${primaryAction}${secondaryAction}</div>
+              </div>
+            </div>`;
+    }).join("")}</div>
+      ${taskDecisionPagerHtml}
+      </div>` : `<div class="empty-state">${escapeHtml(t("Nothing is waiting for your review right now.", "\u5F53\u524D\u6CA1\u6709\u7B49\u5F85\u4F60\u51B3\u7B56\u7684\u4E8B\u9879\u3002"))}</div>`;
     const taskHubStatCardsHtml = `<div class="task-hub-stat-grid">
     <article class="task-hub-stat">
       <span>${escapeHtml(t("Confirmed live", "\u5DF2\u786E\u8BA4\u5728\u8DD1"))}</span>
@@ -2717,7 +3329,7 @@ async function renderHtml(filters, toolClient, options) {
     <details class="card compact-details" open>
       <summary>\u6700\u8FD1\u4F1A\u8BDD\uFF08${sessionPreview.items.length}/${sessionPreview.total}\uFF09</summary>
       <div class="fold-body">
-        ${sessionPreview.items.length === 0 ? '<div class="empty-state">\u6682\u65E0\u4F1A\u8BDD\u6570\u636E\u3002</div>' : `<div class="group-list"><details class="group-section" open><summary>\u6700\u8FD1\u6D3B\u8DC3\u4F1A\u8BDD\uFF08${sessionPreview.items.length}\uFF09</summary><ul class="group-items">${sessionPreview.items.slice(0, 14).map(item => `<li class="group-item"><div class="group-item-head"><strong>${escapeHtml(item.label ?? item.sessionKey)}</strong>${badge(item.state, sessionStateLabel(item.state))}</div><div class="meta">\u667A\u80FD\u4F53 ${escapeHtml(item.agentId ?? "-")} \xB7 \u6700\u8FD1 ${escapeHtml(item.lastMessageAt ?? "-")}</div><div class="meta">\u6700\u65B0\u4E8B\u4EF6 ${escapeHtml(item.latestKind ?? "message")} \xB7 \u5386\u53F2 ${item.historyCount}</div><div class="meta"><a href="${escapeHtml(buildSessionDetailHref(item.sessionKey, options.language))}">\u67E5\u770B\u4F1A\u8BDD\u8BE6\u60C5\u9875</a></div></li>`).join("")}</ul></details></div>`}
+        ${sessionPreview.items.length === 0 ? '<div class="empty-state">\u6682\u65E0\u4F1A\u8BDD\u6570\u636E\u3002</div>' : `<div class="group-list"><details class="group-section" open><summary>\u6700\u8FD1\u6D3B\u8DC3\u4F1A\u8BDD\uFF08${sessionPreview.items.length}\uFF09</summary><ul class="group-items">${sessionPreview.items.slice(0, 14).map(item => `<li class="group-item"><div class="group-item-head"><strong>${escapeHtml(item.label ?? item.sessionKey)}</strong>${badge(item.state, sessionStateLabel(item.state))}</div><div class="meta">\u667A\u80FD\u4F53 ${escapeHtml(item.agentId ?? "-")} \xB7 \u6700\u8FD1 ${escapeHtml(item.lastMessageAt ?? "-")}</div><div class="meta">\u6700\u65B0\u4E8B\u4EF6 ${escapeHtml(item.latestKind ?? "message")} \xB7 \u5386\u53F2 ${item.historyCount}</div><div class="meta"><a ${buildSessionLinkAttrs({ sessionKey: item.sessionKey, language: options.language, buildSessionDetailHref, escapeHtml, source: "overview-recent-sessions" })}>\u67E5\u770B\u4F1A\u8BDD\u8BE6\u60C5\u9875</a></div></li>`).join("")}</ul></details></div>`}
         <details class="compact-table-details" style="margin-top:12px;">
           <summary>\u67E5\u770B\u539F\u59CB\u8868\u683C</summary>
           <div class="fold-body">
@@ -2845,79 +3457,99 @@ async function renderHtml(filters, toolClient, options) {
         </div>
       </details>
     ` : `<div class="meta">${escapeHtml(trackedTaskExplanation)}</div>`;
+    const taskQueueDefaultTab = pendingDecisionCount > 0 ? "decision" : "followup";
     const trackedTaskDetailsBody = hasTrackedTaskPanels ? `
-      <section class="task-hub-shell" id="task-hub">
-        <article class="card task-hub-primary" id="task-hub-primary">
-          <div class="overview-command-head">
-            <div>
-              <h2>${escapeHtml(t("Task follow-up center", "\u4EFB\u52A1\u8DDF\u8FDB\u4E2D\u5FC3"))}</h2>
-              <div class="meta">${escapeHtml(t("Use this lower panel for decisions, execution trace, and raw detail only after the top card wall has helped you set the working order.", "\u4E0A\u65B9\u5361\u7247\u5899\u5148\u5E2E\u4F60\u786E\u5B9A\u5DE5\u4F5C\u987A\u5E8F\uFF0C\u8FD9\u4E00\u5C42\u53EA\u4FDD\u7559\u51B3\u7B56\u3001\u6267\u884C\u94FE\u548C\u539F\u59CB\u660E\u7EC6\u3002"))}</div>
-            </div>
-            <div>${overviewPrimaryStatus}</div>
+      <div class="task-diagnostics-stack">
+        <details class="card compact-details" id="task-execution-chain-panel">
+          <summary>${escapeHtml(t("Execution chain", "\u6267\u884C\u94FE"))}</summary>
+          <div class="fold-body task-diagnostics-body">
+            <div class="meta">${escapeHtml(t("Only open this when you need runtime proof for whether a parent session accepted work, spawned the child session, or got stuck on scheduling.", "\u53EA\u5728\u9700\u8981\u786E\u8BA4\u7236\u4F1A\u8BDD\u662F\u5426\u63A5\u5355\u3001\u662F\u5426\u6D3E\u53D1\u5B50\u4F1A\u8BDD\u6216\u8005\u5361\u5728\u6392\u7A0B\u65F6\u518D\u6253\u5F00\u8FD9\u91CC\u3002"))}</div>
+            ${taskExecutionChainSection}
+            ${legacyCronExecutionSection}
           </div>
-          ${taskHubStatCardsHtml}
-          <div class="overview-task-strip">
-            <div>
-              <div class="meta">${escapeHtml(t("Current follow-up", "\u5F53\u524D\u8DDF\u8FDB"))}</div>
-              <div class="overview-task-metric">${badge(currentTaskHealth)} ${escapeHtml(t("Confirmed live", "\u5DF2\u786E\u8BA4\u5728\u8DD1"))} ${taskCertaintyStrongCount} \xB7 ${escapeHtml(t("Need follow-up", "\u9700\u8DDF\u8FDB"))} ${taskCertaintyFollowupCount} \xB7 ${escapeHtml(t("Needs inspection", "\u9700\u6392\u67E5"))} ${taskCertaintyWeakCount}</div>
-              ${mappingTaskHint ? `<div class="meta">${escapeHtml(mappingTaskHint)}</div>` : ""}
+        </details>
+        <details class="card compact-details" id="task-project-dynamic-panel">
+          <summary>${escapeHtml(t("Projects and live activity", "\u9879\u76EE\u4E0E\u52A8\u6001"))}</summary>
+          <div class="fold-body task-diagnostics-body">
+            <div class="task-project-dynamic-grid">
+              <section class="card" id="project-lane">
+                <h2>${escapeHtml(t("Project lanes", "\u9879\u76EE\u6CF3\u9053"))}</h2>
+                ${projectBoard}
+              </section>
+              <section class="card" id="task-live-feed">
+                <h2>${escapeHtml(t("Live activity feed", "\u5B9E\u65F6\u6D3B\u52A8\u6D41"))}</h2>
+                <div class="meta">${escapeHtml(t("Use this only when you need to confirm what the AI employee system and each employee are doing right now.", "\u53EA\u5728\u9700\u8981\u786E\u8BA4 AI \u5458\u5DE5\u7CFB\u7EDF\u548C\u5404\u5458\u5DE5\u5F53\u524D\u6B63\u5728\u505A\u4EC0\u4E48\u65F6\u518D\u6253\u5F00\u3002"))}</div>
+                <ul class="story-list">${replayMomentsRows}</ul>
+              </section>
             </div>
-            <div class="overview-quick-links">
-              <a class="btn" href="${escapeHtml(currentTaskHealthHref)}">${escapeHtml(t("Jump to card wall", "\u8FD4\u56DE\u5361\u7247\u5899"))}</a>
-              <a class="btn" href="${escapeHtml(focusHref)}">${escapeHtml(t("Open follow-up items", "\u67E5\u770B\u5F85\u5904\u7406\u9879"))}</a>
-            </div>
+            ${agentTeamProjectsBlock}
           </div>
-        </article>
-        <article class="card" id="task-decision-center">
-          <div class="overview-command-head">
-            <h2>${escapeHtml(t("Waiting for your decision", "\u7B49\u5F85\u4F60\u7684\u51B3\u7B56"))}</h2>
-            <div>${badge(pendingDecisionCount > 0 ? "warn" : "ok", pendingDecisionCount > 0 ? t("Queue active", "\u961F\u5217\u6D3B\u8DC3") : t("Clear", "\u5DF2\u6E05\u7A7A"))}</div>
+        </details>
+        <details class="card compact-details" id="task-raw-data-panel">
+          <summary>${escapeHtml(t("Raw data", "\u539F\u59CB\u6570\u636E"))}</summary>
+          <div class="fold-body task-diagnostics-body">
+            <div class="meta">${escapeHtml(t("Keep native groupings, raw tables, and board-only mapping samples here for cross-checking after you decide the real work order.", "\u539F\u751F\u5206\u7EC4\u3001\u539F\u59CB\u8868\u683C\u3001\u770B\u677F\u6620\u5C04\u6837\u4F8B\u90FD\u6536\u5728\u8FD9\u91CC\uFF0C\u4F9B\u4F60\u5728\u786E\u5B9A\u771F\u5B9E\u5DE5\u4F5C\u987A\u5E8F\u540E\u505A\u4EA4\u53C9\u6838\u5BF9\u3002"))}</div>
+            <section class="card" id="task-groups">
+              <h2>${escapeHtml(t("Task groups", "\u4EFB\u52A1\u5206\u7EC4"))}</h2>
+              ${taskGroupedListHtml}
+            </section>
+            ${controlCenterMappingTasks.length === 0 ? "" : `<details class="card compact-details" id="task-mapping-examples">
+                   <summary>${escapeHtml(t("Board mapping examples (non-executing)", "\u770B\u677F\u6620\u5C04\u6837\u4F8B\uFF08\u4E0D\u6267\u884C\u4EFB\u52A1\uFF09"))}</summary>
+                   <div class="fold-body">
+                     <table>
+                       <thead><tr><th>${escapeHtml(t("Example task", "\u6837\u4F8B\u4EFB\u52A1"))}</th><th>${escapeHtml(t("Label", "\u6807\u7B7E"))}</th><th>${escapeHtml(t("Status", "\u72B6\u6001"))}</th></tr></thead>
+                       <tbody>${mappingTaskRows}</tbody>
+                     </table>
+                   </div>
+                 </details>`}
+            <details class="card compact-details" id="task-table">
+              <summary>${escapeHtml(t(`Task table (raw detail, ${tasks.length}/${allTasks.length})`, `\u4EFB\u52A1\u8868\u683C\uFF08\u539F\u59CB\u660E\u7EC6\uFF0C${tasks.length}/${allTasks.length}\uFF09`))}</summary>
+              <div class="fold-body">
+                <table>
+                  <thead><tr><th>${escapeHtml(t("Project", "\u9879\u76EE"))}</th><th>${escapeHtml(t("Task", "\u4EFB\u52A1"))}</th><th>${escapeHtml(t("Title", "\u6807\u9898"))}</th><th>${escapeHtml(t("Status", "\u72B6\u6001"))}</th><th>${escapeHtml(t("Agent", "\u5458\u5DE5"))}</th><th>${escapeHtml(t("Due", "\u622A\u6B62"))}</th><th>${escapeHtml(t("Updated", "\u66F4\u65B0\u65F6\u95F4"))}</th></tr></thead>
+                  <tbody>${taskRows}</tbody>
+                </table>
+              </div>
+            </details>
           </div>
-          <div class="meta">${escapeHtml(t("Pending decisions", "\u5F85\u5904\u7406\u4E8B\u9879"))} ${pendingDecisionCount} \xB7 ${escapeHtml(t("Approvals", "\u5BA1\u6279"))} ${pendingApprovalsCount} \xB7 ${escapeHtml(t("Unacked alerts", "\u672A\u786E\u8BA4\u544A\u8B66"))} ${actionQueue.counts.unacked}</div>
-          ${taskDecisionPreviewHtml}
-        </article>
-      </section>
-      ${taskExecutionChainSection}
-      <section class="task-hub-grid">
-        <section class="card" id="project-lane">
-          <h2>${escapeHtml(t("Project lanes", "\u9879\u76EE\u6CF3\u9053"))}</h2>
-          ${projectBoard}
-        </section>
-        <section class="card" id="task-live-feed">
-          <h2>${escapeHtml(t("Live activity feed", "\u5B9E\u65F6\u6D3B\u52A8\u6D41"))}</h2>
-          <div class="meta">${escapeHtml(t("Use this to confirm what the AI employee system and each employee are doing right now.", "\u7528\u6765\u786E\u8BA4 AI \u5458\u5DE5\u7CFB\u7EDF\u548C\u6BCF\u4F4D\u5458\u5DE5\u6B64\u523B\u6B63\u5728\u505A\u4EC0\u4E48\u3002"))}</div>
-          <ul class="story-list">${replayMomentsRows}</ul>
-        </section>
-      </section>
-      <section class="card" id="task-groups">
-        <h2>${escapeHtml(t("Task groups", "\u4EFB\u52A1\u5206\u7EC4"))}</h2>
-        <div class="meta">${escapeHtml(t("Keep the raw native grouping here for cross-checking after you reorder the main card wall.", "\u4E3B\u5361\u7247\u5899\u7528\u4E8E\u64CD\u4F5C\uFF0C\u8FD9\u91CC\u4FDD\u7559\u539F\u751F\u5206\u7EC4\uFF0C\u65B9\u4FBF\u4F60\u540E\u7EED\u4EA4\u53C9\u6838\u5BF9\u3002"))}</div>
-        ${taskGroupedListHtml}
-        ${controlCenterMappingTasks.length === 0 ? "" : `<details class="compact-table-details" style="margin-top:12px;">
-                 <summary>${escapeHtml(t("Open board mapping examples (non-executing)", "\u67E5\u770B\u770B\u677F\u6620\u5C04\u6837\u4F8B\uFF08\u4E0D\u6267\u884C\u4EFB\u52A1\uFF09"))}</summary>
-                 <div class="fold-body">
-                   <table>
-                     <thead><tr><th>${escapeHtml(t("Example task", "\u6837\u4F8B\u4EFB\u52A1"))}</th><th>${escapeHtml(t("Label", "\u6807\u7B7E"))}</th><th>${escapeHtml(t("Status", "\u72B6\u6001"))}</th></tr></thead>
-                     <tbody>${mappingTaskRows}</tbody>
-                   </table>
-                 </div>
-               </details>`}
-      </section>
-      <details class="card compact-details" id="task-table">
-        <summary>${escapeHtml(t(`Task table (raw detail, ${tasks.length}/${allTasks.length})`, `\u4EFB\u52A1\u8868\u683C\uFF08\u539F\u59CB\u660E\u7EC6\uFF0C${tasks.length}/${allTasks.length}\uFF09`))}</summary>
-        <div class="fold-body">
-          <table>
-            <thead><tr><th>${escapeHtml(t("Project", "\u9879\u76EE"))}</th><th>${escapeHtml(t("Task", "\u4EFB\u52A1"))}</th><th>${escapeHtml(t("Title", "\u6807\u9898"))}</th><th>${escapeHtml(t("Status", "\u72B6\u6001"))}</th><th>${escapeHtml(t("Agent", "\u5458\u5DE5"))}</th><th>${escapeHtml(t("Due", "\u622A\u6B62"))}</th><th>${escapeHtml(t("Updated", "\u66F4\u65B0\u65F6\u95F4"))}</th></tr></thead>
-            <tbody>${taskRows}</tbody>
-          </table>
-        </div>
-      </details>
+        </details>
+      </div>
     ` : `<div class="meta">${escapeHtml(trackedTaskExplanation)}</div>`;
+    const taskQueueCard = `
+    <section class="task-queue-card" id="task-queue" data-task-queue-root data-task-queue-default-tab="${escapeHtml(taskQueueDefaultTab)}">
+      <div class="overview-command-head">
+        <div>
+          <h2>${escapeHtml(t("Pending queue", "\u5F85\u5904\u7406\u961F\u5217"))}</h2>
+          <div class="meta">${escapeHtml(t("Prioritize the items that need your direct action here. Open the room first to intervene in the shared timeline; if a row still has no room, use Start room to bootstrap one, and only use session or diagnostic detail when you need error evidence, IDs, or raw runtime state.", "\u8FD9\u91CC\u53EA\u4FDD\u7559\u9700\u8981\u4F60\u76F4\u63A5\u52A8\u624B\u7684\u9879\u3002\u4EBA\u5DE5\u5E72\u9884\u8BF7\u5148\u6253\u5F00\u623F\u95F4\u5728\u5171\u4EAB\u65F6\u95F4\u7EBF\u91CC\u5904\u7406\uFF1B\u5982\u679C\u67D0\u4E00\u884C\u8FD8\u6CA1\u6709\u623F\u95F4\uFF0C\u5C31\u5148\u70B9\u201C\u8865\u5F00\u623F\u95F4\u201D\u8865\u4E00\u4E2A\uFF1B\u53EA\u6709\u5728\u9700\u8981\u9519\u8BEF\u8BC1\u636E\u3001ID \u6216\u539F\u59CB\u8FD0\u884C\u72B6\u6001\u65F6\uFF0C\u624D\u6253\u5F00\u4F1A\u8BDD/\u8BCA\u65AD\u8BE6\u60C5\u3002"))}</div>
+        </div>
+        <div>${badge(pendingDecisionCount > 0 ? "warn" : taskFollowupCardsForPanel.length > 0 ? "info" : "ok", pendingDecisionCount > 0 ? t("Action first", "\u4F18\u5148\u5904\u7406") : taskFollowupCardsForPanel.length > 0 ? t("Follow-up active", "\u8DDF\u8FDB\u4E2D") : t("Clear", "\u5DF2\u6E05\u7A7A"))}</div>
+      </div>
+      <div class="task-queue-summary">
+        <div class="meta">${escapeHtml(t("Decision items", "\u5F85\u51B3\u7B56"))} ${pendingDecisionCount} \xB7 ${escapeHtml(t("Approvals", "\u5BA1\u6279"))} ${pendingApprovalsCount} \xB7 ${escapeHtml(t("Follow-up tasks", "\u5F85\u8DDF\u8FDB\u4EFB\u52A1"))} ${taskFollowupCardsForPanel.length}</div>
+      </div>
+      <div class="task-queue-tabs" role="tablist" aria-label="${escapeHtml(t("Pending queue segments", "\u5F85\u5904\u7406\u961F\u5217\u5206\u6BB5"))}">
+        <button class="task-queue-tab" type="button" role="tab" data-task-queue-tab-button data-task-queue-tab="decision">${escapeHtml(t(`Waiting for decision (${pendingDecisionCount})`, `\u5F85\u51B3\u7B56\uFF08${pendingDecisionCount}\uFF09`))}</button>
+        <button class="task-queue-tab" type="button" role="tab" data-task-queue-tab-button data-task-queue-tab="followup">${escapeHtml(t(`Needs follow-up (${taskFollowupCardsForPanel.length})`, `\u5F85\u8DDF\u8FDB\uFF08${taskFollowupCardsForPanel.length}\uFF09`))}</button>
+      </div>
+      <section class="task-queue-panel" role="tabpanel" data-task-queue-panel="decision">
+        ${taskDecisionPreviewHtml}
+      </section>
+      <section class="task-queue-panel" role="tabpanel" data-task-queue-panel="followup" hidden>
+        ${taskFollowupListHtml}
+      </section>
+    </section>
+  `;
     const calendarSection = `
     <section class="card" id="calendar-board">
+      <div class="overview-command-head">
+        <div>
+          <h2>${escapeHtml(t("Task workbench", "\u4EFB\u52A1\u5DE5\u4F5C\u53F0"))}</h2>
+          <div class="meta task-top-intro">${escapeHtml(t("Keep task priority, pending actions, and schedule in one place. Process the queue first, then open diagnostics only when you need proof or cross-checks.", "\u628A\u4EFB\u52A1\u4F18\u5148\u7EA7\u3001\u5F85\u5904\u7406\u52A8\u4F5C\u548C\u6392\u7A0B\u6536\u5728\u540C\u4E00\u4E2A\u5DE5\u4F5C\u533A\u3002\u5148\u5904\u7406\u4E0A\u65B9\u961F\u5217\uFF0C\u53EA\u5728\u9700\u8981\u8BC1\u636E\u6216\u4EA4\u53C9\u6838\u5BF9\u65F6\u518D\u6253\u5F00\u8BCA\u65AD\u533A\u3002"))}</div>
+        </div>
+        <div>${badge(currentTaskHealth, currentTaskHealth === "ok" ? t("Steady", "\u5E73\u7A33") : t("Needs attention", "\u9700\u5173\u6CE8"))}</div>
+      </div>
       <div id="task-timeline">
-        <h2>${escapeHtml(t("Task and schedule cards", "\u4EFB\u52A1\u4E0E\u6392\u7A0B\u5361\u7247"))}</h2>
-        <div class="meta task-top-intro">${escapeHtml(t("Put tracked tasks, due times, and timed jobs into one draggable card pool so the work queue and schedule stay in the same place.", "\u628A\u8DDF\u8E2A\u4EFB\u52A1\u3001\u622A\u6B62\u65F6\u95F4\u548C\u5B9A\u65F6\u4EFB\u52A1\u5408\u5E76\u5230\u540C\u4E00\u7EC4\u53EF\u62D6\u62FD\u5361\u7247\u91CC\uFF0C\u8BA9\u5DE5\u4F5C\u961F\u5217\u548C\u6392\u7A0B\u653E\u5728\u540C\u4E00\u4E2A\u5730\u65B9\u3002"))}</div>
+        <div class="meta">${escapeHtml(t("Task and schedule", "\u4EFB\u52A1\u4E0E\u6392\u7A0B"))}</div>
         <div class="timeline-summary-strip">
           <div class="timeline-stat"><span>${escapeHtml(t("Tracked tasks", "\u8DDF\u8E2A\u4EFB\u52A1"))}</span><strong>${tasks.length}</strong><small>${escapeHtml(t("Current filtered list", "\u5F53\u524D\u7B5B\u9009\u7ED3\u679C"))}</small></div>
           <div class="timeline-stat"><span>${escapeHtml(t("Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1"))}</span><strong>${allCronRows.length}</strong><small>${escapeHtml(t("Included in card pool", "\u5DF2\u5E76\u5165\u5361\u7247\u6C60"))}</small></div>
@@ -2925,6 +3557,7 @@ async function renderHtml(filters, toolClient, options) {
           <div class="timeline-stat"><span>${escapeHtml(t("Enabled", "\u5DF2\u542F\u7528"))}</span><strong>${enabledCronCount}</strong><small>${escapeHtml(t("Ready to run", "\u53EF\u8FDB\u5165\u4E0B\u4E00\u8F6E"))}</small></div>
         </div>
       </div>
+      ${taskQueueCard}
       <div class="task-top-meta-row">
         <div class="meta task-top-meta">${escapeHtml(t("Current focus", "\u5F53\u524D\u5173\u6CE8"))}\uFF1A${escapeHtml(quickFilterLabel(effectiveQuick, options.language))}</div>
         ${controlCenterMappingTasks.length > 0 ? `<div class="meta task-top-meta">${escapeHtml(t(`${controlCenterMappingTasks.length} board-only mapping examples are hidden because they are not real execution tasks.`, `\u5DF2\u9690\u85CF ${controlCenterMappingTasks.length} \u4E2A\u770B\u677F\u6620\u5C04\u6837\u4F8B\uFF08\u975E\u771F\u5B9E\u6267\u884C\u4EFB\u52A1\uFF09\u3002`))}</div>` : ""}
@@ -2984,16 +3617,13 @@ async function renderHtml(filters, toolClient, options) {
     </section>
   `;
     const projectsSection = `
-    <section class="task-flow-stack">
+    <section id="task-workbench">
       ${calendarSection}
-      ${cronExecutionSection}
     </section>
-    ${agentTeamProjectsBlock}
     <details class="card compact-details" id="tracked-task-view"${trackedTaskDetailsOpen ? " open" : ""}>
-      <summary>${escapeHtml(t("Tracked tasks and follow-up", "\u8DDF\u8E2A\u4EFB\u52A1\u4E0E\u8DDF\u8FDB"))}</summary>
+      <summary>${escapeHtml(t("Diagnostics and raw data", "\u8BCA\u65AD\u4E0E\u539F\u59CB\u6570\u636E"))}</summary>
       <div class="fold-body">
-        <div class="meta">${escapeHtml(trackedTaskSummaryText)}</div>
-        <div class="meta">${escapeHtml(trackedTaskExplanation)}</div>
+        <div class="meta">${escapeHtml(t("Keep execution trace, project dynamics, and raw task records behind this fold so the first screen stays focused on processing work.", "\u628A\u6267\u884C\u94FE\u3001\u9879\u76EE\u52A8\u6001\u548C\u539F\u59CB\u4EFB\u52A1\u8BB0\u5F55\u90FD\u6536\u5230\u8FD9\u4E2A\u6298\u53E0\u533A\u540E\u9762\uFF0C\u8BA9\u9996\u5C4F\u59CB\u7EC8\u805A\u7126\u5904\u7406\u52A8\u4F5C\u3002"))}</div>
         ${trackedTaskDetailsBody}
       </div>
     </details>
@@ -3085,6 +3715,7 @@ async function renderHtml(filters, toolClient, options) {
     const settingsBudgetLimitScript = renderSettingsBudgetLimitScript(options.language);
     const settingsSafetyScript = renderSettingsSafetyScript(options.language);
     const cardHelpTooltipsScript = renderCardHelpTooltipsScript(options.language);
+    const collaborationRoomOpenScript = renderCollaborationRoomOpenScript(options.language);
     const featuresScript = renderFeaturesScript(options.language);
     const collaborationChatBootPreferences = await buildCollaborationChatBootPreferences({
         preferences: options.collaborationChat,
@@ -3902,6 +4533,22 @@ async function renderHtml(filters, toolClient, options) {
       color: #1d1d1f;
       line-height: 1.4;
     }
+    .decision-row-detail {
+      align-items: start;
+    }
+    .decision-row-side {
+      min-width: 0;
+      display: grid;
+      justify-items: end;
+      gap: 6px;
+      align-content: start;
+    }
+    .decision-row-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
     .decision-row-value,
     .decision-row-link {
       font-size: 12px;
@@ -3909,6 +4556,62 @@ async function renderHtml(filters, toolClient, options) {
       font-weight: 650;
       white-space: nowrap;
       align-self: center;
+    }
+    .decision-row-subvalue {
+      white-space: nowrap;
+    }
+    .task-followup-list {
+      margin-top: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .inline-pager,
+    .task-board-pagination {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .inline-pager-links,
+    .task-board-page-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .inline-pager-link,
+    .task-board-page-link {
+      appearance: none;
+      min-width: 34px;
+      height: 34px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      background: rgba(255, 255, 255, 0.92);
+      color: #46607c;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      font: inherit;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+    }
+    .inline-pager-link:hover,
+    .task-board-page-link:hover {
+      border-color: rgba(0, 113, 227, 0.28);
+      color: #0b6db3;
+    }
+    .inline-pager-link.is-active,
+    .inline-pager-link[aria-current="page"],
+    .task-board-page-link.is-active,
+    .task-board-page-link[aria-current="page"] {
+      border-color: rgba(0, 113, 227, 0.24);
+      background: rgba(0, 113, 227, 0.12);
+      color: #0b6db3;
     }
     .overview-busy-grid {
       display: grid;
@@ -4819,6 +5522,74 @@ async function renderHtml(filters, toolClient, options) {
     .task-hub-shell {
       display: grid;
       grid-template-columns: minmax(0, 1.35fr) minmax(360px, 1fr);
+      gap: var(--space-2);
+      align-items: start;
+    }
+    #task-workbench {
+      display: grid;
+      gap: var(--space-2);
+    }
+    .task-queue-card {
+      margin-top: 14px;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 18px;
+      padding: 14px;
+      background: rgba(248, 250, 252, 0.9);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.78),
+        0 10px 22px rgba(15, 23, 42, 0.035);
+    }
+    .task-queue-summary {
+      display: grid;
+      gap: 6px;
+    }
+    .task-queue-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .task-queue-tab {
+      appearance: none;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      background: rgba(255, 255, 255, 0.92);
+      color: #46607c;
+      border-radius: 12px;
+      padding: 9px 12px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+    }
+    .task-queue-tab:hover {
+      border-color: rgba(0, 113, 227, 0.28);
+      color: #0b6db3;
+    }
+    .task-queue-tab.is-active,
+    .task-queue-tab[aria-selected="true"] {
+      border-color: rgba(0, 113, 227, 0.24);
+      background: rgba(0, 113, 227, 0.12);
+      color: #0b6db3;
+    }
+    .task-queue-panel {
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+    }
+    .task-queue-panel[hidden] {
+      display: none !important;
+    }
+    .task-diagnostics-stack,
+    .task-diagnostics-body {
+      display: grid;
+      gap: 12px;
+    }
+    .task-project-dynamic-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: var(--space-2);
       align-items: start;
     }
@@ -7486,6 +8257,7 @@ async function renderHtml(filters, toolClient, options) {
       .task-hub-shell { grid-template-columns: 1fr; }
       .task-hub-grid { grid-template-columns: 1fr; }
       .task-hub-board-grid { grid-template-columns: 1fr; }
+      .task-project-dynamic-grid { grid-template-columns: 1fr; }
       .overview-busy-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .office-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .task-brief-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -7539,6 +8311,7 @@ async function renderHtml(filters, toolClient, options) {
       .task-hub-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .timeline-summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .task-top-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .task-project-dynamic-grid { grid-template-columns: 1fr; }
       .overview-busy-grid { grid-template-columns: 1fr; }
       .dashboard-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .execution-chain-list { grid-template-columns: 1fr; }
@@ -7610,6 +8383,7 @@ async function renderHtml(filters, toolClient, options) {
       .task-hub-shell { grid-template-columns: 1fr; }
       .task-hub-grid { grid-template-columns: 1fr; }
       .task-hub-board-grid { grid-template-columns: 1fr; }
+      .task-project-dynamic-grid { grid-template-columns: 1fr; }
       .overview-pulse-card .status-strip { grid-template-columns: 1fr; }
       .dashboard-strip { grid-template-columns: 1fr; }
       .collaboration-summary-grid { grid-template-columns: 1fr; }
@@ -8620,6 +9394,7 @@ async function renderHtml(filters, toolClient, options) {
   ${cardHelpTooltipsScript}
   ${agentVisualEnhancerScript}
   ${featuresScript}
+  ${collaborationRoomOpenScript}
   ${taskBoardScript}
   ${fileWorkbenchScript}
   ${staffModelScript}

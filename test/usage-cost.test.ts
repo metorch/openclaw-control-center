@@ -1,4 +1,8 @@
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import type { ReadModelSnapshot } from "../src/types";
 
@@ -114,6 +118,117 @@ test("usage-cost snapshot uses runtime session events for real requests, trends,
   assert.equal(usage.connectors.requestCounts, "connected");
   assert(!usage.connectors.todos.some((item) => item.id === "request_counter"));
   assert(!usage.connectors.todos.some((item) => item.id === "context_catalog"));
+});
+
+test("usage-cost summary mode backfills period cost from runtime session events", async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "openclaw-usage-summary-"));
+  t.after(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  const runtimeDir = join(tempRoot, "runtime");
+  const digestDir = join(runtimeDir, "digests");
+  const openclawHome = join(tempRoot, ".openclaw-home");
+  const codexHome = join(tempRoot, ".codex-home");
+  const agentSessionsDir = join(openclawHome, "agents", "main", "sessions");
+  await mkdir(digestDir, { recursive: true });
+  await mkdir(agentSessionsDir, { recursive: true });
+  await mkdir(codexHome, { recursive: true });
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  await writeFile(
+    join(digestDir, `${todayIso}.json`),
+    JSON.stringify({
+      date: todayIso,
+      usage: {
+        statuses: 1,
+        totalTokensIn: 100,
+        totalTokensOut: 50,
+        totalCost: 0,
+      },
+    }),
+    "utf8",
+  );
+
+  await writeFile(
+    join(agentSessionsDir, "sessions.json"),
+    JSON.stringify({
+      "s-1": {
+        sessionId: "sid-1",
+        model: "gpt-5.3-codex",
+        modelProvider: "OpenAI",
+        contextTokens: 200000,
+        totalTokens: 1500,
+      },
+    }),
+    "utf8",
+  );
+
+  await writeFile(
+    join(agentSessionsDir, "sid-1.jsonl"),
+    [
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "message",
+        message: {
+          role: "assistant",
+          model: "gpt-5.3-codex",
+          provider: "OpenAI",
+          usage: {
+            totalTokens: 1500,
+            cost: {
+              total: 4.25,
+            },
+          },
+        },
+      }),
+    ].join("\n"),
+    "utf8",
+  );
+
+  const snapshot = buildSnapshotFixture({
+    model: "gpt-5.3-codex",
+    tokensIn: 10,
+    tokensOut: 5,
+    cost: 0,
+  });
+
+  const tsxLoaderUrl = new URL("../node_modules/tsx/dist/loader.mjs", import.meta.url).href;
+  const moduleUrl = new URL("../src/runtime/usage-cost.ts", import.meta.url).href;
+  const script = [
+    'const mod = await import(process.env.USAGE_COST_MODULE_URL);',
+    "const buildUsageCostSnapshot = mod.buildUsageCostSnapshot ?? mod.default?.buildUsageCostSnapshot;",
+    'if (typeof buildUsageCostSnapshot !== "function") throw new TypeError("buildUsageCostSnapshot export missing");',
+    "const snapshot = JSON.parse(process.env.USAGE_COST_SNAPSHOT_JSON);",
+    'const usage = await buildUsageCostSnapshot(snapshot, "summary");',
+    'const today = usage.periods.find((item) => item.key === "today");',
+    'const thirty = usage.periods.find((item) => item.key === "30d");',
+    "console.log(JSON.stringify({ today, thirty }));",
+  ].join(" ");
+
+  const result = spawnSync(process.execPath, ["--import", tsxLoaderUrl, "-e", script], {
+    cwd: tempRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_HOME: openclawHome,
+      CODEX_HOME: codexHome,
+      USAGE_COST_MODULE_URL: moduleUrl,
+      USAGE_COST_SNAPSHOT_JSON: JSON.stringify(snapshot),
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const parsed = JSON.parse(result.stdout.trim()) as {
+    today?: { estimatedCost?: number; tokens?: number; requestCount?: number; sourceStatus?: string };
+    thirty?: { estimatedCost?: number; tokens?: number; requestCount?: number; sourceStatus?: string };
+  };
+
+  assert.equal(parsed.today?.estimatedCost, 4.25);
+  assert.equal(parsed.today?.tokens, 1500);
+  assert.equal(parsed.today?.requestCount, 1);
+  assert.equal(parsed.today?.sourceStatus, "connected");
+  assert.equal(parsed.thirty?.estimatedCost, 4.25);
 });
 
 test("usage-cost snapshot surfaces connected subscription consumption and remaining contract", async () => {

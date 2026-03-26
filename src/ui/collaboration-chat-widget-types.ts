@@ -50,6 +50,9 @@ interface CollaborationChatLabels {
   deleteChat: string;
   send: string;
   terminate: string;
+  markDone: string;
+  markFollowUp: string;
+  markError: string;
   attach: string;
   upload: string;
   mentions: string;
@@ -78,6 +81,7 @@ interface CollaborationChatLabels {
   deleteConfirm: string;
   sending: string;
   terminating: string;
+  adjudicating: string;
   loading: string;
   refreshed: string;
   writeUnavailable: string;

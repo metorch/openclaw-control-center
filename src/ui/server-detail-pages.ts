@@ -1,6 +1,7 @@
 // @ts-nocheck
 
 const { badge, escapeHtml, pickUiText, safeTruncate } = require("./server-shared");
+const { buildSessionLinkAttrs } = require("./server-session-room-links");
 
 function createDetailPageRenderers(deps) {
   const {
@@ -25,7 +26,7 @@ function createDetailPageRenderers(deps) {
       const latestTime = item.latestHistoryAt ? ` @ ${item.latestHistoryAt}` : "";
       const historyState = item.historyError ? pickUiText(language, `Error: ${item.historyError}`, `\u9519\u8BEF: ${item.historyError}`) : `${item.historyCount}`;
       const agent = item.agentId ?? "-";
-      return `<tr><td><a href="${escapeHtml(buildSessionDetailHref(item.sessionKey, language))}"><code>${escapeHtml(item.sessionKey)}</code></a></td><td>${badge(item.state, sessionStateLabel(item.state))}</td><td>${escapeHtml(agent)}</td><td>${badge(latestKind)} ${escapeHtml(latestLabel)}${escapeHtml(latestTime)}</td><td>${escapeHtml(summarizeVisibleSessionSnippet(item.latestSnippet, language, 220))}</td><td>${escapeHtml(historyState)}</td></tr>`;
+      return `<tr><td><a ${buildSessionLinkAttrs({ sessionKey: item.sessionKey, language, buildSessionDetailHref, escapeHtml, source: "session-preview-table" })}><code>${escapeHtml(item.sessionKey)}</code></a></td><td>${badge(item.state, sessionStateLabel(item.state))}</td><td>${escapeHtml(agent)}</td><td>${badge(latestKind)} ${escapeHtml(latestLabel)}${escapeHtml(latestTime)}</td><td>${escapeHtml(summarizeVisibleSessionSnippet(item.latestSnippet, language, 220))}</td><td>${escapeHtml(historyState)}</td></tr>`;
     }).join("");
   }
 

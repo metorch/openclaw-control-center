@@ -107,6 +107,26 @@ ${renderCollaborationChatStyles()}
             <button class="collab-chat-toggle" type="button" data-collab-chat-auto aria-pressed="${preferences.autoRefresh ? "true" : "false"}">${escapeHtml(preferences.autoRefresh ? labels.autoOn : labels.autoOff)}</button>
           </div>
         </header>
+        <div class="collab-chat-room-outcomes" aria-label="${escapeHtml(labels.stateLabel)}">
+          <button
+            class="collab-chat-ghost collab-chat-room-outcome"
+            type="button"
+            data-collab-room-adjudicate
+            data-collab-room-adjudicate-outcome="done"
+          >${escapeHtml(labels.markDone)}</button>
+          <button
+            class="collab-chat-ghost collab-chat-room-outcome"
+            type="button"
+            data-collab-room-adjudicate
+            data-collab-room-adjudicate-outcome="follow_up"
+          >${escapeHtml(labels.markFollowUp)}</button>
+          <button
+            class="collab-chat-ghost collab-chat-room-outcome"
+            type="button"
+            data-collab-room-adjudicate
+            data-collab-room-adjudicate-outcome="error"
+          >${escapeHtml(labels.markError)}</button>
+        </div>
         <div class="collab-chat-toolbar">
           <div class="collab-chat-toolbar-group">
             <span class="collab-chat-status-dot" data-collab-chat-presence></span>

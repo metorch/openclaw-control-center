@@ -209,7 +209,7 @@ function createDashboardFragmentHelpers(deps) {
       {
         id: "approvals",
         name: "审批与决策队列",
-        route: "/?section=projects-tasks&quick=attention#tracked-task-view",
+        route: "/?section=projects-tasks&quick=attention",
         status: "enabled",
         detail: `待审批 ${input.pendingApprovals} 条，决策队列可用。`,
       },

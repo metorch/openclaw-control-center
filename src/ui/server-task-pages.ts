@@ -1,6 +1,7 @@
 // @ts-nocheck
 
 const { badge, escapeHtml, formatTimeAgoFromNow, pickUiText } = require("./server-shared");
+const { buildSessionLinkAttrs } = require("./server-session-room-links");
 
 function createTaskPageRenderers(deps) {
   const {
@@ -12,12 +13,43 @@ function createTaskPageRenderers(deps) {
     taskStateLabel,
   } = deps;
   const TASK_BOARD_TITLE_MAX_CHARS = 20;
+  const TASK_BOARD_PAGE_SIZE = 20;
 
   function truncateTaskBoardTitle(value, maxChars = TASK_BOARD_TITLE_MAX_CHARS) {
     const text = String(value ?? "").trim();
     if (!text) return "";
     const chars = Array.from(text);
     return chars.length > maxChars ? `${chars.slice(0, maxChars).join("")}...` : text;
+  }
+
+  function clampPaginationPage(value, totalPages) {
+    const numeric = Number.parseInt(String(value ?? ""), 10);
+    if (!Number.isFinite(numeric) || numeric < 1) return 1;
+    if (numeric > totalPages) return totalPages;
+    return numeric;
+  }
+
+  function renderTaskBoardPagination(currentPage, totalPages, totalItems, paginationOptions, language) {
+    if (totalPages <= 1) return "";
+    const pageSize = Math.max(1, Number.parseInt(String(paginationOptions.pageSize ?? TASK_BOARD_PAGE_SIZE), 10) || TASK_BOARD_PAGE_SIZE);
+    const startItem = totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+    const endItem = totalItems === 0 ? 0 : Math.min(totalItems, currentPage * pageSize);
+    const summaryText = pickUiText(
+      language,
+      `Showing ${startItem}-${endItem} of ${totalItems}`,
+      `当前显示 ${startItem}-${endItem} / ${totalItems}`,
+    );
+    const pageLinks = Array.from({ length: totalPages }, (_, index) => {
+      const page = index + 1;
+      const activeClass = page === currentPage ? " is-active" : "";
+      const currentAttr = page === currentPage ? ' aria-current="page"' : "";
+      const label = String(page);
+      return `<button class="task-board-page-link${activeClass}" type="button" data-task-board-page-button data-task-board-page="${page}"${currentAttr}>${escapeHtml(label)}</button>`;
+    }).join("");
+    return `<nav class="task-board-pagination" data-task-board-pagination aria-label="${escapeHtml(pickUiText(language, "Task board pages", "任务与排程分页"))}">
+      <div class="meta task-board-page-summary" data-task-board-page-summary>${escapeHtml(summaryText)}</div>
+      <div class="task-board-page-links">${pageLinks}</div>
+    </nav>`;
   }
 
   function renderLegacyTaskBoard(cards, language = "zh", storedOrder = []) {
@@ -87,7 +119,7 @@ function createTaskPageRenderers(deps) {
   `;
   }
 
-  function renderTaskBoard(cards, language = "zh", storedOrder = [], emptyStateModel, viewMode = "cards") {
+  function renderTaskBoard(cards, language = "zh", storedOrder = [], emptyStateModel, viewMode = "cards", paginationOptions = {}) {
     if (cards.length === 0) {
       const emptyTitle = pickUiText(language, "No task or schedule cards yet.", "\u6682\u65E0\u4EFB\u52A1\u6216\u6392\u7A0B\u5361\u7247\u3002");
       const emptyDetail = pickUiText(language, "The wall is empty for now, but the live signals below still show whether timed jobs, heartbeat, current tasks, or tool calls are alive.", "\u5F53\u524D\u5361\u7247\u5899\u8FD8\u662F\u7A7A\u7684\uFF0C\u4F46\u4E0B\u9762\u7684\u5B9E\u65F6\u4FE1\u53F7\u4ECD\u4F1A\u544A\u8BC9\u4F60\uFF1A\u5B9A\u65F6\u4EFB\u52A1\u3001\u4EFB\u52A1\u5FC3\u8DF3\u3001\u5F53\u524D\u4EFB\u52A1\u3001\u5DE5\u5177\u8C03\u7528\u6709\u6CA1\u6709\u5728\u52A8\u3002");
@@ -107,7 +139,9 @@ function createTaskPageRenderers(deps) {
     const queuedCount = cards.filter((item) => item.statusTone === "idle").length;
     const scheduledCount = cards.filter((item) => item.statusTone === "scheduled").length;
     const hasTaskCards = cards.some((item) => item.cardKind === "task");
-    const topCards = cards.slice(0, 18);
+    const pageSize = Math.max(1, Number.parseInt(String(paginationOptions.pageSize ?? TASK_BOARD_PAGE_SIZE), 10) || TASK_BOARD_PAGE_SIZE);
+    const totalPages = Math.max(1, Math.ceil(cards.length / pageSize));
+    const currentPage = clampPaginationPage(paginationOptions.currentPage, totalPages);
     const manualOrder = storedOrder.length > 0 ? storedOrder : cards.map((item) => item.cardId);
     const boardOrderReadyText = pickUiText(language, "Task and schedule order is ready.", "\u4EFB\u52A1\u4E0E\u6392\u7A0B\u987A\u5E8F\u5DF2\u5C31\u7EEA\u3002");
     const boardHintText = pickUiText(language, "Drag cards to reorder your task and schedule focus. The order is saved in UI preferences.", "\u62D6\u52A8\u5361\u7247\u5373\u53EF\u91CD\u6392\u4EFB\u52A1\u4E0E\u6392\u7A0B\u7684\u5173\u6CE8\u987A\u5E8F\uFF0C\u6392\u5E8F\u4F1A\u4FDD\u5B58\u5230\u754C\u9762\u504F\u597D\u3002");
@@ -128,7 +162,11 @@ function createTaskPageRenderers(deps) {
     const recentLabel = pickUiText(language, "Recent signal", "\u6700\u8FD1\u4FE1\u53F7");
     const updatedLabel = pickUiText(language, "Updated", "\u66F4\u65B0");
     const actionsLabel = pickUiText(language, "Actions", "\u64CD\u4F5C");
-    const moreLabel = cards.length > topCards.length ? `<div class="meta">${escapeHtml(pickUiText(language, `${cards.length - topCards.length} more cards stay in the raw detail panels below.`, `\u5176\u4F59 ${cards.length - topCards.length} \u5F20\u5361\u7247\u4FDD\u7559\u5728\u4E0B\u65B9\u539F\u59CB\u660E\u7EC6\u9762\u677F\u4E2D\u3002`))}</div>` : "";
+    const paginationHtml = renderTaskBoardPagination(currentPage, totalPages, cards.length, {
+      ...paginationOptions,
+      currentPage,
+      pageSize,
+    }, language);
     const selectionKeyForCard = (card) => `${card.projectId || ""}::${card.taskId}`;
     const renderSelectionControl = (card, variant = "card") => {
       if (card.cardKind !== "task") {
@@ -159,7 +197,7 @@ function createTaskPageRenderers(deps) {
       }
       return `<button class="btn" type="button" data-task-open-room-missing>${escapeHtml(pickUiText(language, "Open detail", "\u67E5\u770B\u8BE6\u60C5"))}</button>`;
     };
-    const renderCardArticle = (card) => {
+    const renderCardArticle = (card, index) => {
       const displayTitle = truncateTaskBoardTitle(card.title);
       const priorityPanelClass = card.cardKind === "timed_job" ? "task-priority-panel compact" : "task-priority-panel";
       const primaryBadge = card.cardKind === "timed_job" ? badge("ok", pickUiText(language, "Timed job", "\u5B9A\u65F6\u4EFB\u52A1")) : badge(card.statusTone === "issue" ? "blocked" : card.statusTone === "working" ? "warn" : card.statusTone === "done" || card.taskStatus === "done" ? "done" : "enabled", card.statusLabel);
@@ -168,7 +206,7 @@ function createTaskPageRenderers(deps) {
       const topLabel = card.cardKind === "timed_job" ? pickUiText(language, "Auto run", "\u81EA\u52A8\u6267\u884C") : pickUiText(language, "Time", "\u65F6\u95F4");
       const rowOneLabel = card.cardKind === "timed_job" ? pickUiText(language, "Purpose", "\u7528\u9014") : pickUiText(language, "Current state", "\u5F53\u524D\u72B6\u6001");
       const rowTwoLabel = card.cardKind === "timed_job" ? pickUiText(language, "Runtime", "\u8FD0\u884C\u72B6\u6001") : recentLabel;
-      return `<article class="task-brief-card" draggable="true" data-task-card data-task-kind="${escapeHtml(card.cardKind)}" data-task-id="${escapeHtml(card.cardId)}" data-task-project-id="${escapeHtml(card.projectId || "")}">
+      return `<article class="task-brief-card" draggable="true" data-task-card data-task-kind="${escapeHtml(card.cardKind)}" data-task-id="${escapeHtml(card.cardId)}" data-task-project-id="${escapeHtml(card.projectId || "")}" data-task-board-item-index="${index}">
           <span class="task-status-dot ${escapeHtml(card.statusTone)}" title="${escapeHtml(card.statusDotLabel)}" aria-hidden="true"></span>
           <div class="task-drag-handle" title="${escapeHtml(dragHandleLabel)}" aria-hidden="true"><span></span><span></span><span></span></div>
           <div class="task-brief-head">
@@ -206,11 +244,11 @@ function createTaskPageRenderers(deps) {
     };
     const renderListRows = (items) =>
       items
-        .map((card) => {
+        .map((card, index) => {
           const displayTitle = truncateTaskBoardTitle(card.title);
           const typeValue = card.cardKind === "timed_job" ? detailsTypeTimedJob : detailsTypeTask;
           const focusValue = card.cardKind === "timed_job" ? card.scheduleLabel : card.priorityLabel;
-          return `<tr class="task-detail-row" data-task-list-row data-task-kind="${escapeHtml(card.cardKind)}" data-task-id="${escapeHtml(card.cardId)}" data-task-project-id="${escapeHtml(card.projectId || "")}">
+          return `<tr class="task-detail-row" data-task-list-row data-task-kind="${escapeHtml(card.cardKind)}" data-task-id="${escapeHtml(card.cardId)}" data-task-project-id="${escapeHtml(card.projectId || "")}" data-task-board-item-index="${index}">
             <td class="task-detail-cell task-detail-cell-select">${renderSelectionControl(card, "table")}</td>
             <td class="task-detail-cell task-detail-cell-type"><span class="task-list-kind ${escapeHtml(card.cardKind)}">${escapeHtml(typeValue)}</span></td>
             <td class="task-detail-cell task-detail-cell-title">
@@ -237,7 +275,7 @@ function createTaskPageRenderers(deps) {
         })
         .join("");
     return `
-    <div class="task-brief-board" data-task-board-root data-language="${escapeHtml(language)}" data-token-required="0" data-task-order="${escapeHtml(JSON.stringify(manualOrder))}" data-task-view-mode="${escapeHtml(normalizedViewMode)}">
+    <div class="task-brief-board" data-task-board-root data-language="${escapeHtml(language)}" data-token-required="0" data-task-order="${escapeHtml(JSON.stringify(manualOrder))}" data-task-view-mode="${escapeHtml(normalizedViewMode)}" data-task-board-page-size="${pageSize}" data-task-board-current-page="${currentPage}">
       <div class="task-brief-toolbar">
         <div class="task-brief-copy">
           <div class="task-brief-legend">
@@ -264,8 +302,7 @@ function createTaskPageRenderers(deps) {
         </div>
       </div>
       <div class="task-board-view task-board-view-cards" data-task-board-view-panel="cards"${normalizedViewMode === "cards" ? "" : " hidden"}>
-        <div class="task-brief-grid" data-task-card-grid>${topCards.map((card) => renderCardArticle(card)).join("")}</div>
-        ${moreLabel}
+        <div class="task-brief-grid" data-task-card-grid>${cards.map((card, index) => renderCardArticle(card, index)).join("")}</div>
       </div>
       <div class="task-board-view task-board-view-details" data-task-board-view-panel="details"${normalizedViewMode === "details" ? "" : " hidden"}>
         <div class="task-detail-table-shell">
@@ -296,6 +333,7 @@ function createTaskPageRenderers(deps) {
           </table>
         </div>
       </div>
+      ${paginationHtml}
     </div>
   `;
   }
@@ -337,7 +375,7 @@ function createTaskPageRenderers(deps) {
       <div class="meta">${escapeHtml(t("Owner", "\u8D1F\u8D23\u4EBA"))}\uFF1A${escapeHtml(task.owner)}</div>
       <div class="meta">${escapeHtml(t("Due time", "\u622A\u6B62\u65F6\u95F4"))}\uFF1A${escapeHtml(task.dueAt ?? t("Not set", "\u672A\u8BBE\u7F6E"))}</div>
       <div class="meta">${escapeHtml(t("Updated at", "\u66F4\u65B0\u65F6\u95F4"))}\uFF1A${escapeHtml(task.updatedAt)}</div>
-      <div class="meta">${escapeHtml(t("Sessions", "\u4F1A\u8BDD"))}\uFF1A${task.sessionKeys.length > 0 ? task.sessionKeys.map((id) => `<a href="${escapeHtml(buildSessionDetailHref(id, language))}"><code>${escapeHtml(id)}</code></a>`).join(" \xB7 ") : escapeHtml(t("None yet", "\u6682\u65E0"))}</div>
+      <div class="meta">${escapeHtml(t("Sessions", "\u4F1A\u8BDD"))}\uFF1A${task.sessionKeys.length > 0 ? task.sessionKeys.map((id) => `<a ${buildSessionLinkAttrs({ sessionKey: id, language, buildSessionDetailHref, escapeHtml, source: "task-detail-session-list" })}><code>${escapeHtml(id)}</code></a>`).join(" \xB7 ") : escapeHtml(t("None yet", "\u6682\u65E0"))}</div>
     </div>
     <div class="card">
       <h2>${escapeHtml(t("Execution certainty", "\u786E\u5B9A\u6027\u5224\u65AD"))}</h2>
@@ -348,9 +386,9 @@ function createTaskPageRenderers(deps) {
     </div>
     <div class="card">
       <h2>${escapeHtml(t("Session evidence", "\u4F1A\u8BDD\u8BC1\u636E"))}</h2>
-      ${linkedSessions.length > 0 ? `<ul class="story-list">${linkedSessions.map((session) => `<li><a href="${escapeHtml(session.sessionHref)}"><code>${escapeHtml(session.sessionKey)}</code></a> ${badge(session.state, sessionStateLabel(session.state))}<div class="meta">${escapeHtml(pickUiText(language, "Agent", "\u667A\u80FD\u4F53"))}\uFF1A${escapeHtml(session.agentId ?? pickUiText(language, "Unassigned", "\u672A\u5206\u914D"))} \xB7 ${escapeHtml(pickUiText(language, "Latest activity", "\u6700\u8FD1\u6D3B\u52A8"))}\uFF1A${escapeHtml(session.latestAt ? formatTimeAgoFromNow(session.latestAt, language) : pickUiText(language, "unknown", "\u672A\u77E5"))}</div><div class="meta">${escapeHtml(summarizeVisibleSessionSnippet(session.latestSnippet, language, 120))}</div></li>`).join("")}</ul>` : `<div class="meta">${escapeHtml(pickUiText(language, "No session evidence is visible yet.", "\u5F53\u524D\u8FD8\u6CA1\u6709\u53EF\u663E\u793A\u7684\u4F1A\u8BDD\u8BC1\u636E\u3002"))}</div>`}
+      ${linkedSessions.length > 0 ? `<ul class="story-list">${linkedSessions.map((session) => `<li><a ${buildSessionLinkAttrs({ sessionKey: session.sessionKey, language, buildSessionDetailHref, escapeHtml, source: "task-detail-session-evidence" })}><code>${escapeHtml(session.sessionKey)}</code></a> ${badge(session.state, sessionStateLabel(session.state))}<div class="meta">${escapeHtml(pickUiText(language, "Agent", "\u667A\u80FD\u4F53"))}\uFF1A${escapeHtml(session.agentId ?? pickUiText(language, "Unassigned", "\u672A\u5206\u914D"))} \xB7 ${escapeHtml(pickUiText(language, "Latest activity", "\u6700\u8FD1\u6D3B\u52A8"))}\uFF1A${escapeHtml(session.latestAt ? formatTimeAgoFromNow(session.latestAt, language) : pickUiText(language, "unknown", "\u672A\u77E5"))}</div><div class="meta">${escapeHtml(summarizeVisibleSessionSnippet(session.latestSnippet, language, 120))}</div></li>`).join("")}</ul>` : `<div class="meta">${escapeHtml(pickUiText(language, "No session evidence is visible yet.", "\u5F53\u524D\u8FD8\u6CA1\u6709\u53EF\u663E\u793A\u7684\u4F1A\u8BDD\u8BC1\u636E\u3002"))}</div>`}
     </div>
-    <div class="meta"><a href="${escapeHtml(buildHomeHref({ quick: "all" }, true, "projects-tasks", language))}#tracked-task-view">${escapeHtml(pickUiText(language, "Back to tracked tasks", "\u8FD4\u56DE\u8DDF\u8E2A\u4EFB\u52A1"))}</a></div>
+    <div class="meta"><a href="${escapeHtml(buildHomeHref({ quick: "all" }, true, "projects-tasks", language))}">${escapeHtml(pickUiText(language, "Back to tracked tasks", "\u8FD4\u56DE\u8DDF\u8E2A\u4EFB\u52A1"))}</a></div>
   </div>
 </body>
 </html>`;

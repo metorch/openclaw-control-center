@@ -7,6 +7,7 @@ const { renderDashboardRefreshScript } = require("./server-inline-scripts-dashbo
 const { renderSettingsBudgetLimitScript } = require("./server-inline-scripts-settings-budget");
 const { renderSettingsSafetyScript } = require("./server-inline-scripts-settings-safety");
 const { renderCardHelpTooltipsScript } = require("./server-inline-scripts-card-help");
+const { renderCollaborationRoomOpenScript } = require("./server-inline-scripts-collaboration-room-open");
 const { renderTaskBoardScript } = require("./server-inline-scripts-task-board");
 const { renderFileWorkbenchScript } = require("./server-inline-scripts-file-workbench");
 const { renderStaffModelScript } = require("./server-inline-scripts-staff-model");
@@ -21,6 +22,7 @@ export {
   renderSettingsBudgetLimitScript,
   renderSettingsSafetyScript,
   renderCardHelpTooltipsScript,
+  renderCollaborationRoomOpenScript,
   renderTaskBoardScript,
   renderFileWorkbenchScript,
   renderStaffModelScript,

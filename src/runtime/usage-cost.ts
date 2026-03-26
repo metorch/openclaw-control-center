@@ -408,11 +408,12 @@ export async function buildUsageCostSnapshot(
   mode: UsageCostMode = "full",
 ): Promise<UsageCostSnapshot> {
   if (mode === "summary") {
-    const [digests, subscriptionUsage] = await Promise.all([
+    const [digests, runtimeUsage, subscriptionUsage] = await Promise.all([
       loadCachedUsageDigests(),
+      loadCachedRuntimeUsageData(),
       loadCachedSubscriptionUsage({ includeCodexTelemetry: false }),
     ]);
-    return computeUsageCostSnapshot(snapshot, digests, [], undefined, subscriptionUsage, new Map());
+    return computeUsageCostSnapshot(snapshot, digests, [], runtimeUsage, subscriptionUsage, new Map());
   }
 
   const [digests, modelCatalog, runtimeUsage, subscriptionUsage, cronJobNameMap] = await Promise.all([

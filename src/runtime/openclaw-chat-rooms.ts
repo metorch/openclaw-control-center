@@ -26,6 +26,12 @@ export interface OpenClawChatRoomDeleteResult {
   fallbackRoomId?: string;
 }
 
+export interface OpenClawRoomScopedSessionCleanupResult {
+  roomId: string;
+  removedSessionKeys: string[];
+  updatedAgentIds: string[];
+}
+
 interface TranscriptSummaryDraft {
   roomId: string;
   title: string;
@@ -36,6 +42,7 @@ interface TranscriptSummaryDraft {
 
 interface SessionStoreRecord {
   sessionId?: string;
+  sessionKey?: string;
   updatedAt?: number;
   sessionFile?: string;
   chatType?: string;
@@ -180,9 +187,54 @@ export async function deleteOpenClawChatRoom(input: {
     }
   }
 
+  await purgeOpenClawRoomScopedSessionEntries({
+    roomId,
+    agentIds: [input.agentId],
+    openclawHomeDir: input.openclawHomeDir,
+  }).catch(() => undefined);
+
   return {
     deletedRoomId: roomId,
     fallbackRoomId,
+  };
+}
+
+export async function purgeOpenClawRoomScopedSessionEntries(input: {
+  roomId: string;
+  agentIds?: string[];
+  openclawHomeDir?: string;
+}): Promise<OpenClawRoomScopedSessionCleanupResult> {
+  const roomId = normalizeTranscriptRoomId(input.roomId);
+  if (!roomId) {
+    throw new Error("A valid roomId is required.");
+  }
+
+  const openclawHomeDir = input.openclawHomeDir ?? resolveOpenClawHomePath();
+  const normalizedAgentIds = await resolveCleanupAgentIds(input.agentIds, openclawHomeDir);
+  const removedSessionKeys = new Set<string>();
+  const updatedAgentIds = new Set<string>();
+
+  for (const agentId of normalizedAgentIds) {
+    const storePath = resolveAgentSessionsStorePath(agentId, openclawHomeDir);
+    const store = await readSessionStore(storePath);
+    const nextEntries = Object.entries(store).filter(([sessionKey, record]) => {
+      const shouldDelete = isRoomScopedSessionRecordForRoom(sessionKey, record, roomId);
+      if (shouldDelete) {
+        removedSessionKeys.add(sessionKey);
+      }
+      return !shouldDelete;
+    });
+    if (nextEntries.length === Object.keys(store).length) {
+      continue;
+    }
+    updatedAgentIds.add(agentId);
+    await writeSessionStore(storePath, Object.fromEntries(nextEntries));
+  }
+
+  return {
+    roomId,
+    removedSessionKeys: [...removedSessionKeys].sort(),
+    updatedAgentIds: [...updatedAgentIds].sort(),
   };
 }
 
@@ -472,6 +524,46 @@ function resolvePrimarySessionStoreKey(agentId: string, store: SessionStoreShape
 
   const candidate = Object.keys(store).find((key) => key.startsWith(`agent:${agentId}:`) && !key.includes(":cron:"));
   return candidate ?? preferred;
+}
+
+async function resolveCleanupAgentIds(
+  agentIds: string[] | undefined,
+  openclawHomeDir: string,
+): Promise<string[]> {
+  const explicit = [...new Set((agentIds ?? []).map(normalizeAgentId).filter(Boolean))];
+  if (explicit.length > 0) {
+    return explicit;
+  }
+
+  const agentsDir = join(openclawHomeDir, "agents");
+  const entries = await readdir(agentsDir, { withFileTypes: true }).catch(() => []);
+  return [...new Set(entries.filter((entry) => entry.isDirectory()).map((entry) => normalizeAgentId(entry.name)).filter(Boolean))];
+}
+
+function normalizeAgentId(input: string | undefined): string {
+  return String(input || "").trim();
+}
+
+function isRoomScopedSessionRecordForRoom(
+  sessionStoreKey: string,
+  record: SessionStoreRecord,
+  roomId: string,
+): boolean {
+  const normalizedRoomId = normalizeTranscriptRoomId(roomId);
+  if (!normalizedRoomId) {
+    return false;
+  }
+  return (
+    isRoomScopedSessionKeyForRoom(sessionStoreKey, normalizedRoomId) ||
+    isRoomScopedSessionKeyForRoom(record.sessionFile, normalizedRoomId) ||
+    isRoomScopedSessionKeyForRoom(record.sessionKey, normalizedRoomId)
+  );
+}
+
+function isRoomScopedSessionKeyForRoom(input: string | undefined, roomId: string): boolean {
+  const normalized = String(input || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized.includes(`thread:collab-${roomId}`) || normalized.includes(`topic-collab-${roomId}`);
 }
 
 function safeJsonParse(input: string): unknown {

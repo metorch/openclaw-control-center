@@ -78,6 +78,31 @@ test("office cards do not mark agents as running from idle historical sessions a
   assert.equal(main.officeZone, "Standby Pods");
 });
 
+test("office cards prefer a newer running session over older error history", async () => {
+  const { buildOfficeSpaceCards } = await import("../src/ui/server");
+  const snapshot = buildSnapshotFixture();
+  snapshot.sessions = [
+    {
+      sessionKey: "agent:main:cron:old-error",
+      agentId: "main",
+      state: "error",
+      lastMessageAt: "2026-03-26T01:22:20.991Z",
+    },
+    {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      state: "running",
+      lastMessageAt: "2026-03-26T08:04:52.109Z",
+    },
+  ];
+
+  const cards = buildOfficeSpaceCards(snapshot, [], ["main"]);
+  const main = cards.find((item) => item.agentId === "main");
+  assert(main, "Expected main card.");
+  assert.equal(main.status, "running");
+  assert.equal(main.officeZone, "Builder Desks");
+});
+
 test("office cards keep agents idle when they only have unfinished tasks but no live sessions", async () => {
   const { buildOfficeSpaceCards } = await import("../src/ui/server");
   const snapshot = buildSnapshotFixture();

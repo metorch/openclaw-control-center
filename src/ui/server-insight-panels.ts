@@ -8,6 +8,7 @@ const {
   pickUiText,
   safeTruncate,
 } = require("./server-shared");
+const { buildSessionLinkAttrs } = require("./server-session-room-links");
 
 function createInsightRenderers(deps) {
   const {
@@ -671,7 +672,13 @@ function createInsightRenderers(deps) {
       <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Highest usage", "最高占比"))}</span><strong>${escapeHtml(topUsage?.usagePercent !== void 0 ? `${topUsage.usagePercent.toFixed(1)}%` : "-")}</strong></div>
     </div>
     <div class="decision-list">${ranked.slice(0, 6).map((item) => {
-      const href = buildSessionDetailHref(item.sessionKey, language);
+      const sessionLinkAttrs = buildSessionLinkAttrs({
+        sessionKey: item.sessionKey,
+        language,
+        buildSessionDetailHref,
+        escapeHtml,
+        source: "usage-context-pressure",
+      });
       const tone = item.thresholdState === "critical" ? "warn" : item.thresholdState === "warn" ? "info" : item.thresholdState === "ok" ? "ok" : "blocked";
       const usageText = item.usagePercent !== void 0 ? `${item.usagePercent.toFixed(1)}%` : pickUiText(language, "Unavailable", "不可用");
       const stateLabel =
@@ -682,7 +689,7 @@ function createInsightRenderers(deps) {
             : item.thresholdState === "ok"
               ? pickUiText(language, "Healthy", "正常")
               : pickUiText(language, "Unknown", "未知");
-      return `<a class="decision-row" href="${escapeHtml(href)}">
+      return `<a class="decision-row" ${sessionLinkAttrs}>
           <div class="decision-row-copy">
             <strong>${escapeHtml(simplifyUsageLabel(item.sessionLabel))}</strong>
             <div class="meta">${badge(tone, stateLabel)} ${escapeHtml(humanizeOperatorLabel(item.agentId))} · ${escapeHtml(item.model)}</div>

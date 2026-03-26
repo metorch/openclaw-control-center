@@ -96,6 +96,10 @@ export interface CollaborationTaskReceipt {
   reviewState?: "awaiting_review" | "approved" | "rejected";
   lastResultState?: "in_progress" | "awaiting_review" | "blocked" | "failed";
   waitingFor?: "jarvis_review" | "user_confirmation";
+  manualOutcome?: "done" | "follow_up" | "error";
+  manualOutcomeAt?: string;
+  manualOutcomeBy?: string;
+  manualOutcomeNote?: string;
   lastReportedAt: string;
   lastReportedBy: string;
   taskTitle?: string;
@@ -935,7 +939,7 @@ function normalizeCollaborationRoom(
   const taskReceipts = asArray(obj?.taskReceipts)
     .map((item) => normalizeTaskReceipt(item))
     .filter((item): item is CollaborationTaskReceipt => Boolean(item))
-    .sort((a, b) => Date.parse(b.lastReportedAt) - Date.parse(a.lastReportedAt));
+    .sort((a, b) => taskReceiptActivitySortValue(b) - taskReceiptActivitySortValue(a));
   const createdAt =
     asIsoString(obj?.createdAt) ??
     fallback?.createdAt ??
@@ -1100,6 +1104,13 @@ function normalizeTaskReceipt(input: unknown): CollaborationTaskReceipt | null {
     obj.waitingFor === "jarvis_review" || obj.waitingFor === "user_confirmation"
       ? obj.waitingFor
       : undefined;
+  const manualOutcome =
+    obj.manualOutcome === "done" || obj.manualOutcome === "follow_up" || obj.manualOutcome === "error"
+      ? obj.manualOutcome
+      : undefined;
+  const manualOutcomeAt = asIsoString(obj.manualOutcomeAt);
+  const manualOutcomeBy = trimText(asString(obj.manualOutcomeBy), 120);
+  const manualOutcomeNote = trimText(asString(obj.manualOutcomeNote), 600);
 
   return {
     taskId,
@@ -1107,6 +1118,10 @@ function normalizeTaskReceipt(input: unknown): CollaborationTaskReceipt | null {
     reviewState,
     lastResultState,
     waitingFor,
+    manualOutcome,
+    manualOutcomeAt,
+    manualOutcomeBy,
+    manualOutcomeNote,
     lastReportedAt,
     lastReportedBy,
     taskTitle: trimText(asString(obj.taskTitle), 240),
@@ -1117,6 +1132,12 @@ function normalizeTaskReceipt(input: unknown): CollaborationTaskReceipt | null {
       .filter((item): item is string => Boolean(item)),
     recentOutput: trimText(asString(obj.recentOutput), 4_000),
   };
+}
+
+function taskReceiptActivitySortValue(receipt: CollaborationTaskReceipt | null | undefined): number {
+  const manualOutcomeAt = Date.parse(String(receipt?.manualOutcomeAt || ""));
+  const lastReportedAt = Date.parse(String(receipt?.lastReportedAt || ""));
+  return Math.max(Number.isFinite(manualOutcomeAt) ? manualOutcomeAt : 0, Number.isFinite(lastReportedAt) ? lastReportedAt : 0);
 }
 
 function normalizeUploadedBy(input: string | undefined): CollaborationAttachmentRecord["uploadedBy"] {

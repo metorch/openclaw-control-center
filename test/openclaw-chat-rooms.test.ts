@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   deleteOpenClawChatRoom,
   loadActiveOpenClawChatRoomId,
+  purgeOpenClawRoomScopedSessionEntries,
   readOpenClawChatRoomHistory,
 } from "../src/runtime/openclaw-chat-rooms";
 import { normalizeSessionHistoryMessages } from "../src/runtime/session-conversations";
@@ -272,6 +273,122 @@ test("deleting the active openclaw room switches the active room to a surviving 
       }),
       fallbackRoomId,
     );
+  } finally {
+    await rm(openclawHome, { recursive: true, force: true });
+  }
+});
+
+test("deleting an openclaw room removes room-scoped session store entries for that room", async () => {
+  const openclawHome = await mkdtemp(join(tmpdir(), "openclaw-room-delete-sessions-"));
+  try {
+    const workspaceRoot = join(openclawHome, "workspace");
+    const sessionsDir = join(openclawHome, "agents", "main", "sessions");
+    const deletedRoomId = "12345678-1234-4abc-8def-333333333333";
+    const keptRoomId = "12345678-1234-4abc-8def-444444444444";
+
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(join(sessionsDir, `${deletedRoomId}.jsonl`), "", "utf8");
+    await writeFile(join(sessionsDir, `${keptRoomId}.jsonl`), "", "utf8");
+    await writeFile(
+      join(sessionsDir, "sessions.json"),
+      `${JSON.stringify(
+        {
+          "agent:main:main": {
+            updatedAt: Date.now(),
+            sessionFile: join(sessionsDir, `${keptRoomId}.jsonl`),
+            chatType: "direct",
+            lastChannel: "webchat",
+            origin: {
+              provider: "webchat",
+              surface: "webchat",
+              chatType: "direct",
+            },
+          },
+          [`agent:main:thread:collab-${deletedRoomId}`]: {
+            sessionId: "thread-session-delete",
+            sessionKey: `agent:main:thread:collab-${deletedRoomId}`,
+            updatedAt: Date.now(),
+            sessionFile: join(sessionsDir, "thread-session-delete-topic-collab-" + deletedRoomId + ".jsonl"),
+          },
+          [`agent:main:thread:collab-${keptRoomId}`]: {
+            sessionId: "thread-session-keep",
+            sessionKey: `agent:main:thread:collab-${keptRoomId}`,
+            updatedAt: Date.now(),
+            sessionFile: join(sessionsDir, "thread-session-keep-topic-collab-" + keptRoomId + ".jsonl"),
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const deleted = await deleteOpenClawChatRoom({
+      agentId: "main",
+      roomId: deletedRoomId,
+      workspaceRoot,
+      openclawHomeDir: openclawHome,
+      ensureFallback: false,
+    });
+
+    assert.equal(deleted.deletedRoomId, deletedRoomId);
+    const storeAfterDelete = JSON.parse(
+      await readFile(join(sessionsDir, "sessions.json"), "utf8"),
+    ) as Record<string, unknown>;
+    assert(!(`agent:main:thread:collab-${deletedRoomId}` in storeAfterDelete));
+    assert(`agent:main:thread:collab-${keptRoomId}` in storeAfterDelete);
+    assert(`agent:main:main` in storeAfterDelete);
+  } finally {
+    await rm(openclawHome, { recursive: true, force: true });
+  }
+});
+
+test("purging room-scoped sessions can clean matching entries across agent stores", async () => {
+  const openclawHome = await mkdtemp(join(tmpdir(), "openclaw-room-purge-sessions-"));
+  try {
+    const roomId = "12345678-1234-4abc-8def-555555555555";
+    const agents = ["main", "frontend"];
+    for (const agentId of agents) {
+      const sessionsDir = join(openclawHome, "agents", agentId, "sessions");
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(
+        join(sessionsDir, "sessions.json"),
+        `${JSON.stringify(
+          {
+            [`agent:${agentId}:thread:collab-${roomId}`]: {
+              sessionKey: `agent:${agentId}:thread:collab-${roomId}`,
+              sessionFile: join(sessionsDir, `${agentId}-topic-collab-${roomId}.jsonl`),
+            },
+            [`agent:${agentId}:main`]: {
+              sessionKey: `agent:${agentId}:main`,
+              sessionFile: join(sessionsDir, `${agentId}-main.jsonl`),
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+    }
+
+    const result = await purgeOpenClawRoomScopedSessionEntries({
+      roomId,
+      openclawHomeDir: openclawHome,
+    });
+
+    assert.deepEqual(result.updatedAgentIds, ["frontend", "main"]);
+    assert.deepEqual(result.removedSessionKeys, [
+      `agent:frontend:thread:collab-${roomId}`,
+      `agent:main:thread:collab-${roomId}`,
+    ]);
+    for (const agentId of agents) {
+      const sessionsDir = join(openclawHome, "agents", agentId, "sessions");
+      const store = JSON.parse(
+        await readFile(join(sessionsDir, "sessions.json"), "utf8"),
+      ) as Record<string, unknown>;
+      assert(!(`agent:${agentId}:thread:collab-${roomId}` in store));
+      assert(`agent:${agentId}:main` in store);
+    }
   } finally {
     await rm(openclawHome, { recursive: true, force: true });
   }

@@ -168,8 +168,24 @@ function renderNativeMotionScript(language = "zh") {
     const href = anchor.getAttribute('href');
     if (!href || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('#')) return;
     if (href.startsWith('/api/')) return;
+    let nextHref = href;
+    try {
+      const currentUrl = new URL(window.location.href);
+      const targetUrl = new URL(href, window.location.href);
+      const isCrossPageNavigation =
+        targetUrl.pathname !== currentUrl.pathname || targetUrl.search !== currentUrl.search;
+      const isButtonLikeNavigation =
+        anchor.classList.contains('btn') ||
+        anchor.classList.contains('overview-action-item') ||
+        anchor.classList.contains('decision-row') ||
+        anchor.hasAttribute('data-nav-reset-scroll-top');
+      if (isCrossPageNavigation && isButtonLikeNavigation && targetUrl.hash) {
+        targetUrl.hash = '';
+      }
+      nextHref = targetUrl.pathname + targetUrl.search + targetUrl.hash;
+    } catch {}
     event.preventDefault();
-    window.location.href = href;
+    window.location.href = nextHref;
   });
 
   const panel = document.querySelector('.panel');

@@ -719,6 +719,56 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
       syncRefreshGuard();
     }
   };
+
+  const adjudicateCurrentRoomOutcome = async (outcome) => {
+    if (state.adjudicating || state.terminating || state.sending || state.roomMutationPending) return;
+    const normalizedOutcome = String(outcome || '').trim().toLowerCase();
+    if (!normalizedOutcome) return;
+    const lock = roomLockMessage();
+    if (lock) {
+      setStatus(lock, true);
+      return;
+    }
+    if (hasUploadingFiles()) {
+      setStatus(uploadBusyMessage, true);
+      return;
+    }
+    state.adjudicating = true;
+    state.pendingScrollToLatestRoomId = state.activeRoomId;
+    setRoomMenuOpen(false);
+    syncComposerState();
+    syncRefreshGuard();
+    setStatus(labels.adjudicating, true);
+    try {
+      const response = await fetch(endpoints.adjudicate, {
+        method: 'POST',
+        headers: mutationHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({
+          roomId: state.activeRoomId,
+          outcome: normalizedOutcome,
+          language: root.dataset.language || embeddedLanguage,
+        }),
+        cache: 'no-store',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.ok !== true || !payload.adjudicated) {
+        throw new Error(typeof payload?.error?.message === 'string' ? payload.error.message : labels.failed);
+      }
+      await refreshRoom('manual');
+      window.setTimeout(() => { void refreshRoom('auto'); }, 700);
+      setStatus(
+        typeof payload?.adjudicated?.message === 'string' && payload.adjudicated.message.trim()
+          ? payload.adjudicated.message
+          : labels.refreshed,
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : labels.failed, true);
+    } finally {
+      state.adjudicating = false;
+      syncComposerState();
+      syncRefreshGuard();
+    }
+  };
 `;
 }
 

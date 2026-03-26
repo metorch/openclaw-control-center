@@ -26,6 +26,9 @@ const taskStoreModuleHref = pathToFileURL(join(process.cwd(), "src", "runtime", 
 const projectMemoryModuleHref = pathToFileURL(
   join(process.cwd(), "src", "runtime", "collaboration-project-memory.ts"),
 ).href;
+const notificationCenterModuleHref = pathToFileURL(
+  join(process.cwd(), "src", "runtime", "notification-center.ts"),
+).href;
 
 function buildHelper(overrides: Record<string, unknown> = {}) {
   return createCollaborationChatHelpers({
@@ -3870,6 +3873,219 @@ test("artifact-producing primary replies without stage_result still auto-close a
     assert.equal(parsed.jarvisReceipt?.reviewState, "approved");
     assert.equal(parsed.jarvisReceipt?.lastResultState, "awaiting_review");
     assert.equal(parsed.jarvisTaskStatus, "done");
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("manual room adjudication can overwrite an earlier click and only ack linked queue items once", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-chat-manual-adjudication-"));
+
+  try {
+    const output = await runCollaborationChatModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const chatMod = unwrap(await import(${JSON.stringify(collaborationChatModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const projectStore = unwrap(await import(${JSON.stringify(projectStoreModuleHref)}));
+        const taskStore = unwrap(await import(${JSON.stringify(taskStoreModuleHref)}));
+        const { join } = await import("node:path");
+
+        const ackCalls = [];
+        const notificationCenter = {
+          queue: [
+            {
+              itemId: "queue-item-1",
+              acknowledged: false,
+            },
+          ],
+        };
+        const buildBootstrapSourceKey = (kind, id) => "bootstrap:" + String(kind || "").trim().toLowerCase() + ":" + String(id || "").trim();
+
+        const helpers = chatMod.createCollaborationChatHelpers({
+          acknowledgeActionQueueItem: async (input, center) => {
+            ackCalls.push({
+              itemId: input.itemId,
+              note: String(input.note || ""),
+            });
+            const target = center.queue.find((item) => item.itemId === input.itemId);
+            if (target) {
+              target.acknowledged = true;
+            }
+            return { ack: { itemId: input.itemId } };
+          },
+          buildCollaborationAttachmentSummary: () => "",
+          buildCollaborationBootstrapSourceKey: buildBootstrapSourceKey,
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message, statusCode = 400) => {
+            const error = new Error(message);
+            error.statusCode = statusCode;
+            return error;
+          },
+          describeCollaborationRoomEvent: () => ({ label: "", detail: "" }),
+          formatBytesCompact: () => "",
+          formatCollaborationDuration: () => "",
+          getOpenClawHomeDir: () => process.cwd(),
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          isUiLanguage: (value) => value === "en" || value === "zh",
+          loadNotificationCenter: async () => notificationCenter,
+          normalizeCollaborationAttachmentIds: (input) => Array.isArray(input) ? input : [],
+          normalizeCollaborationRoomIdPayload: async (value) => value,
+          normalizeLookupKey: (value) => String(value || "").trim().toLowerCase(),
+          optionalBoundedString: (value) => typeof value === "string" ? value : undefined,
+          pickUiText: (language, english, chinese) => language === "zh" ? chinese : english,
+          resolveCollaborationParticipantName: (directory, agentId) =>
+            directory.entries.find((entry) => String(entry.agentId || "").toLowerCase() === String(agentId || "").toLowerCase())?.displayName || agentId,
+          sanitizeCollaborationDisplayText: (value) => String(value || "").trim(),
+          safeTruncate: (value, maxLength) => String(value || "").slice(0, maxLength),
+          toCollaborationApiAttachment: (attachment) => attachment,
+        });
+
+        await projectStore.createProject({
+          projectId: "proj-manual",
+          title: "Manual adjudication project",
+          status: "active",
+          owner: "jarvis",
+        });
+        await taskStore.createTask({
+          projectId: "proj-manual",
+          taskId: "task-manual",
+          title: "Manual adjudication task",
+          status: "in_progress",
+          owner: "jarvis",
+        });
+
+        await collaborationRoom.saveCollaborationRoom(
+          collaborationRoom.defaultCollaborationRoomState({
+            roomId: "room-manual",
+            title: "Manual adjudication room",
+            titleMode: "manual",
+            projectId: "proj-manual",
+          }),
+        );
+        await collaborationRoom.appendCollaborationRoomEvents("room-manual", [
+          {
+            eventId: "evt-bootstrap-room-manual",
+            type: "user_message",
+            authorRole: "user",
+            sourceEventId: buildBootstrapSourceKey("action_queue", "queue-item-1"),
+            message: "Please resolve this queued item in the room.",
+          },
+        ]);
+        await collaborationRoom.upsertCollaborationTaskReceipt("room-manual", {
+          taskId: "task-manual",
+          projectId: "proj-manual",
+          reviewState: "awaiting_review",
+          waitingFor: "user_confirmation",
+          lastResultState: "awaiting_review",
+          lastReportedAt: "2026-03-26T01:22:00.000Z",
+          lastReportedBy: "jarvis",
+          taskTitle: "Manual adjudication task",
+          stage: "handoff",
+          summary: "Waiting for user decision.",
+          recentOutput: "Waiting for user decision.",
+        });
+
+        const directory = {
+          primaryAgentId: "jarvis",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            { agentId: "jarvis", displayName: "Jarvis", aliases: ["jarvis"] },
+          ],
+        };
+
+        const first = await helpers.adjudicateCollaborationRoomOutcome(
+          {
+            roomId: "room-manual",
+            outcome: "done",
+            language: "en",
+          },
+          directory,
+          "en",
+        );
+        const second = await helpers.adjudicateCollaborationRoomOutcome(
+          {
+            roomId: "room-manual",
+            outcome: "follow_up",
+            language: "en",
+          },
+          directory,
+          "en",
+        );
+
+        const roomState = await collaborationRoom.loadCollaborationRoom("room-manual");
+        const tasks = await taskStore.loadTaskStore();
+        const targetTask = tasks.tasks.find((task) => task.projectId === "proj-manual" && task.taskId === "task-manual");
+        const receipt = roomState.taskReceipts.find(
+          (item) => item.projectId === "proj-manual" && item.taskId === "task-manual",
+        );
+        const systemNotes = roomState.events
+          .filter((event) => event.type === "system_note")
+          .map((event) => ({
+            message: String(event.message || ""),
+            detail: String(event.detail || ""),
+          }));
+
+        process.stdout.write(JSON.stringify({
+          first,
+          second,
+          ackCalls,
+          queueAcknowledged: notificationCenter.queue.map((item) => ({
+            itemId: item.itemId,
+            acknowledged: item.acknowledged === true,
+          })),
+          receipt: receipt
+            ? {
+                manualOutcome: receipt.manualOutcome || null,
+                manualOutcomeBy: receipt.manualOutcomeBy || null,
+                manualOutcomeNote: receipt.manualOutcomeNote || null,
+                manualOutcomeAt: receipt.manualOutcomeAt || null,
+              }
+            : null,
+          taskStatus: targetTask?.status ?? null,
+          systemNotes,
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output) as {
+      first: {
+        outcome: string;
+        acknowledgedActionItemIds: string[];
+      };
+      second: {
+        outcome: string;
+        acknowledgedActionItemIds: string[];
+      };
+      ackCalls: Array<{ itemId: string; note: string }>;
+      queueAcknowledged: Array<{ itemId: string; acknowledged: boolean }>;
+      receipt: null | {
+        manualOutcome: string | null;
+        manualOutcomeBy: string | null;
+        manualOutcomeNote: string | null;
+        manualOutcomeAt: string | null;
+      };
+      taskStatus: string | null;
+      systemNotes: Array<{ message: string; detail: string }>;
+    };
+
+    assert.equal(parsed.first.outcome, "done");
+    assert.deepEqual(parsed.first.acknowledgedActionItemIds, ["queue-item-1"]);
+    assert.equal(parsed.second.outcome, "follow_up");
+    assert.deepEqual(parsed.second.acknowledgedActionItemIds, []);
+    assert.equal(parsed.ackCalls.length, 1);
+    assert.equal(parsed.ackCalls[0]?.itemId, "queue-item-1");
+    assert.match(parsed.ackCalls[0]?.note || "", /Manually marked complete/i);
+    assert.deepEqual(parsed.queueAcknowledged, [{ itemId: "queue-item-1", acknowledged: true }]);
+    assert.equal(parsed.receipt?.manualOutcome, "follow_up");
+    assert.equal(parsed.receipt?.manualOutcomeBy, "user");
+    assert.match(parsed.receipt?.manualOutcomeNote || "", /needing follow-up/i);
+    assert.match(parsed.receipt?.manualOutcomeAt || "", /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(parsed.taskStatus, "in_progress");
+    assert.equal(parsed.systemNotes.length, 2);
+    assert.match(parsed.systemNotes[0]?.message || "", /completed in the collaboration chat/i);
+    assert.match(parsed.systemNotes[1]?.detail || "", /Replaced the previous manual room result/i);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }

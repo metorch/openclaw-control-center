@@ -2,6 +2,7 @@
 
 const import_config = require("../config");
 const { badge, escapeHtml, formatTimeAgoFromNow, pickUiText } = require("./server-shared");
+const { buildSessionLinkAttrs } = require("./server-session-room-links");
 
 function createTeamPanelRenderers(deps) {
   const {
@@ -131,6 +132,12 @@ function createTeamPanelRenderers(deps) {
       const sourceLine = executionChainSourceLabel(chain, language);
       const summarySource = item.latestSnippet?.trim() ? item.latestSnippet : chain.detail;
       const summaryLine = escapeHtml(summarizeVisibleSessionSnippet(summarySource, language, 96));
+      const roomAction = item.linkedRoomId
+        ? `<button class="btn primary" type="button" data-collaboration-room-open="${escapeHtml(item.linkedRoomId)}" data-collaboration-room-source="execution-chain">${escapeHtml(pickUiText(language, "Open room", "\u67E5\u770B\u4F1A\u8BDD"))}</button>`
+        : `<a class="btn" ${buildSessionLinkAttrs({ sessionKey: item.sessionKey, language, buildSessionDetailHref: () => item.sessionHref, escapeHtml, source: "execution-chain-card" })}>${escapeHtml(pickUiText(language, "Open session", "\u67E5\u770B\u4F1A\u8BDD"))}</a>`;
+      const sessionDetailAction = item.linkedRoomId
+        ? `<a class="btn" href="${escapeHtml(item.sessionHref)}">${escapeHtml(pickUiText(language, "Session page", "\u4F1A\u8BDD\u8BE6\u60C5\u9875"))}</a>`
+        : "";
       return `<article class="execution-chain-card">
         <div class="execution-chain-head">
           <div class="execution-chain-copy">
@@ -145,8 +152,9 @@ function createTeamPanelRenderers(deps) {
           <div class="execution-chain-summary">${summaryLine}</div>
         </div>
         <div class="execution-chain-actions">
-          <a class="btn" href="${escapeHtml(item.sessionHref)}">${escapeHtml(pickUiText(language, "Open session", "\u67E5\u770B\u4F1A\u8BDD"))}</a>
+          ${roomAction}
           ${item.taskHref ? `<a class="btn" href="${escapeHtml(item.taskHref)}">${escapeHtml(pickUiText(language, "Open task", "\u67E5\u770B\u4EFB\u52A1"))}</a>` : ""}
+          ${sessionDetailAction}
         </div>
       </article>`;
     }).join("")}</div>`;
@@ -185,7 +193,7 @@ function createTeamPanelRenderers(deps) {
         card.parentSessionKey ? { label: card.kind === "inter_session" ? pickUiText(language, "Sending session", "\u53D1\u9001\u4F1A\u8BDD") : pickUiText(language, "Parent session", "\u7236\u4F1A\u8BDD"), value: card.parentSessionKey } : void 0,
         card.childSessionKey ? { label: card.kind === "inter_session" ? pickUiText(language, "Receiving session", "\u63A5\u6536\u4F1A\u8BDD") : pickUiText(language, "Child session", "\u5B50\u4F1A\u8BDD"), value: card.childSessionKey } : void 0,
       ].filter((item) => Boolean(item?.value)).filter((item, index, values) => values.findIndex((entry) => entry.value === item.value) === index).map((item) => `<li>${escapeHtml(item.label)}\uFF1A<code>${escapeHtml(item.value)}</code></li>`).join("");
-      const foldedRunsList = card.aggregateCount > 1 ? `<ul class="story-list collaboration-folded-list">${card.aggregateItems.slice(0, 6).map((item) => `<li><a href="${escapeHtml(item.sessionHref)}"><code>${escapeHtml(item.sessionKey)}</code></a> \xB7 ${escapeHtml(item.latestAt ? formatTimeAgoFromNow(item.latestAt, language) : pickUiText(language, "time unavailable", "\u65F6\u95F4\u672A\u77E5"))}</li>`).join("")}${card.aggregateItems.length > 6 ? `<li>${escapeHtml(pickUiText(language, `${card.aggregateItems.length - 6} more runs are folded here.`, `\u5176\u4F59 ${card.aggregateItems.length - 6} \u6761\u76F8\u8FD1\u534F\u4F5C\u4E5F\u5DF2\u7ECF\u6298\u53E0\u5728\u8FD9\u91CC\u3002`))}</li>` : ""}</ul>` : "";
+      const foldedRunsList = card.aggregateCount > 1 ? `<ul class="story-list collaboration-folded-list">${card.aggregateItems.slice(0, 6).map((item) => `<li><a ${buildSessionLinkAttrs({ sessionKey: item.sessionKey, language, buildSessionDetailHref: () => item.sessionHref, escapeHtml, source: "collaboration-thread-folded" })}><code>${escapeHtml(item.sessionKey)}</code></a> \xB7 ${escapeHtml(item.latestAt ? formatTimeAgoFromNow(item.latestAt, language) : pickUiText(language, "time unavailable", "\u65F6\u95F4\u672A\u77E5"))}</li>`).join("")}${card.aggregateItems.length > 6 ? `<li>${escapeHtml(pickUiText(language, `${card.aggregateItems.length - 6} more runs are folded here.`, `\u5176\u4F59 ${card.aggregateItems.length - 6} \u6761\u76F8\u8FD1\u534F\u4F5C\u4E5F\u5DF2\u7ECF\u6298\u53E0\u5728\u8FD9\u91CC\u3002`))}</li>` : ""}</ul>` : "";
       const roomRefsHtml = card.roomRefs.length > 0 ? `<div class="collaboration-room-ref-block">
               <div class="meta collaboration-room-ref-head">${escapeHtml(pickUiText(language, "Group chat references", "\u7FA4\u804A\u5F15\u7528"))}</div>
               <ul class="story-list collaboration-room-ref-list">${card.roomRefs.map((ref) => `<li><strong>#${ref.sequence} \xB7 ${escapeHtml(ref.label)}</strong><div class="meta">${escapeHtml(formatTimeAgoFromNow(ref.createdAt, language))}</div><div class="meta">${escapeHtml(ref.detail)}</div></li>`).join("")}</ul>
@@ -217,7 +225,7 @@ function createTeamPanelRenderers(deps) {
           <div class="collaboration-thread-foot">
             <div class="meta">${escapeHtml(card.sourceLabel)}</div>
             <div class="collaboration-thread-actions">
-              <a class="btn" href="${escapeHtml(card.sessionHref)}">${escapeHtml(pickUiText(language, "Open session", "\u67E5\u770B\u4F1A\u8BDD"))}</a>
+              <a class="btn" ${buildSessionLinkAttrs({ sessionKey: card.sessionKey, language, buildSessionDetailHref: () => card.sessionHref, escapeHtml, source: "collaboration-thread-card" })}>${escapeHtml(pickUiText(language, "Open session", "\u67E5\u770B\u4F1A\u8BDD"))}</a>
               ${card.taskHref ? `<a class="btn" href="${escapeHtml(card.taskHref)}">${escapeHtml(pickUiText(language, "Open task", "\u67E5\u770B\u4EFB\u52A1"))}</a>` : ""}
             </div>
           </div>

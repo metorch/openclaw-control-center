@@ -4,7 +4,6 @@ function renderTaskBoardScript() {
     return `<script>
 (() => {
   const roots = Array.from(document.querySelectorAll('[data-task-board-root]'));
-  if (roots.length === 0) return;
 
   roots.forEach((root) => {
     const grid = root.querySelector('[data-task-card-grid]');
@@ -16,6 +15,8 @@ function renderTaskBoardScript() {
     const bulkDeleteButton = root.querySelector('[data-task-board-bulk-delete]');
     const cardsPanel = root.querySelector('[data-task-board-view-panel="cards"]');
     const detailsPanel = root.querySelector('[data-task-board-view-panel="details"]');
+    const pageSummaryNode = root.querySelector('[data-task-board-page-summary]');
+    const pageNav = root.querySelector('[data-task-board-pagination]');
     const viewButtons = Array.from(root.querySelectorAll('[data-task-view-mode-button]')).filter((button) => button instanceof HTMLButtonElement);
     const l = {
       ready: language === 'en' ? 'Task and schedule order is ready.' : '\u4EFB\u52A1\u4E0E\u6392\u7A0B\u987A\u5E8F\u5DF2\u5C31\u7EEA\u3002',
@@ -48,6 +49,9 @@ function renderTaskBoardScript() {
       blocked: language === 'en'
         ? 'This machine has not set a safety passcode yet, so board changes are blocked.'
         : '\u8FD9\u53F0\u673A\u5668\u8FD8\u6CA1\u8BBE\u7F6E\u5B89\u5168\u53E3\u4EE4\uFF0C\u6240\u4EE5\u5F53\u524D\u4E0D\u80FD\u4FEE\u6539\u770B\u677F\u3002',
+      pageSummary: language === 'en'
+        ? 'Showing {start}-{end} of {total}'
+        : '\u5F53\u524D\u663E\u793A {start}-{end} / {total}',
     };
 
     const normalizeViewMode = (value) => String(value || '').trim().toLowerCase() === 'details' ? 'details' : 'cards';
@@ -94,6 +98,55 @@ function renderTaskBoardScript() {
       return true;
     };
     const listCards = () => Array.from(grid.querySelectorAll('[data-task-card]')).filter((card) => card instanceof HTMLElement);
+    const listRows = () => Array.from(root.querySelectorAll('[data-task-list-row]')).filter((row) => row instanceof HTMLElement);
+    const taskBoardPageButtons = () =>
+      Array.from(root.querySelectorAll('[data-task-board-page-button]')).filter((button) => button instanceof HTMLButtonElement);
+    const parsePositiveInt = (value, fallbackValue) => {
+      const parsed = Number.parseInt(String(value || '').trim(), 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackValue;
+    };
+    const taskBoardPageSize = Math.max(1, parsePositiveInt(root.dataset.taskBoardPageSize, 20));
+    const taskBoardTotalItems = Math.max(listCards().length, listRows().length);
+    const taskBoardTotalPages = Math.max(1, Math.ceil(taskBoardTotalItems / taskBoardPageSize));
+    const clampTaskBoardPage = (value) => {
+      const parsed = parsePositiveInt(value, 1);
+      return Math.min(taskBoardTotalPages, Math.max(1, parsed));
+    };
+    const applyTaskBoardPage = (value) => {
+      currentTaskBoardPage = clampTaskBoardPage(value);
+      root.dataset.taskBoardCurrentPage = String(currentTaskBoardPage);
+      const startOffset = (currentTaskBoardPage - 1) * taskBoardPageSize;
+      const endOffset = startOffset + taskBoardPageSize;
+      listCards().forEach((card, index) => {
+        card.hidden = index < startOffset || index >= endOffset;
+      });
+      listRows().forEach((row, index) => {
+        row.hidden = index < startOffset || index >= endOffset;
+      });
+      if (pageSummaryNode instanceof HTMLElement) {
+        const startItem = taskBoardTotalItems === 0 ? 0 : startOffset + 1;
+        const endItem = taskBoardTotalItems === 0 ? 0 : Math.min(taskBoardTotalItems, endOffset);
+        pageSummaryNode.textContent = l.pageSummary
+          .replace('{start}', String(startItem))
+          .replace('{end}', String(endItem))
+          .replace('{total}', String(taskBoardTotalItems));
+      }
+      taskBoardPageButtons().forEach((button) => {
+        const buttonPage = clampTaskBoardPage(button.dataset.taskBoardPage);
+        const active = buttonPage === currentTaskBoardPage;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        if (active) {
+          button.setAttribute('aria-current', 'page');
+        } else {
+          button.removeAttribute('aria-current');
+        }
+      });
+      if (pageNav instanceof HTMLElement) {
+        pageNav.hidden = taskBoardTotalPages <= 1;
+      }
+      syncCardDraggability();
+    };
     const currentVisibleOrder = () =>
       listCards()
         .map((card) => (card.dataset.taskId || '').trim())
@@ -118,11 +171,7 @@ function renderTaskBoardScript() {
         if (!taskId || seen.has(taskId)) return;
         grid.appendChild(card);
       });
-    };
-    const composePersistedOrder = (visibleOrder) => {
-      const visibleSet = new Set(visibleOrder);
-      const hiddenOrder = storedOrder.filter((taskId) => !visibleSet.has(taskId));
-      return visibleOrder.concat(hiddenOrder);
+      applyTaskBoardPage(currentTaskBoardPage);
     };
     const selectionKeyForInput = (input) => {
       const explicit = (input.dataset.taskSelectKey || '').trim();
@@ -167,7 +216,7 @@ function renderTaskBoardScript() {
     const syncCardDraggability = () => {
       const allowDrag = currentViewMode === 'cards' && !busy;
       listCards().forEach((card) => {
-        card.setAttribute('draggable', allowDrag ? 'true' : 'false');
+        card.setAttribute('draggable', allowDrag && !card.hidden ? 'true' : 'false');
       });
     };
     const syncViewModeUi = () => {
@@ -199,8 +248,7 @@ function renderTaskBoardScript() {
       return payload;
     };
     const persistVisibleOrder = async () => {
-      const visibleOrder = currentVisibleOrder();
-      const nextOrder = composePersistedOrder(visibleOrder);
+      const nextOrder = currentVisibleOrder();
       const changed = JSON.stringify(nextOrder) !== JSON.stringify(storedOrder);
       if (!changed) {
         setStatus(l.ready);
@@ -344,7 +392,7 @@ function renderTaskBoardScript() {
       if (card.dataset.taskDragBound === '1') return;
       card.dataset.taskDragBound = '1';
       card.addEventListener('dragstart', (event) => {
-        if (busy || currentViewMode !== 'cards' || !canMutateTaskBoard()) {
+        if (busy || currentViewMode !== 'cards' || card.hidden || !canMutateTaskBoard()) {
           if (!canMutateTaskBoard()) {
             setStatus(taskBoardLockMessage());
           }
@@ -364,7 +412,7 @@ function renderTaskBoardScript() {
         }
       });
       card.addEventListener('dragover', (event) => {
-        if (!draggingCard || draggingCard === card || currentViewMode !== 'cards') return;
+        if (!draggingCard || draggingCard === card || currentViewMode !== 'cards' || card.hidden) return;
         event.preventDefault();
         clearDragTargets();
         card.classList.add('drag-target');
@@ -394,6 +442,7 @@ function renderTaskBoardScript() {
     let dropApplied = false;
     let busy = false;
     let currentViewMode = normalizeViewMode(root.dataset.taskViewMode || 'cards');
+    let currentTaskBoardPage = clampTaskBoardPage(root.dataset.taskBoardCurrentPage);
     const selectedTaskKeys = new Set();
     const selectedTasksByKey = new Map();
 
@@ -423,6 +472,13 @@ function renderTaskBoardScript() {
     root.addEventListener('click', (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
+      const pageButton = target.closest('[data-task-board-page-button]');
+      if (pageButton instanceof HTMLButtonElement) {
+        if (busy) return;
+        cancelDrag();
+        applyTaskBoardPage(pageButton.dataset.taskBoardPage);
+        return;
+      }
       const viewButton = target.closest('[data-task-view-mode-button]');
       if (viewButton instanceof HTMLButtonElement) {
         const nextMode = normalizeViewMode(viewButton.dataset.taskViewModeValue);
@@ -461,6 +517,7 @@ function renderTaskBoardScript() {
     });
 
     syncViewModeUi();
+    applyTaskBoardPage(currentTaskBoardPage);
     syncSelectionUi();
     const initialTaskBoardLockMessage = taskBoardLockMessage();
     setStatus(initialTaskBoardLockMessage || l.ready);
@@ -472,6 +529,195 @@ function renderTaskBoardScript() {
       const lockMessage = taskBoardLockMessage();
       setStatus(lockMessage || l.ready);
     });
+  });
+
+  const inlinePageRoots = Array.from(document.querySelectorAll('[data-inline-page-root]'));
+  inlinePageRoots.forEach((root) => {
+    if (!(root instanceof HTMLElement)) return;
+    const items = Array.from(root.querySelectorAll('[data-inline-page-item]')).filter((item) => item instanceof HTMLElement);
+    if (items.length === 0) return;
+    const language = (root.dataset.language || document.documentElement.lang || 'zh').trim().toLowerCase() === 'en' ? 'en' : 'zh';
+    const pageSizeRaw = Number.parseInt(String(root.dataset.inlinePageSize || '').trim(), 10);
+    const pageSize = Number.isFinite(pageSizeRaw) && pageSizeRaw > 0 ? pageSizeRaw : items.length;
+    const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+    let currentPage = Number.parseInt(String(root.dataset.inlineCurrentPage || '').trim(), 10);
+    currentPage = Number.isFinite(currentPage) && currentPage > 0 ? Math.min(totalPages, currentPage) : 1;
+    const summaryNode = root.querySelector('[data-inline-page-summary]');
+    const pagerNode = root.querySelector('[data-inline-pager]');
+    const pageButtons = () =>
+      Array.from(root.querySelectorAll('[data-inline-page-button]')).filter((button) => button instanceof HTMLButtonElement);
+    const summaryTemplate = language === 'en' ? 'Showing {start}-{end} of {total}.' : '\u5F53\u524D\u663E\u793A {start}-{end} / {total}\u3002';
+    const clampPage = (value) => {
+      const parsed = Number.parseInt(String(value || '').trim(), 10);
+      if (!Number.isFinite(parsed) || parsed < 1) return 1;
+      return Math.min(totalPages, parsed);
+    };
+    const applyPage = (value) => {
+      currentPage = clampPage(value);
+      root.dataset.inlineCurrentPage = String(currentPage);
+      const startOffset = (currentPage - 1) * pageSize;
+      const endOffset = startOffset + pageSize;
+      items.forEach((item, index) => {
+        item.hidden = index < startOffset || index >= endOffset;
+      });
+      if (summaryNode instanceof HTMLElement) {
+        const startItem = items.length === 0 ? 0 : startOffset + 1;
+        const endItem = items.length === 0 ? 0 : Math.min(items.length, endOffset);
+        summaryNode.textContent = summaryTemplate
+          .replace('{start}', String(startItem))
+          .replace('{end}', String(endItem))
+          .replace('{total}', String(items.length));
+      }
+      pageButtons().forEach((button) => {
+        const active = clampPage(button.dataset.inlinePage) === currentPage;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        if (active) {
+          button.setAttribute('aria-current', 'page');
+        } else {
+          button.removeAttribute('aria-current');
+        }
+      });
+      if (pagerNode instanceof HTMLElement) {
+        pagerNode.hidden = totalPages <= 1;
+      }
+    };
+    root.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const button = target.closest('[data-inline-page-button]');
+      if (!(button instanceof HTMLButtonElement)) return;
+      applyPage(button.dataset.inlinePage);
+    });
+    applyPage(currentPage);
+  });
+
+  const queueLanguage = (document.documentElement.lang || 'zh').trim().toLowerCase() === 'en' ? 'en' : 'zh';
+  const queueCopy = {
+    creating: queueLanguage === 'en' ? 'Starting room...' : '\u6B63\u5728\u8865\u5F00\u623F\u95F4...',
+    openRoom: queueLanguage === 'en' ? 'Open room' : '\u67E5\u770B\u4F1A\u8BDD',
+    createFailed: queueLanguage === 'en' ? 'Failed to start a collaboration room.' : '\u8865\u5F00\u534F\u4F5C\u623F\u95F4\u5931\u8D25\u3002',
+    blocked: queueLanguage === 'en'
+      ? 'This machine has not set a safety passcode yet, so queue actions are blocked.'
+      : '\u8FD9\u53F0\u673A\u5668\u8FD8\u6CA1\u8BBE\u7F6E\u5B89\u5168\u53E3\u4EE4\uFF0C\u6240\u4EE5\u5F53\u524D\u4E0D\u80FD\u5904\u7406\u961F\u5217\u52A8\u4F5C\u3002',
+    writeLocked: queueLanguage === 'en'
+      ? 'Write access is off. Turn on the top toolbar unlock before creating a room.'
+      : '\u5199\u5165\u89E3\u9501\u5DF2\u5173\u95ED\uFF0C\u8BF7\u5148\u5728\u9876\u90E8\u5DE5\u5177\u680F\u5F00\u542F\u540E\u518D\u8865\u5F00\u623F\u95F4\u3002',
+  };
+  const getQueueMutationState = () =>
+    typeof window.__openclawGetMutationAuthState === 'function'
+      ? window.__openclawGetMutationAuthState()
+      : { gateRequired: false, tokenConfigured: true, canMutate: true };
+  const queueMutationHeaders = (headers = {}) =>
+    typeof window.__openclawGetMutationAuthHeaders === 'function'
+      ? window.__openclawGetMutationAuthHeaders(headers)
+      : headers;
+  const dispatchCollaborationRoomOpen = (roomId, source = 'task-queue') => {
+    const normalizedRoomId = String(roomId || '').trim();
+    if (!normalizedRoomId) return false;
+    window.dispatchEvent(
+      new CustomEvent('openclaw:collaboration-room-open', {
+        detail: { roomId: normalizedRoomId, source },
+      }),
+    );
+    return true;
+  };
+
+  const queueRoots = Array.from(document.querySelectorAll('[data-task-queue-root]'));
+  queueRoots.forEach((root) => {
+    if (!(root instanceof HTMLElement)) return;
+    const buttons = Array.from(root.querySelectorAll('[data-task-queue-tab-button]')).filter((button) => button instanceof HTMLButtonElement);
+    const panels = Array.from(root.querySelectorAll('[data-task-queue-panel]')).filter((panel) => panel instanceof HTMLElement);
+    if (buttons.length === 0 || panels.length === 0) return;
+    const activeBootstrapKeys = new Set();
+
+    const normalizeTab = (value) => String(value || '').trim().toLowerCase() === 'followup' ? 'followup' : 'decision';
+    const applyTab = (value) => {
+      const currentTab = normalizeTab(value);
+      root.dataset.taskQueueCurrentTab = currentTab;
+      buttons.forEach((button) => {
+        const active = normalizeTab(button.dataset.taskQueueTab) === currentTab;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      panels.forEach((panel) => {
+        panel.hidden = normalizeTab(panel.dataset.taskQueuePanel) !== currentTab;
+      });
+    };
+
+    root.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const button = target.closest('[data-task-queue-tab-button]');
+      if (button instanceof HTMLButtonElement) {
+        applyTab(button.dataset.taskQueueTab || root.dataset.taskQueueDefaultTab || 'decision');
+        return;
+      }
+      const bootstrapButton = target.closest('[data-collaboration-room-bootstrap]');
+      if (!(bootstrapButton instanceof HTMLButtonElement)) return;
+      event.preventDefault();
+      const kind = (bootstrapButton.dataset.collaborationRoomBootstrap || '').trim();
+      const bootstrapId = (bootstrapButton.dataset.collaborationRoomBootstrapId || '').trim();
+      if (!kind || !bootstrapId) return;
+      const mutationState = getQueueMutationState();
+      if (mutationState.gateRequired && !mutationState.tokenConfigured) {
+        window.alert(queueCopy.blocked);
+        return;
+      }
+      if (mutationState.gateRequired && !mutationState.canMutate) {
+        window.alert(queueCopy.writeLocked);
+        return;
+      }
+      const busyKey = kind + '::' + bootstrapId;
+      if (activeBootstrapKeys.has(busyKey)) return;
+      const originalLabel = bootstrapButton.textContent || queueCopy.openRoom;
+      const payload = { kind };
+      if (kind === 'approval') {
+        payload.approvalId = bootstrapId;
+      } else {
+        payload.itemId = bootstrapId;
+      }
+      activeBootstrapKeys.add(busyKey);
+      bootstrapButton.disabled = true;
+      bootstrapButton.textContent = queueCopy.creating;
+      void fetch('/api/collaboration/rooms/bootstrap', {
+        method: 'POST',
+        headers: queueMutationHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify(payload),
+      })
+        .then(async (response) => {
+          let body = null;
+          try {
+            body = await response.json();
+          } catch {
+            body = null;
+          }
+          if (!response.ok || !body?.room?.roomId) {
+            const message = body?.error?.message || body?.message || queueCopy.createFailed;
+            throw new Error(String(message || queueCopy.createFailed));
+          }
+          const roomId = String(body.room.roomId || '').trim();
+          bootstrapButton.disabled = false;
+          bootstrapButton.textContent = queueCopy.openRoom;
+          bootstrapButton.dataset.collaborationRoomOpen = roomId;
+          bootstrapButton.dataset.collaborationRoomSource =
+            (bootstrapButton.dataset.collaborationRoomBootstrapSource || '').trim() || 'task-queue-bootstrap';
+          bootstrapButton.removeAttribute('data-collaboration-room-bootstrap');
+          bootstrapButton.removeAttribute('data-collaboration-room-bootstrap-id');
+          bootstrapButton.removeAttribute('data-collaboration-room-bootstrap-source');
+          dispatchCollaborationRoomOpen(roomId, bootstrapButton.dataset.collaborationRoomSource || 'task-queue-bootstrap');
+        })
+        .catch((error) => {
+          bootstrapButton.disabled = false;
+          bootstrapButton.textContent = originalLabel;
+          window.alert(error instanceof Error ? error.message : queueCopy.createFailed);
+        })
+        .finally(() => {
+          activeBootstrapKeys.delete(busyKey);
+        });
+    });
+
+    applyTab(root.dataset.taskQueueDefaultTab || 'decision');
   });
 })();
 </script>`;

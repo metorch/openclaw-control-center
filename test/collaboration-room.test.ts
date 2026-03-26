@@ -330,6 +330,67 @@ test("task cards tolerate missing source events when back-linking room refs", ()
   );
 });
 
+test("task cards normalize source event ids when back-linking room refs", () => {
+  const helpers = createRoomHelpersForSmoke();
+  const cards = [
+    {
+      taskId: "task-ops",
+      sessionKeys: ["agent:ops:thread:room-normalized-source"],
+    },
+  ];
+  const roomStates = [
+    {
+      roomId: "room-normalized-source",
+      attachments: [],
+      events: [
+        {
+          sequence: 20,
+          eventId: "evt-user-original",
+          type: "user_message",
+          createdAt: "2026-03-24T12:00:00.000Z",
+          authorRole: "user",
+          message: "Please run the maintenance pass.",
+        },
+        {
+          sequence: 21,
+          eventId: "evt-dispatch",
+          type: "dispatch_started",
+          createdAt: "2026-03-24T12:00:02.000Z",
+          authorRole: "system",
+          agentId: "ops",
+          sourceEventId: "EVT-USER-ORIGINAL",
+          relatedSessionKey: "agent:ops:thread:room-normalized-source",
+        },
+        {
+          sequence: 22,
+          eventId: "evt-follow-up",
+          type: "system_note",
+          createdAt: "2026-03-24T12:00:04.000Z",
+          authorRole: "system",
+          sourceEventId: "evt-user-original",
+          detail: "Jarvis is waiting for the maintenance summary.",
+        },
+      ],
+    },
+  ];
+
+  const [attached] = helpers.attachCollaborationRoomRefsToCards(cards, roomStates, "en");
+
+  assert.equal(attached?.linkedRoomId, "room-normalized-source");
+  assert.deepEqual(
+    attached?.roomRefs?.map((item: { sequence: number; roomId: string; type: string }) => ({
+      sequence: item.sequence,
+      roomId: item.roomId,
+      type: item.type,
+    })),
+    [
+      { sequence: 20, roomId: "room-normalized-source", type: "user_message" },
+      { sequence: 21, roomId: "room-normalized-source", type: "dispatch_started" },
+      { sequence: 22, roomId: "room-normalized-source", type: "system_note" },
+    ],
+  );
+});
+
 test("collaboration room state keeps project binding and empty collaboration receipts by default", () => {
   const state = defaultCollaborationRoomState({
     roomId: "room-alpha",
@@ -1334,6 +1395,116 @@ test("local-only collaboration rooms resolve and load without a Jarvis transcrip
   }
 });
 
+test("local collaboration rooms degrade to local history when enrichment fails", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-room-degraded-local-"));
+
+  try {
+    const output = await runCollaborationRoomModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const roomHelpersMod = unwrap(await import(${JSON.stringify(serverCollaborationRoomModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const { join } = await import("node:path");
+
+        const helpers = roomHelpersMod.createCollaborationRoomHelpers({
+          buildCollaborationRoomApiEvent: (event) => ({
+            ...event,
+            label: event.type,
+            detail: event.detail || event.message || "",
+            targetDisplayNames: [],
+            fallbackDisplayName: undefined,
+            attachments: [],
+            messageHtml: undefined,
+            detailHtml: undefined,
+            relatedSessionHref: undefined,
+            syncControlMessage: false,
+          }),
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message) => new Error(message),
+          deriveAgentAnimalIdentity: () => ({ accent: "#0f766e", imageHref: "" }),
+          getOpenClawHomeDir: () => process.cwd(),
+          getSearchLimitMax: () => 20,
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          humanizeOperatorLabel: (value) => value,
+          loadCachedStaffRecentActivity: async () => new Map(),
+          normalizeAgentIdCandidate: (value) => {
+            const trimmed = String(value ?? "").trim().toLowerCase();
+            return trimmed ? trimmed : undefined;
+          },
+          normalizeSessionHistoryMessages: () => [],
+          normalizeLookupKey: (value) => String(value ?? "").trim().toLowerCase(),
+          pickLatestSessionActivityTimestamp: (...values) => values.find(Boolean),
+          pickUiText: (_language, english) => english,
+          resolveConfiguredWorkspaceRoot: () => "",
+          resolveStaffStatusDotTone: () => "idle",
+          safeTruncate: (value, max = Number.MAX_SAFE_INTEGER) => String(value ?? "").slice(0, max),
+          staffCurrentWorkLabel: () => ({ label: "Current task", value: "Idle" }),
+          staffStatusDotLabel: () => {
+            throw new Error("participant labels unavailable");
+          },
+          toSortableMs: (value) => {
+            const parsed = Date.parse(value ?? "");
+            return Number.isNaN(parsed) ? 0 : parsed;
+          },
+        });
+
+        const room = await collaborationRoom.createCollaborationRoom({
+          roomId: "room-local-fallback",
+          title: "Local fallback room",
+          titleMode: "manual",
+          projectId: "proj-local-fallback",
+        });
+        await collaborationRoom.appendCollaborationRoomEvents(room.roomId, [
+          {
+            eventId: "evt-user",
+            type: "user_message",
+            authorRole: "user",
+            message: "[cron] keep this seeded prompt visible even if enrichment fails",
+          },
+        ]);
+        const directory = {
+          primaryAgentId: "main",
+          primaryDisplayName: "Jarvis",
+          entries: [
+            {
+              agentId: "main",
+              displayName: "Jarvis",
+              aliases: ["main", "jarvis"],
+              primary: true,
+              identity: { accent: "#0f766e", imageHref: "" },
+            },
+          ],
+        };
+        const roomView = await helpers.buildCollaborationRoomApiView({
+          roomId: room.roomId,
+          language: "en",
+          afterSequence: 0,
+          limit: 20,
+          readSequence: 0,
+          directory,
+          primaryAgentId: directory.primaryAgentId,
+          primaryDisplayName: directory.primaryDisplayName,
+        });
+        process.stdout.write(JSON.stringify({
+          degraded: roomView.degraded === true,
+          summary: roomView.project?.summary ?? "",
+          eventTypes: roomView.events.map((event) => event.type),
+          messages: roomView.events.map((event) => event.message ?? ""),
+        }));
+      `,
+    );
+
+    const parsed = JSON.parse(output);
+    assert.equal(parsed.degraded, true);
+    assert.match(parsed.summary, /local room history only/i);
+    assert.deepEqual(parsed.eventTypes, ["user_message"]);
+    assert.match(parsed.messages[0], /\[cron\]/i);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("legacy transcript-backed rooms still load and bootstrap local metadata", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "collab-room-legacy-transcript-"));
 
@@ -2012,6 +2183,73 @@ test("stale collaboration receipts with attached deliverables do not degrade to 
   });
 
   assert.equal(executionState, "done");
+});
+
+test("manual room adjudication overrides visible collaboration execution state", () => {
+  const helpers = createRoomHelpersForSmoke();
+
+  assert.equal(
+    helpers.deriveCollaborationExecutionStateForSmoke({
+      receipt: {
+        taskId: "task-manual-done",
+        projectId: "proj-manual",
+        manualOutcome: "done",
+        manualOutcomeAt: "2026-03-26T09:20:00.000Z",
+        lastResultState: "in_progress",
+        lastReportedAt: "2026-03-26T09:10:00.000Z",
+        lastReportedBy: "jarvis",
+      },
+      task: {
+        taskId: "task-manual-done",
+        projectId: "proj-manual",
+        status: "in_progress",
+        updatedAt: "2026-03-26T09:10:00.000Z",
+      },
+    }),
+    "done",
+  );
+
+  assert.equal(
+    helpers.deriveCollaborationExecutionStateForSmoke({
+      receipt: {
+        taskId: "task-manual-followup",
+        projectId: "proj-manual",
+        manualOutcome: "follow_up",
+        manualOutcomeAt: "2026-03-26T09:21:00.000Z",
+        reviewState: "approved",
+        lastReportedAt: "2026-03-26T09:10:00.000Z",
+        lastReportedBy: "jarvis",
+      },
+      task: {
+        taskId: "task-manual-followup",
+        projectId: "proj-manual",
+        status: "done",
+        updatedAt: "2026-03-26T09:10:00.000Z",
+      },
+    }),
+    "in_progress",
+  );
+
+  assert.equal(
+    helpers.deriveCollaborationExecutionStateForSmoke({
+      receipt: {
+        taskId: "task-manual-error",
+        projectId: "proj-manual",
+        manualOutcome: "error",
+        manualOutcomeAt: "2026-03-26T09:22:00.000Z",
+        lastResultState: "awaiting_review",
+        lastReportedAt: "2026-03-26T09:10:00.000Z",
+        lastReportedBy: "jarvis",
+      },
+      task: {
+        taskId: "task-manual-error",
+        projectId: "proj-manual",
+        status: "in_progress",
+        updatedAt: "2026-03-26T09:10:00.000Z",
+      },
+    }),
+    "failed",
+  );
 });
 
 test("expired failed collaboration receipts no longer keep participants in a red failed state", () => {

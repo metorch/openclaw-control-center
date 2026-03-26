@@ -264,6 +264,11 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
   autoButton.addEventListener('click', () => { setAutoRefresh(!state.autoRefresh); });
   createButton.addEventListener('click', () => { void createRoom(); });
   terminateButton.addEventListener('click', () => { void terminateCurrentRoomWork(); });
+  adjudicateButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      void adjudicateCurrentRoomOutcome(button.dataset.collabRoomAdjudicateOutcome || '');
+    });
+  });
   sendButton.addEventListener('click', () => { void sendCurrentMessage(); });
   fileInput.addEventListener('change', () => {
     queueFiles(fileInput.files);

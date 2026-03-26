@@ -30,8 +30,10 @@ let collaborationTaskStoreWriteChain = Promise.resolve();
 
 function createCollaborationChatHelpers(deps) {
   const {
+    acknowledgeActionQueueItem,
     abortCollaborationSessionRun,
     buildCollaborationAttachmentSummary,
+    buildCollaborationBootstrapSourceKey,
     buildSessionDetailHref,
     collaborationRecoverableFailureTiming,
     createRequestValidationError,
@@ -41,6 +43,7 @@ function createCollaborationChatHelpers(deps) {
     getOpenClawHomeDir,
     getOpenClawWorkspaceRoot,
     isUiLanguage,
+    loadNotificationCenter,
     normalizeCollaborationAttachmentIds,
     normalizeCollaborationRoomIdPayload,
     normalizeLookupKey,
@@ -611,6 +614,102 @@ function createCollaborationChatHelpers(deps) {
       activeAgentIds,
       taskIds: blockedTasks.map((task) => task.taskId),
       message: statusMessage,
+    };
+  }
+
+  async function adjudicateCollaborationRoomOutcome(payload, directory, defaultLanguage) {
+    const roomId = await normalizeCollaborationRoomIdPayload(payload.roomId, directory);
+    const languageInput = optionalBoundedString(payload.lang ?? payload.language, "lang", 8);
+    const language =
+      languageInput && isUiLanguage(languageInput.trim().toLowerCase())
+        ? languageInput.trim().toLowerCase()
+        : defaultLanguage;
+    const outcome = normalizeManualOutcome(
+      optionalBoundedString(payload.outcome, "outcome", 24)?.trim().toLowerCase(),
+    );
+    if (!outcome) {
+      throw createRequestValidationError("A valid collaboration room outcome is required.", 400);
+    }
+    const note = optionalBoundedString(payload.note, "note", 240);
+    const roomState = await import_collaboration_room.loadCollaborationRoom(roomId);
+    const taskStore = await import_task_store.loadTaskStore().catch(() => ({ tasks: [] }));
+    const projectTitleById = await loadCollaborationProjectTitleById();
+    const outcomeLabel = manualOutcomeLabel(outcome, language);
+    const systemMessage = manualOutcomeNoteMessage(outcome, language);
+    const now = new Date().toISOString();
+    const targetReceipts = roomActionableTaskReceipts(roomState, taskStore);
+    const nextTaskStatus = manualOutcomeTaskStatus(outcome);
+
+    await Promise.allSettled(
+      targetReceipts.map(async (receipt) => {
+        await import_collaboration_room.upsertCollaborationTaskReceipt(roomId, {
+          ...receipt,
+          manualOutcome: outcome,
+          manualOutcomeAt: now,
+          manualOutcomeBy: "user",
+          manualOutcomeNote: note || systemMessage,
+        });
+        await updateCollaborationTaskStatusDirect({
+          projectId: receipt.projectId,
+          taskId: receipt.taskId,
+          status: nextTaskStatus,
+        }).catch(() => void 0);
+      }),
+    );
+
+    const previousOutcome = normalizeManualOutcome(
+      targetReceipts.find((receipt) => receipt.manualOutcome)?.manualOutcome,
+    );
+    const detailParts = [
+      previousOutcome && previousOutcome !== outcome
+        ? pickUiText(
+            language,
+            `Replaced the previous manual room result (${manualOutcomeLabel(previousOutcome, language)}).`,
+            `已覆盖之前的人工判定（${manualOutcomeLabel(previousOutcome, language)}）。`,
+          )
+        : "",
+      note ? note.trim() : "",
+    ].filter(Boolean);
+    await import_collaboration_room.appendCollaborationRoomEvents(roomId, [
+      {
+        eventId: randomUUID(),
+        type: "system_note",
+        authorRole: "system",
+        agentId: directory.primaryAgentId,
+        message: systemMessage,
+        detail: detailParts.join(" ") || outcomeLabel,
+      },
+    ]);
+
+    const nextState = await import_collaboration_room.loadCollaborationRoom(roomId);
+    const affectedProjectIds = uniqueCompactStrings(targetReceipts.map((receipt) => receipt.projectId));
+    for (const projectId of affectedProjectIds) {
+      await syncProjectOpenTasksForRoom(
+        projectId,
+        projectTitleById.get(projectId) || projectId,
+        nextState,
+      ).catch(() => void 0);
+    }
+    const acknowledgedActionItemIds = await acknowledgeLinkedActionQueueItemsForRoom({
+      roomState: nextState,
+      outcome,
+      language,
+    }).catch(() => []);
+    const message = pickUiText(
+      language,
+      `${outcomeLabel}. Updated ${targetReceipts.length} task(s) in this room.`,
+      `${outcomeLabel}。已更新该房间中的 ${targetReceipts.length} 个任务。`,
+    );
+    return {
+      roomId,
+      outcome,
+      outcomeLabel,
+      updatedAt: now,
+      taskIds: targetReceipts.map((receipt) => receipt.taskId),
+      updatedTaskCount: targetReceipts.length,
+      acknowledgedActionItemIds,
+      acknowledgedActionCount: acknowledgedActionItemIds.length,
+      message,
     };
   }
 
@@ -2668,6 +2767,155 @@ function createCollaborationChatHelpers(deps) {
     });
   }
 
+  async function loadCollaborationProjectTitleById() {
+    const projectStore = await import_project_store.loadProjectStore().catch(() => ({ projects: [] }));
+    return new Map(
+      (projectStore?.projects || []).map((project) => [project.projectId, project.title || project.projectId]),
+    );
+  }
+
+  function normalizeManualOutcome(value) {
+    if (value === "done" || value === "follow_up" || value === "error") {
+      return value;
+    }
+    return "";
+  }
+
+  function manualOutcomeLabel(outcome, language) {
+    switch (normalizeManualOutcome(outcome)) {
+      case "done":
+        return pickUiText(language, "Manually marked complete", "人工判定：已完成");
+      case "follow_up":
+        return pickUiText(language, "Manually marked for follow-up", "人工判定：待继续");
+      case "error":
+        return pickUiText(language, "Manually marked as error", "人工判定：报错");
+      default:
+        return "";
+    }
+  }
+
+  function manualOutcomeTaskStatus(outcome) {
+    switch (normalizeManualOutcome(outcome)) {
+      case "done":
+        return "done";
+      case "error":
+        return "blocked";
+      case "follow_up":
+      default:
+        return "in_progress";
+    }
+  }
+
+  function manualOutcomeNoteMessage(outcome, language) {
+    switch (normalizeManualOutcome(outcome)) {
+      case "done":
+        return pickUiText(
+          language,
+          "The user manually marked this room as completed in the collaboration chat.",
+          "用户在协作群聊中将该房间手动标记为已完成。",
+        );
+      case "follow_up":
+        return pickUiText(
+          language,
+          "The user manually marked this room as needing follow-up in the collaboration chat.",
+          "用户在协作群聊中将该房间手动标记为待继续。",
+        );
+      case "error":
+        return pickUiText(
+          language,
+          "The user manually marked this room as errored in the collaboration chat.",
+          "用户在协作群聊中将该房间手动标记为报错。",
+        );
+      default:
+        return "";
+    }
+  }
+
+  function roomActionableTaskReceipts(roomState, taskStore) {
+    const tasksByKey = new Map(
+      (taskStore?.tasks || []).map((task) => [`${task.projectId}::${task.taskId}`, task]),
+    );
+    const actionable = (roomState?.taskReceipts || []).filter((receipt) => {
+      const key = `${receipt.projectId}::${receipt.taskId}`;
+      const taskStatus = String(tasksByKey.get(key)?.status || "").trim();
+      return (
+        receipt.reviewState === "awaiting_review" ||
+        receipt.waitingFor === "user_confirmation" ||
+        receipt.lastResultState === "awaiting_review" ||
+        receipt.lastResultState === "in_progress" ||
+        taskStatus === "in_progress" ||
+        taskStatus === "blocked" ||
+        taskStatus === "todo"
+      );
+    });
+    if (actionable.length > 0) {
+      return actionable;
+    }
+    return (roomState?.taskReceipts || []).length > 0 ? [roomState.taskReceipts[0]] : [];
+  }
+
+  function collectCollaborationRoomEventReferenceKeys(roomState) {
+    const keys = new Set();
+    for (const event of roomState?.events || []) {
+      const eventIdKey = normalizeLookupKey(event?.eventId || "");
+      const sourceEventIdKey = normalizeLookupKey(event?.sourceEventId || "");
+      if (eventIdKey) {
+        keys.add(eventIdKey);
+      }
+      if (sourceEventIdKey) {
+        keys.add(sourceEventIdKey);
+      }
+    }
+    return keys;
+  }
+
+  async function acknowledgeLinkedActionQueueItemsForRoom(input) {
+    if (
+      typeof loadNotificationCenter !== "function" ||
+      typeof acknowledgeActionQueueItem !== "function" ||
+      typeof buildCollaborationBootstrapSourceKey !== "function"
+    ) {
+      return [];
+    }
+    const center = await loadNotificationCenter().catch(() => void 0);
+    if (!center || !Array.isArray(center.queue) || center.queue.length === 0) {
+      return [];
+    }
+    const roomEventKeys = collectCollaborationRoomEventReferenceKeys(input.roomState);
+    if (roomEventKeys.size === 0) {
+      return [];
+    }
+    const matchingItems = center.queue.filter((item) => {
+      if (item?.acknowledged) {
+        return false;
+      }
+      const bootstrapKey = normalizeLookupKey(
+        buildCollaborationBootstrapSourceKey("action_queue", item.itemId),
+      );
+      return Boolean(bootstrapKey) && roomEventKeys.has(bootstrapKey);
+    });
+    if (matchingItems.length === 0) {
+      return [];
+    }
+    const note = pickUiText(
+      input.language,
+      `${manualOutcomeLabel(input.outcome, input.language)} for room ${input.roomState.roomId}.`,
+      `${manualOutcomeLabel(input.outcome, input.language)}：${input.roomState.roomId}`,
+    );
+    await Promise.allSettled(
+      matchingItems.map((item) =>
+        acknowledgeActionQueueItem(
+          {
+            itemId: item.itemId,
+            note,
+          },
+          center,
+        ),
+      ),
+    );
+    return matchingItems.map((item) => item.itemId);
+  }
+
   async function closePendingUserConfirmationTasksForRoom(input) {
     const roomState = await import_collaboration_room.loadCollaborationRoom(input.roomId).catch(() => void 0);
     const pendingReceipts = (roomState?.taskReceipts || []).filter(
@@ -4556,6 +4804,7 @@ function createCollaborationChatHelpers(deps) {
     buildCollaborationRoomApiEvent,
     collectCollaborationAgentReplyAttachments,
     createCollaborationRoomMessage,
+    adjudicateCollaborationRoomOutcome,
     terminateCollaborationRoomWork,
     dispatchCollaborationRoomMessage,
     dispatchCollaborationTurnToAgent,
