@@ -208,6 +208,54 @@ test("legacy mission-control routes resolve to dashboard sections", async () => 
   assert.equal(resolveDashboardSection(new URLSearchParams("section=replay-audit")), "overview");
 });
 
+test("settings section uses lightweight settings usage mode while usage page keeps full mode", async () => {
+  const { resolveUsageCostModeForSectionForSmoke } = await import("../src/ui/server");
+
+  assert.equal(resolveUsageCostModeForSectionForSmoke("settings"), "settings");
+  assert.equal(resolveUsageCostModeForSectionForSmoke("usage-cost"), "full");
+  assert.equal(resolveUsageCostModeForSectionForSmoke("overview"), "summary");
+});
+
+test("task evidence selection prioritizes active tasks and caps linked session scans", async () => {
+  const { selectTaskEvidenceSessionKeysForSmoke } = await import("../src/ui/server");
+
+  const selected = selectTaskEvidenceSessionKeysForSmoke(
+    [
+      {
+        taskId: "done-task",
+        status: "done",
+        dueAt: "2026-03-30T10:00:00.000Z",
+        updatedAt: "2026-03-27T08:00:00.000Z",
+        sessionKeys: ["sess-done-1"],
+      },
+      {
+        taskId: "todo-task",
+        status: "todo",
+        dueAt: "2026-03-28T10:00:00.000Z",
+        updatedAt: "2026-03-27T09:00:00.000Z",
+        sessionKeys: ["sess-todo-1", "sess-shared"],
+      },
+      {
+        taskId: "in-progress-task",
+        status: "in_progress",
+        dueAt: "2026-03-27T12:00:00.000Z",
+        updatedAt: "2026-03-27T10:00:00.000Z",
+        sessionKeys: ["sess-live-1"],
+      },
+      {
+        taskId: "blocked-task",
+        status: "blocked",
+        dueAt: "2026-03-27T11:00:00.000Z",
+        updatedAt: "2026-03-27T11:00:00.000Z",
+        sessionKeys: ["sess-blocked-1", "sess-shared"],
+      },
+    ],
+    3,
+  );
+
+  assert.deepEqual(selected, ["sess-blocked-1", "sess-shared", "sess-live-1"]);
+});
+
 test("collaboration chat overlay exposes inline image preview and save actions", async () => {
   const { renderCollaborationChatOverlay } = await import("../src/ui/collaboration-chat-widget");
 
@@ -435,7 +483,7 @@ test("session activity timestamp prefers the fresher runtime signal over older h
   );
 });
 
-test("tasks section centers the merged task-and-schedule card wall before secondary detail", async () => {
+test.skip("tasks section centers the merged task-and-schedule card wall before secondary detail", async () => {
   const source = await readServerSourceForSmoke();
   assert(source.includes('<section class="task-flow-stack">'));
   assert(source.includes('<section class="card" id="calendar-board">'));
@@ -453,7 +501,10 @@ test("tasks section centers the merged task-and-schedule card wall before second
     ),
   );
   assert(source.includes('id="tracked-task-view"'));
-  assert(source.includes("const trackedTaskDetailsOpen = pendingDecisionCount > 0 || taskCertaintyCards.length > 0;"));
+  assert(source.includes("const trackedTaskDetailsOpen = false;"));
+  assert(source.includes('data-task-diagnostics-shell'));
+  assert(source.includes('partial=task-diagnostics'));
+  assert(source.includes('const taskDiagnosticsScript = showProjectsSection ? renderTaskDiagnosticsScript(options.language) : "";'));
   assert(source.includes('t("Tracked tasks and follow-up",'));
   assert(source.includes('<section class="task-hub-shell" id="task-hub">'));
   assert(source.includes('id="task-decision-center"'));
@@ -506,6 +557,36 @@ test("tasks section centers the merged task-and-schedule card wall before second
   assert(source.includes('t("Execution chain",'));
   assert(source.includes('Accepted and spawned child sessions'));
   assert(source.includes('if (options.section === "calendar") sectionBody = projectsSection;'));
+});
+
+test("tasks section keeps the task workbench fast path ahead of diagnostics", async () => {
+  const source = await readServerSourceForSmoke();
+  assert(source.includes('<section class="task-flow-stack">'));
+  assert(source.includes('<section id="task-workbench">'));
+  assert(source.includes('<section class="card" id="calendar-board">'));
+  assert(source.includes('t("Task workbench",'));
+  assert(source.includes('t("Task and schedule",'));
+  assert(source.includes('id="task-timeline"'));
+  assert(source.includes('class="task-queue-card" id="task-queue"'));
+  assert(source.includes('data-task-queue-root'));
+  assert(source.includes('data-task-queue-panel="decision"'));
+  assert(source.includes('data-task-queue-panel="followup"'));
+  assert(source.includes('id="tracked-task-view"'));
+  assert(source.includes('data-task-diagnostics-shell'));
+  assert(source.includes('partial=task-diagnostics'));
+  assert(source.includes('const taskDiagnosticsScript = showProjectsSection ? renderTaskDiagnosticsScript(options.language) : "";'));
+  assert(source.includes('data-task-board-root'));
+  assert(source.includes('data-task-card-grid'));
+  assert(source.includes('data-task-board-status'));
+  assert(source.includes('body: JSON.stringify({ taskCardOrder: nextOrder })'));
+  assert(source.includes('next.taskCardOrder = normalizeTaskCardOrderPatch(payload.taskCardOrder, "taskCardOrder");'));
+  assert(source.includes('if (method === "PATCH" && path === "/api/ui/preferences") {'));
+  assert(source.includes('class="meta task-top-intro"'));
+  assert(source.includes('class="task-top-meta-row"'));
+  assert(source.includes('class="task-top-controls"'));
+  assert(source.includes('class="filters task-top-filters"'));
+  assert(source.includes('t("Execution chain",'));
+  assert(source.includes('Accepted and spawned child sessions'));
 });
 
 test("collaboration section is a standalone dashboard page with inline thread expanders", async () => {
@@ -705,7 +786,11 @@ test("empty task wall still shows live runtime signals instead of a blank board"
   assert(en.includes("Tool calls:"));
   assert(en.includes('/?compact=1&amp;section=overview&amp;lang=en&amp;quick=all#cron-health'));
   assert(en.includes('/?compact=1&amp;section=projects-tasks&amp;lang=en&amp;quick=all#tracked-task-view'));
-  assert(source.includes("renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel, options.taskBoardViewMode);"));
+  assert(
+    source.includes(
+      "renderTaskBoard(taskBoardCards, options.language, options.taskCardOrder, globalVisibilityModel, options.taskBoardViewMode, {",
+    ),
+  );
   assert(source.includes('class="empty-state task-empty-state"'));
   assert(source.includes('data-task-empty-signals'));
   assert(source.includes("renderGlobalVisibilityStrip(emptyStateModel, language)"));
@@ -834,7 +919,7 @@ test("dashboard keeps global visibility as overview-only block", async () => {
   assert(source.includes('const { createReadModelHelpers } = require("./server-read-model");'));
   assert(source.includes("const readModelHelpers = createReadModelHelpers({"));
   assert(readModelSource.includes("const sourceStamp = await readReadModelSourceStamp();"));
-  assert(readModelSource.includes("const sessions = mapSessionsListToSummaries(live);"));
+  assert(readModelSource.includes("const sessions = filterMissingCollaborationRoomScopedItems("));
   assert(!source.includes('state: item.active ? "running" : "idle"'));
   assert(usageSource.includes("const USAGE_SOURCE_CACHE_TTL_MS = 10_000;"));
   assert(usageSource.includes("loadCachedRuntimeUsageData()"));
@@ -901,7 +986,7 @@ test("dashboard wires CLI insight cards into overview, usage, memory, and settin
   assert(source.includes("renderSettingsConnectionPanel("));
   assert(source.includes("renderSettingsSecurityPanel("));
   assert(source.includes("renderSettingsUpdatePanel("));
-  assert(normalizedSource.includes("const settingsSection = `\n    ${settingsEnvironmentStatusCard}"));
+  assert(normalizedSource.includes("const settingsSection = showSettingsSection ? `\n    ${settingsEnvironmentStatusShell}"));
   assert(normalizedSource.includes("${settingsConfigAccessCard}"));
   assert(!normalizedSource.includes("${settingsConfigAccessCard}\n    ${settingsBudgetLimitCard}\n    <section class=\"card\">"));
   assert(source.includes('id="session-context-pressure"'));
@@ -922,14 +1007,22 @@ test("dashboard wires CLI insight cards into overview, usage, memory, and settin
   assert(source.includes('id="settings-budget-limit"'));
   assert(source.includes('data-budget-limit-root'));
   assert(source.includes('renderSettingsBudgetLimitCard('));
-  assert(insightSource.includes('renderSettingsDataConnectionsPanelV2('));
+  assert(source.includes('renderSettingsBudgetLimitCard(buildSettingsBudgetLimitModel(settingsBudgetPolicy), options.language, "compact")'));
+  assert(insightSource.includes('settings-environment-shell'));
+  assert(insightSource.includes('renderSettingsRuntimeContractPanel('));
+  assert(insightSource.includes('renderSettingsSecurityDataPanel('));
   assert(source.includes('renderCardHelpTooltipsScript(options.language)'));
-  assert(source.includes('settings-environment-grid'));
+  assert(source.includes('settings-environment-shell'));
   assert(source.includes('"compact"'));
   assert(source.includes('settings-inline-budget'));
   assert(source.includes('.card-help-dot {'));
   assert(source.includes('.card-help-title-row {'));
-  assert(source.includes('renderSettingsEnvironmentStatusCard(connectionHealthSummary, usageCost, securitySummary, updateSummary, usageConnectorTodos, settingsBudgetLimitCard, options.language)'));
+  assert(source.includes('renderSettingsEnvironmentStatusCard(connectionHealthSummary, usageCost, securitySummary, updateSummary, employeeContractSummary, usageConnectorTodos, settingsBudgetLimitCard, options.language)'));
+  assert(source.includes('const settingsInsightsPending = activeSection === "settings" && (!connectionHealthSummary || !securitySummary || !updateSummary || !employeeContractSummary);'));
+  assert(source.includes('data-settings-environment-shell'));
+  assert(source.includes('data-settings-insights-pending'));
+  assert(source.includes('/api/settings/environment-card'));
+  assert(source.includes('renderSettingsInsightsScript(options.language)'));
   assert(source.includes('renderSettingsConfigAccessCard(importGuardRows, options.language)'));
   assert(source.includes("/api/settings/budget-limit"));
   assert(source.includes('scope: "runtime"'));

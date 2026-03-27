@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME } from "./operator-display";
@@ -16,6 +16,10 @@ const CODEX_AUTH_PATH = join(CODEX_HOME, "auth.json");
 const CODEX_SESSIONS_DIR = join(CODEX_HOME, "sessions");
 const CODEX_RATE_LIMIT_CONNECTOR_PATH = join(CODEX_SESSIONS_DIR, "**", "*.jsonl");
 const CODEX_RATE_LIMIT_SESSION_SCAN_LIMIT = 48;
+const CODEX_RATE_LIMIT_DAY_FOLDER_SCAN_LIMIT = 21;
+const CODEX_RATE_LIMIT_TAIL_READ_BYTES = 256 * 1024;
+const CODEX_RATE_LIMIT_FULL_FALLBACK_MAX_BYTES = 8 * 1024 * 1024;
+const CODEX_RATE_LIMIT_FULL_FALLBACK_FILE_LIMIT = 8;
 const CODEX_WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_WHAM_USAGE_TIMEOUT_MS = 3_000;
 const SUBSCRIPTION_SNAPSHOT_PATHS = [
@@ -188,7 +192,7 @@ export interface UsageCostSnapshot {
   connectors: UsageConnectorStatus;
 }
 
-export type UsageCostMode = "full" | "summary";
+export type UsageCostMode = "full" | "summary" | "settings";
 
 interface UsageBreakdownGroups {
   byAgent: UsageBreakdownRow[];
@@ -414,6 +418,16 @@ export async function buildUsageCostSnapshot(
       loadCachedSubscriptionUsage({ includeCodexTelemetry: false }),
     ]);
     return computeUsageCostSnapshot(snapshot, digests, [], runtimeUsage, subscriptionUsage, new Map());
+  }
+
+  if (mode === "settings") {
+    const [digests, modelCatalog, runtimeUsage, subscriptionUsage] = await Promise.all([
+      loadCachedUsageDigests(),
+      loadCachedModelContextCatalog(),
+      loadCachedRuntimeUsageData(),
+      loadCachedSubscriptionUsage({ includeCodexTelemetry: false }),
+    ]);
+    return computeUsageCostSnapshot(snapshot, digests, modelCatalog, runtimeUsage, subscriptionUsage, new Map());
   }
 
   const [digests, modelCatalog, runtimeUsage, subscriptionUsage, cronJobNameMap] = await Promise.all([
@@ -1944,11 +1958,11 @@ async function loadSubscriptionUsage(options: { includeCodexTelemetry?: boolean 
     }
   }
 
-  const codexWhamUsage = includeCodexTelemetry ? await loadCodexWhamUsage(connectHint) : undefined;
-  if (codexWhamUsage?.status === "connected") return codexWhamUsage;
-
   const codexRateLimitUsage = includeCodexTelemetry ? await loadCodexRateLimitUsage(connectHint) : undefined;
   if (codexRateLimitUsage?.status === "connected") return codexRateLimitUsage;
+
+  const codexWhamUsage = includeCodexTelemetry ? await loadCodexWhamUsage(connectHint) : undefined;
+  if (codexWhamUsage?.status === "connected") return codexWhamUsage;
 
   if (partial) return partial;
   if (codexWhamUsage) return codexWhamUsage;
@@ -2125,15 +2139,35 @@ async function loadCodexRateLimitUsage(connectHint: string): Promise<UsageSubscr
   if (fileEntries.length === 0) return undefined;
 
   let latest: CodexRateLimitSnapshot | undefined;
+  const fullFallbackCandidates: Array<{ path: string; mtimeMs: number }> = [];
   for (const entry of fileEntries) {
     let parsed: CodexRateLimitSnapshot | undefined;
     try {
-      parsed = parseCodexRateLimitFromSessionLog(await readFile(entry.path, "utf8"), entry.path, entry.mtimeMs);
+      const tail = await readUtf8FileTail(entry.path, CODEX_RATE_LIMIT_TAIL_READ_BYTES);
+      parsed = parseCodexRateLimitFromSessionLog(tail.raw, entry.path, entry.mtimeMs);
+      if (
+        !parsed &&
+        tail.truncated &&
+        tail.sizeBytes <= CODEX_RATE_LIMIT_FULL_FALLBACK_MAX_BYTES &&
+        fullFallbackCandidates.length < CODEX_RATE_LIMIT_FULL_FALLBACK_FILE_LIMIT
+      ) {
+        fullFallbackCandidates.push(entry);
+      }
     } catch {
       continue;
     }
     if (!parsed) continue;
     if (!latest || compareCodexRateLimitSnapshots(parsed, latest) > 0) latest = parsed;
+    return usageSubscriptionFromCodexRateLimitSnapshotFast(parsed, connectHint);
+  }
+  for (const entry of fullFallbackCandidates) {
+    try {
+      const parsed = parseCodexRateLimitFromSessionLog(await readFile(entry.path, "utf8"), entry.path, entry.mtimeMs);
+      if (!parsed) continue;
+      return usageSubscriptionFromCodexRateLimitSnapshotFast(parsed, connectHint);
+    } catch {
+      continue;
+    }
   }
   if (!latest) return undefined;
 
@@ -2222,6 +2256,57 @@ async function loadCodexWhamUsage(connectHint: string): Promise<UsageSubscriptio
   const snapshot = parseCodexWhamUsageResponse(raw, `${CODEX_WHAM_USAGE_URL} (via ${CODEX_AUTH_PATH})`);
   if (!snapshot) return undefined;
   return usageSubscriptionFromCodexWhamSnapshot(snapshot, connectHint);
+}
+
+function usageSubscriptionFromCodexRateLimitSnapshotFast(
+  latest: CodexRateLimitSnapshot,
+  connectHint: string,
+): UsageSubscriptionStatus {
+  const consumed = clampPercent(latest.primaryUsedPercent);
+  const remaining = Math.max(0, 100 - consumed);
+  const primaryWindowLabel = formatWindowMinutesLabel(latest.primaryWindowMinutes) || "primary";
+  const secondaryWindowLabel =
+    formatWindowMinutesLabel(latest.secondaryWindowMinutes) ||
+    (latest.secondaryUsedPercent !== undefined ? "Week" : undefined);
+  const cycleEnd = toIsoFromEpoch(latest.primaryResetAtMs);
+  const cycleStart =
+    cycleEnd && latest.primaryWindowMinutes
+      ? new Date(Date.parse(cycleEnd) - latest.primaryWindowMinutes * 60 * 1000).toISOString()
+      : undefined;
+  const planType = latest.planType?.trim() ? latest.planType.trim() : "unknown";
+  const secondaryResetAt = toIsoFromEpoch(latest.secondaryResetAtMs);
+  const secondaryUsageLabel =
+    latest.secondaryUsedPercent !== undefined
+      ? ` Secondary ${latest.secondaryUsedPercent.toFixed(1)}%${secondaryWindowLabel ? ` (${secondaryWindowLabel})` : ""}${secondaryResetAt ? ` reset=${secondaryResetAt}` : ""}.`
+      : "";
+
+  return {
+    status: "connected",
+    planLabel: `Codex live quota (${primaryWindowLabel})`,
+    consumed,
+    remaining,
+    limit: 100,
+    usagePercent: consumed,
+    unit: "%",
+    cycleStart,
+    cycleEnd,
+    sourcePath: `${latest.sourcePath} (Codex token_count rate_limits)`,
+    detail:
+      `Codex CLI rate-limit signal. limit=${latest.limitId ?? "unknown"} plan=${planType} primary=${primaryWindowLabel} used=${consumed.toFixed(1)}% remaining=${remaining.toFixed(1)}%.` +
+      `${cycleEnd ? ` reset=${cycleEnd}.` : ""}` +
+      `${secondaryUsageLabel}`,
+    primaryWindowLabel,
+    primaryUsedPercent: consumed,
+    primaryRemainingPercent: remaining,
+    primaryResetAt: cycleEnd,
+    secondaryWindowLabel,
+    secondaryUsedPercent: latest.secondaryUsedPercent,
+    secondaryRemainingPercent:
+      latest.secondaryUsedPercent !== undefined ? Math.max(0, 100 - latest.secondaryUsedPercent) : undefined,
+    secondaryResetAt,
+    connectHint,
+    reasonCode: "provider_connected",
+  };
 }
 
 function parseCodexRateLimitFromSessionLog(
@@ -2414,6 +2499,9 @@ async function collectRecentJsonlFiles(
   rootDir: string,
   limit: number,
 ): Promise<Array<{ path: string; mtimeMs: number }>> {
+  const datedFiles = await collectRecentDatePartitionedJsonlFiles(rootDir, limit);
+  if (datedFiles.length > 0) return datedFiles;
+
   const dirs = [rootDir];
   const files: Array<{ path: string; mtimeMs: number }> = [];
   while (dirs.length > 0) {
@@ -2441,6 +2529,112 @@ async function collectRecentJsonlFiles(
 
   files.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return files.slice(0, Math.max(1, limit));
+}
+
+async function collectRecentDatePartitionedJsonlFiles(
+  rootDir: string,
+  limit: number,
+): Promise<Array<{ path: string; mtimeMs: number }>> {
+  const dayDirs = await collectRecentDatePartitionDirs(rootDir, CODEX_RATE_LIMIT_DAY_FOLDER_SCAN_LIMIT);
+  if (dayDirs.length === 0) return [];
+
+  const files: Array<{ path: string; mtimeMs: number }> = [];
+  for (const dayDir of dayDirs) {
+    let entries;
+    try {
+      entries = await readdir(dayDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+      const entryPath = join(dayDir, entry.name);
+      try {
+        const entryStat = await stat(entryPath);
+        files.push({
+          path: entryPath,
+          mtimeMs: entryStat.mtimeMs,
+        });
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return files.slice(0, Math.max(1, limit));
+}
+
+async function collectRecentDatePartitionDirs(rootDir: string, dayLimit: number): Promise<string[]> {
+  let yearEntries;
+  try {
+    yearEntries = await readdir(rootDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const yearDirs = yearEntries
+    .filter((entry) => entry.isDirectory() && /^\d{4}$/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((a, b) => b.localeCompare(a, "en"));
+  if (yearDirs.length === 0) return [];
+
+  const dayDirs: string[] = [];
+  for (const year of yearDirs) {
+    let monthEntries;
+    try {
+      monthEntries = await readdir(join(rootDir, year), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    const monthDirs = monthEntries
+      .filter((entry) => entry.isDirectory() && /^\d{2}$/.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((a, b) => b.localeCompare(a, "en"));
+    for (const month of monthDirs) {
+      let dateEntries;
+      try {
+        dateEntries = await readdir(join(rootDir, year, month), { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      const dateDirs = dateEntries
+        .filter((entry) => entry.isDirectory() && /^\d{2}$/.test(entry.name))
+        .map((entry) => entry.name)
+        .sort((a, b) => b.localeCompare(a, "en"));
+      for (const day of dateDirs) {
+        dayDirs.push(join(rootDir, year, month, day));
+        if (dayDirs.length >= dayLimit) {
+          return dayDirs;
+        }
+      }
+    }
+  }
+
+  return dayDirs;
+}
+
+async function readUtf8FileTail(
+  filePath: string,
+  maxBytes: number,
+): Promise<{ raw: string; truncated: boolean; sizeBytes: number }> {
+  const handle = await open(filePath, "r");
+  try {
+    const fileStat = await handle.stat();
+    const bytesToRead = Math.max(0, Math.min(maxBytes, fileStat.size));
+    if (bytesToRead === 0) {
+      return { raw: "", truncated: false, sizeBytes: fileStat.size };
+    }
+    const buffer = Buffer.allocUnsafe(bytesToRead);
+    await handle.read(buffer, 0, bytesToRead, Math.max(0, fileStat.size - bytesToRead));
+    return {
+      raw: buffer.toString("utf8"),
+      truncated: fileStat.size > bytesToRead,
+      sizeBytes: fileStat.size,
+    };
+  } finally {
+    await handle.close();
+  }
 }
 
 function subscriptionConnectHint(): string {

@@ -13,6 +13,7 @@ OpenClaw 的安全优先、本地优先控制中心。
 如果你接手的是“基于本项目改出来的 AI 员工系统”，请先读这一节，再继续看后面的标准项目说明。
 详细工程交接请看：
 
+- [docs/ai-employee-system-handoff-2026-03-27.md](docs/ai-employee-system-handoff-2026-03-27.md)
 - [docs/ai-employee-system-handoff-2026-03-26.md](docs/ai-employee-system-handoff-2026-03-26.md)
 
 ### 这套 AI 员工系统现在的真实定位
@@ -51,6 +52,19 @@ OpenClaw 的安全优先、本地优先控制中心。
   - gateway stream、`/v1/responses`、fallback 模型切换
 - `src/clients/openclaw-gateway-stream.ts`
   - `connect.challenge`、`chat.send`、`chat.abort`
+- `src/ui/server-task-pages.ts`
+  - 任务工作台、任务板当前页直渲染、卡片/明细视图
+- `src/ui/server-inline-scripts-task-board-compact.ts`
+  - 任务板 compact fast path，负责当前页渲染、分页和详情切换
+
+### 当前页面切换优化方向
+
+如果你接手后要继续优化“不同页面切换很慢”的问题，当前已经固定的方向是：
+
+- 优先删掉首屏重复服务端渲染，不要再把全部卡片/全部列表预渲染出来再隐藏
+- 优先做 section 级 gated script 和按需加载，而不是继续往总页面堆静态 HTML
+- 任务页已经开始改成“只渲染当前页 + 压一份紧凑数据源”，不要回退成整板首屏 DOM
+- 做性能优化时，先保协作 room、共享时间线和受控注入语义，再做 UI 收口
 
 ### 当前已经固定的协作链路
 
@@ -91,7 +105,7 @@ node --import tsx --test test/openclaw-gateway-stream.test.ts test/openclaw-live
 
 ### 当前已确认基线
 
-截至 2026-03-24：
+截至 2026-03-27：
 
 - OpenClaw 已升级到 `v2026.3.23`
 - gateway 运行时已切到新版本
@@ -99,10 +113,12 @@ node --import tsx --test test/openclaw-gateway-stream.test.ts test/openclaw-live
 - 共享时间线仍能同时看到 Jarvis 与 worker 回复
 - 上游 abort 已接入 `chat.abort`
 - 员工卡片主模型/fallback 模型链路已验证
+- 任务工作台已经开始做首屏减载，只服务端渲染当前页
+- 本地实测任务页首包已从约 `993KB` 继续压到约 `823KB`
 
 最近关键代码提交：
 
-- `0378272` `Stabilize collaboration streaming and abort flow`
+- `afdbd26` `feat: consolidate AI employee system handoff and room routing`
 
 ## 这个项目是做什么的
 - 给 OpenClaw 提供一个本地控制中心，集中看系统是否稳定、谁在工作、哪些任务卡住了、今天花了多少。

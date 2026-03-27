@@ -93,7 +93,7 @@ function createRuntimeCacheHelpers(deps) {
 
     try {
       const value = await nextValue;
-      const nextCache = { snapshotKey, value, expiresAt: now + usageCacheTtlMs };
+      const nextCache = { snapshotKey, value, expiresAt: Date.now() + usageCacheTtlMs };
       if (mode === "full") {
         usageCostFullCache = nextCache;
       } else {
@@ -120,7 +120,7 @@ function createRuntimeCacheHelpers(deps) {
       return officePresenceCache.value;
     }
     const value = await loadBestEffortOfficeSessionPresence();
-    officePresenceCache = { value, expiresAt: now + heavyCacheTtlMs };
+    officePresenceCache = { value, expiresAt: Date.now() + heavyCacheTtlMs };
     return value;
   }
 
@@ -150,7 +150,7 @@ function createRuntimeCacheHelpers(deps) {
     replayPreviewInFlight = nextValue;
     try {
       const value = await nextValue;
-      replayPreviewCache = { value, expiresAt: now + replayCacheTtlMs };
+      replayPreviewCache = { value, expiresAt: Date.now() + replayCacheTtlMs };
       return value;
     } finally {
       replayPreviewInFlight = void 0;

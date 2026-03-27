@@ -15,6 +15,10 @@ import type {
 } from "../contracts/openclaw-tools";
 import { APPROVAL_ACTIONS_ENABLED } from "../config";
 import { loadCurrentAgentCatalog, resolveOpenClawHomePath } from "../runtime/current-agent-catalog";
+import {
+  assertOpenClawEmployeeDispatchReady,
+  buildOpenClawEmployeeDispatchFailureMessage,
+} from "../runtime/openclaw-employee-contract";
 import { swapOpenClawAgentToFallbackModel } from "../runtime/openclaw-agent-models";
 import { runOpenClawCommand } from "../runtime/openclaw-cli";
 import {
@@ -323,6 +327,18 @@ export class OpenClawLiveClient implements ToolClient {
         errorMessage: abortedMessage,
       };
     }
+    const dispatchContractFailure = await this.resolveDispatchContractFailure().catch(() => undefined);
+    if (dispatchContractFailure) {
+      return {
+        ok: false,
+        agentId,
+        replyText: "",
+        durationMs: 0,
+        rawText: dispatchContractFailure,
+        failureReason: dispatchContractFailure,
+        errorMessage: dispatchContractFailure,
+      };
+    }
     // `openclaw health` has produced false negatives on some local setups while
     // the actual `openclaw agent` command still succeeds. Use the real turn as
     // the source of truth so collaboration dispatch is not blocked by a flaky
@@ -408,6 +424,21 @@ export class OpenClawLiveClient implements ToolClient {
       rawText: "",
       failureReason: "Agent turn failed without a response.",
     };
+  }
+
+  private async resolveDispatchContractFailure(): Promise<string | undefined> {
+    try {
+      await assertOpenClawEmployeeDispatchReady();
+      return undefined;
+    } catch (error) {
+      if (error instanceof Error && error.message.trim()) {
+        return error.message.trim();
+      }
+      return buildOpenClawEmployeeDispatchFailureMessage({
+        blockingReasons: [],
+        warnings: [],
+      });
+    }
   }
 
   private async runAgentTurnAttempt(input: AgentTurnAttemptInput & {

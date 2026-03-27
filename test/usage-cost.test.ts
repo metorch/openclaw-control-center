@@ -231,6 +231,101 @@ test("usage-cost summary mode backfills period cost from runtime session events"
   assert.equal(parsed.thirty?.estimatedCost, 4.25);
 });
 
+test("usage-cost full mode prefers local Codex rate-limit windows before waiting on WHAM", async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "openclaw-usage-full-"));
+  t.after(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  const openclawHome = join(tempRoot, ".openclaw-home");
+  const codexHome = join(tempRoot, ".codex-home");
+  const codexSessionDir = join(codexHome, "sessions", "2026", "03");
+  await mkdir(codexSessionDir, { recursive: true });
+
+  await writeFile(
+    join(codexHome, "auth.json"),
+    JSON.stringify({
+      tokens: {
+        access_token: "test-token",
+      },
+    }),
+    "utf8",
+  );
+
+  await writeFile(
+    join(codexSessionDir, "codex-session.jsonl"),
+    JSON.stringify({
+      timestamp: "2026-03-06T11:38:10.056Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        rate_limits: {
+          limit_id: "codex",
+          primary: { used_percent: 2, window_minutes: 300, resets_at: 1772812807 },
+          secondary: { used_percent: 45, window_minutes: 10080, resets_at: 1773264817 },
+          plan_type: "pro",
+        },
+      },
+    }),
+    "utf8",
+  );
+
+  const snapshot = buildSnapshotFixture({
+    model: "gpt-5.3-codex",
+    tokensIn: 10,
+    tokensOut: 5,
+    cost: 0,
+  });
+
+  const tsxLoaderUrl = new URL("../node_modules/tsx/dist/loader.mjs", import.meta.url).href;
+  const moduleUrl = new URL("../src/runtime/usage-cost.ts", import.meta.url).href;
+  const script = [
+    "globalThis.__fetchCalls = 0;",
+    "globalThis.fetch = async () => {",
+    "  globalThis.__fetchCalls += 1;",
+    "  await new Promise((resolve) => setTimeout(resolve, 1200));",
+    "  return { ok: false, json: async () => ({}) };",
+    "};",
+    "const startedAt = Date.now();",
+    "const mod = await import(process.env.USAGE_COST_MODULE_URL);",
+    "const buildUsageCostSnapshot = mod.buildUsageCostSnapshot ?? mod.default?.buildUsageCostSnapshot;",
+    'if (typeof buildUsageCostSnapshot !== "function") throw new TypeError("buildUsageCostSnapshot export missing");',
+    "const snapshot = JSON.parse(process.env.USAGE_COST_SNAPSHOT_JSON);",
+    'const usage = await buildUsageCostSnapshot(snapshot, "full");',
+    "console.log(JSON.stringify({",
+    "  durationMs: Date.now() - startedAt,",
+    "  fetchCalls: globalThis.__fetchCalls,",
+    "  sourcePath: usage.subscription.sourcePath,",
+    "  primaryWindowLabel: usage.subscription.primaryWindowLabel,",
+    "}));",
+  ].join(" ");
+
+  const result = spawnSync(process.execPath, ["--import", tsxLoaderUrl, "-e", script], {
+    cwd: tempRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_HOME: openclawHome,
+      CODEX_HOME: codexHome,
+      USAGE_COST_MODULE_URL: moduleUrl,
+      USAGE_COST_SNAPSHOT_JSON: JSON.stringify(snapshot),
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const parsed = JSON.parse(result.stdout.trim()) as {
+    durationMs: number;
+    fetchCalls: number;
+    sourcePath?: string;
+    primaryWindowLabel?: string;
+  };
+
+  assert.equal(parsed.fetchCalls, 0);
+  assert(parsed.durationMs < 1000, `expected local rate-limit shortcut, got ${parsed.durationMs}ms`);
+  assert.match(parsed.sourcePath ?? "", /Codex token_count rate_limits/);
+  assert.equal(parsed.primaryWindowLabel, "5h");
+});
+
 test("usage-cost snapshot surfaces connected subscription consumption and remaining contract", async () => {
   const { computeUsageCostSnapshot } = await import("../src/runtime/usage-cost");
   const usage = computeUsageCostSnapshot(buildSnapshotFixture(), [], [], undefined, {

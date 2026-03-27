@@ -18,6 +18,7 @@ import {
   updateOpenClawAgentModelRecord,
 } from "../src/runtime/openclaw-agent-models";
 import { invalidateOpenClawCliInvocationCache } from "../src/runtime/openclaw-cli";
+import { invalidateOpenClawEmployeeContractCache } from "../src/runtime/openclaw-employee-contract";
 
 test("agent turn command only forwards session id to the OpenClaw CLI", () => {
   const args = buildAgentTurnCliArgsForSmoke({
@@ -605,6 +606,83 @@ test("agentTurn continues even when the health probe is a false negative", async
   } finally {
     process.env.OPENCLAW_CLI_PATH = previousCliPath;
     invalidateOpenClawCliInvocationCache();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agentTurn blocks dispatch when the guarded OpenClaw agent CLI surface loses session-id support", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openclaw-live-agent-contract-"));
+  const previousCliPath = process.env.OPENCLAW_CLI_PATH;
+  const previousForceHelpProbe = process.env.OPENCLAW_EMPLOYEE_CONTRACT_FORCE_HELP_PROBE;
+  try {
+    const scriptPath = join(root, "fake-openclaw.mjs");
+    const callsPath = join(root, "agent-calls.txt");
+    await writeFile(
+      scriptPath,
+      [
+        "import { appendFileSync } from 'node:fs';",
+        `const callsPath = ${JSON.stringify(callsPath)};`,
+        "const args = process.argv.slice(2);",
+        "if (args[0] === '--version') {",
+        "  console.log('OpenClaw 2026.3.24 (fake)');",
+        "  process.exit(0);",
+        "}",
+        "if (args[0] === 'status' && args[1] === '--json') {",
+        "  console.log(JSON.stringify({ runtimeVersion: '2026.3.24', gateway: { reachable: true, self: { version: '2026.3.24' } } }));",
+        "  process.exit(0);",
+        "}",
+        "if (args[0] === 'gateway' && args[1] === 'status' && args[2] === '--json') {",
+        "  console.log(JSON.stringify({ rpc: { ok: true } }));",
+        "  process.exit(0);",
+        "}",
+        "if (args[0] === 'sessions' && args[1] === '--json') {",
+        "  console.log(JSON.stringify({ sessions: [] }));",
+        "  process.exit(0);",
+        "}",
+        "if (args[0] === 'cron' && args[1] === 'list' && args[2] === '--json') {",
+        "  console.log(JSON.stringify({ jobs: [] }));",
+        "  process.exit(0);",
+        "}",
+        "if (args[0] === 'approvals' && args[1] === 'get' && args[2] === '--json') {",
+        "  console.log(JSON.stringify({ exists: true }));",
+        "  process.exit(0);",
+        "}",
+        "if (args[0] === 'agent' && args[1] === '--help') {",
+        "  console.log('Usage: openclaw agent [options]\\n--agent\\n--message\\n--json\\n--timeout');",
+        "  process.exit(0);",
+        "}",
+        "if (args[0] === 'agent') {",
+        "  appendFileSync(callsPath, args.join(' ') + '\\n');",
+        "  console.log(JSON.stringify({ payloads: [{ text: 'should never run' }], stopReason: 'stop' }));",
+        "  process.exit(0);",
+        "}",
+        "console.error('unexpected args: ' + args.join(' '));",
+        "process.exit(1);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    process.env.OPENCLAW_CLI_PATH = scriptPath;
+    process.env.OPENCLAW_EMPLOYEE_CONTRACT_FORCE_HELP_PROBE = "1";
+    invalidateOpenClawCliInvocationCache();
+    invalidateOpenClawEmployeeContractCache();
+
+    const client = new OpenClawLiveClient();
+    const response = await client.agentTurn({
+      agentId: "main",
+      message: "guard the room dispatch",
+      timeoutSeconds: 20,
+    });
+
+    assert.equal(response.ok, false);
+    assert.match(response.failureReason ?? "", /阻止当前分发/);
+    await assert.rejects(readFile(callsPath, "utf8"));
+  } finally {
+    process.env.OPENCLAW_CLI_PATH = previousCliPath;
+    process.env.OPENCLAW_EMPLOYEE_CONTRACT_FORCE_HELP_PROBE = previousForceHelpProbe;
+    invalidateOpenClawCliInvocationCache();
+    invalidateOpenClawEmployeeContractCache();
     await rm(root, { recursive: true, force: true });
   }
 });

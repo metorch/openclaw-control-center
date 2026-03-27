@@ -1,9 +1,9 @@
 import { runOpenClawCommand } from "./openclaw-cli";
 const INSIGHT_CACHE_TTL_MS = 15_000;
 const INSIGHT_COMMAND_TIMEOUT_MS = 4_000;
-const STATUS_COMMAND_TIMEOUT_MS = 8_000;
-const GATEWAY_STATUS_COMMAND_TIMEOUT_MS = 12_000;
-const UPDATE_STATUS_COMMAND_TIMEOUT_MS = 8_000;
+const STATUS_COMMAND_TIMEOUT_MS = 12_000;
+const GATEWAY_STATUS_COMMAND_TIMEOUT_MS = 15_000;
+const UPDATE_STATUS_COMMAND_TIMEOUT_MS = 10_000;
 const INSIGHT_COMMAND_MAX_BUFFER = 4 * 1024 * 1024;
 
 interface TimedSourceCache<T> {
@@ -437,7 +437,7 @@ async function loadSourceWithCache<T>(
     const value = await nextValue;
     assignCache({
       value,
-      expiresAt: now + INSIGHT_CACHE_TTL_MS,
+      expiresAt: Date.now() + INSIGHT_CACHE_TTL_MS,
     });
     return value;
   } finally {

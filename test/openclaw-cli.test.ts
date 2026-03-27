@@ -30,6 +30,31 @@ test("resolveOpenClawCliInvocation maps Windows npm shim to node module entrypoi
   }
 });
 
+test("resolveOpenClawCliInvocation finds the Windows global npm install even when PATH is missing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openclaw-cli-appdata-"));
+  const previousAppData = process.env.APPDATA;
+  try {
+    const appDataDir = join(root, "AppData", "Roaming");
+    const binDir = join(appDataDir, "npm");
+    const packageDir = join(binDir, "node_modules", "openclaw");
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(join(binDir, "openclaw.cmd"), "@echo off\r\n", "utf8");
+    await writeFile(join(packageDir, "openclaw.mjs"), "console.log('ok');\n", "utf8");
+    process.env.APPDATA = appDataDir;
+
+    const resolved = await resolveOpenClawCliInvocation({
+      platform: "win32",
+      pathEnv: "",
+    });
+
+    assert.equal(resolved.command, process.execPath);
+    assert.deepEqual(resolved.prefixArgs, [join(packageDir, "openclaw.mjs")]);
+  } finally {
+    process.env.APPDATA = previousAppData;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("resolveOpenClawCliInvocation keeps bare command on non-Windows platforms", async () => {
   const resolved = await resolveOpenClawCliInvocation({
     platform: "linux",

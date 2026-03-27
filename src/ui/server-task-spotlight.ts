@@ -255,6 +255,39 @@ function createTaskSpotlightHelpers(deps) {
       .map((task) => {
         const certainty = certaintyByTaskId.get(task.taskId);
         const linkedSessionKeys = [...new Set(task.sessionKeys.map((item) => item.trim()).filter(Boolean))];
+        const ownerLabel = humanizeOperatorLabel(task.owner);
+        if (task.status === "done") {
+          return {
+            cardId: task.taskId,
+            cardKind: "task",
+            taskId: task.taskId,
+            projectId: task.projectId,
+            sessionKeys: linkedSessionKeys,
+            title: task.title,
+            projectTitle: task.projectTitle,
+            taskStatus: task.status,
+            ownerLabel,
+            statusTone: "done",
+            statusLabel: taskSpotlightStatusLabel({ task, statusTone: "done" }, input.language),
+            statusDotLabel: taskSpotlightStatusDotLabel({ task, statusTone: "done" }, input.language),
+            priorityLabel: taskSpotlightPriorityLabel(6, input.language),
+            boardStatusLabel: taskStateLabel(task.status, input.language),
+            boardStatusTone: "done",
+            summary: taskSpotlightSummary({ task, statusTone: "done" }, input.language),
+            recentSignal: taskSpotlightRecentSignal({ task }, input.language),
+            nextStep: taskSpotlightNextStep({ task }, input.language),
+            scheduleLabel: task.dueAt ? pickUiText(input.language, "Due date set", "宸茶鎴") : pickUiText(input.language, "No due date", "鏈鎴"),
+            dueLabel: taskSpotlightDueLabel(task, 0, nowMs, input.language),
+            updatedLabel: task.updatedAt
+              ? pickUiText(input.language, `Updated ${formatTimeAgoFromNow(task.updatedAt, input.language)}`, `鏇存柊浜?${formatTimeAgoFromNow(task.updatedAt, input.language)}`)
+              : pickUiText(input.language, "Update time unavailable", "鏇存柊鏃堕棿鏈煡"),
+            detailHref: buildTaskDetailHref(task.taskId, input.language),
+            priorityBucket: 6,
+            dueSortValue: Number.POSITIVE_INFINITY,
+            updatedSortValue: toSortableMs(task.updatedAt),
+            liveSignalCount: 0,
+          };
+        }
         let liveSessionCount = 0;
         let blockedSessionCount = 0;
         let errorSessionCount = 0;
@@ -296,8 +329,6 @@ function createTaskSpotlightHelpers(deps) {
           recentActivityCount,
         });
         const priorityBucket = resolveTaskSpotlightPriorityBucket({ task, statusTone, overdue, dueSoon });
-        const ownerLabel = humanizeOperatorLabel(task.owner);
-
         return {
           cardId: task.taskId,
           cardKind: "task",

@@ -299,7 +299,7 @@ function createInsightRenderers(deps) {
     return { rows, connectedCount, overallStatus, headline };
   }
 
-  function renderSettingsConnectionPanel(summary, usageCost, language) {
+  function renderSettingsConnectionPanel(summary, usageCost, language, embeddedTailHtml = "") {
     if (!summary) {
       return `<section class="settings-status-panel" id="settings-connection-health">
       <div class="overview-command-head">
@@ -329,6 +329,247 @@ function createInsightRenderers(deps) {
             <div class="meta">${badge(item.status, insightStatusLabel(item.status, language))} ${escapeHtml(item.detail)}</div>
           </div>
           <div class="decision-row-value">${escapeHtml(item.value)}</div>
+        </div>`).join("")}</div>
+    ${embeddedTailHtml}
+  </section>`;
+    return `<section class="settings-status-panel" id="settings-connection-health">
+    <div class="overview-command-head">
+      <div>
+        <h3>${escapeHtml(pickUiText(language, "Connection health", "连接状态"))}</h3>
+        <div class="meta">${escapeHtml(connectionState.headline)}</div>
+      </div>
+      <div>${badge(connectionState.overallStatus, insightStatusLabel(connectionState.overallStatus, language))}</div>
+    </div>
+    <div class="status-strip compact">
+      <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Healthy links", "已接通"))}</span><strong>${connectionState.connectedCount}/${connectionState.rows.length}</strong></div>
+      <div class="status-chip"><span>${escapeHtml(pickUiText(language, "Updated", "更新"))}</span><strong>${escapeHtml(formatTimeAgoFromNow(summary.generatedAt, language))}</strong></div>
+    </div>
+    <div class="decision-list">${connectionState.rows.map((item) => `<div class="decision-row">
+          <div class="decision-row-copy">
+            <strong>${escapeHtml(item.label)}</strong>
+            <div class="meta">${badge(item.status, insightStatusLabel(item.status, language))} ${escapeHtml(item.detail)}</div>
+          </div>
+          <div class="decision-row-value">${escapeHtml(item.value)}</div>
+        </div>`).join("")}</div>
+  </section>`;
+  }
+
+  function renderSettingsEmbeddedSecurityPanel(summary, language) {
+    const t = (en, zh) => pickUiText(language, en, zh);
+    if (!summary) {
+      return `<section class="settings-status-panel settings-embedded-security-panel" id="security-risk-summary">
+        <div class="overview-command-head settings-subhead">
+          <div>
+            <div class="settings-section-label">${escapeHtml(t("Security risk summary", "安全风险摘要"))}</div>
+            <div class="meta">${escapeHtml(t("Security audit is still loading.", "安全审计仍在读取中。"))}</div>
+          </div>
+          <div>${badge("info", t("Loading", "读取中"))}</div>
+        </div>
+        <div class="empty-state settings-quiet-empty">${escapeHtml(t("No security summary is available yet.", "当前还没有可展示的安全摘要。"))}</div>
+      </section>`;
+    }
+
+    const headline =
+      summary.status === "blocked"
+        ? t("Critical items need attention before continuing.", "当前有需要优先处理的安全风险。")
+        : summary.status === "warn"
+          ? t("A few configuration risks are worth checking.", "当前有几项配置风险值得确认。")
+          : t("No actionable security issue is visible right now.", "当前没有需要处理的安全风险。");
+    const firstFinding = summary.findings?.[0] ? localizeSecurityFinding(summary.findings[0], language) : null;
+
+    return `<section class="settings-status-panel settings-embedded-security-panel" id="security-risk-summary">
+      <div class="overview-command-head settings-subhead">
+        <div>
+          <div class="settings-section-label">${escapeHtml(t("Security risk summary", "安全风险摘要"))}</div>
+          <div class="meta">${escapeHtml(headline)}</div>
+        </div>
+        <div>${badge(summary.status, insightStatusLabel(summary.status, language))}</div>
+      </div>
+      <div class="status-strip compact settings-embedded-strip">
+        <div class="status-chip"><span>${escapeHtml(t("Critical", "高风险"))}</span><strong>${summary.counts?.critical ?? 0}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Warnings", "需关注"))}</span><strong>${summary.counts?.warn ?? 0}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Info", "提示"))}</span><strong>${summary.counts?.info ?? 0}</strong></div>
+      </div>
+      ${firstFinding
+        ? `<div class="settings-note-card">
+            <strong>${escapeHtml(firstFinding.title)}</strong>
+            <div class="meta">${escapeHtml(safeTruncate(normalizeInlineText(firstFinding.detail), 180))}</div>
+            ${firstFinding.remediation ? `<div class="meta">${escapeHtml(t("Next step", "下一步"))}：${escapeHtml(safeTruncate(normalizeInlineText(firstFinding.remediation), 140))}</div>` : ""}
+          </div>`
+        : `<div class="empty-state settings-quiet-empty">${escapeHtml(t("No audit finding needs action right now.", "当前没有需要处理的安全审计结果。"))}</div>`}
+    </section>`;
+  }
+
+  function localizeEmployeeContractItemLabel(item, language) {
+    if (item.key === "version") return pickUiText(language, "Version floor", "版本基线");
+    if (item.key === "sessions-json") return pickUiText(language, "Session feed", "会话读接口");
+    if (item.key === "cron-list-json") return pickUiText(language, "Timed jobs", "定时任务接口");
+    if (item.key === "approvals-json") return pickUiText(language, "Approval queue", "审批接口");
+    if (item.key === "agent-help") return pickUiText(language, "Dispatch CLI", "分发命令接口");
+    if (item.key === "gateway-rpc") return pickUiText(language, "Gateway RPC", "网关 RPC");
+    return item.key;
+  }
+
+  function localizeEmployeeContractItemValue(item, language) {
+    if (language === "en") return item.value;
+    const value = String(item.value || "");
+    if (value === "ready") return "就绪";
+    if (value === "unknown") return "未知";
+    if (value === "probe unavailable") return "探测不可用";
+    if (value === "probe ambiguous") return "探测结果不明确";
+    if (value === "shape changed") return "结构已变化";
+    if (value === "reachable") return "可达";
+    if (value === "unreachable") return "不可达";
+    const sessionsMatch = value.match(/^(\d+)\s+sessions?$/);
+    if (sessionsMatch) return `${sessionsMatch[1]} 个会话`;
+    const jobsMatch = value.match(/^(\d+)\s+jobs?$/);
+    if (jobsMatch) return `${jobsMatch[1]} 个任务`;
+    const flagsMatch = value.match(/^(\d+)\s+flags$/);
+    if (flagsMatch) return `${flagsMatch[1]} 个必需参数`;
+    return value;
+  }
+
+  function localizeEmployeeContractText(text, language) {
+    if (language === "en") return text;
+    if (!text) return "";
+
+    const versionUnavailable =
+      "OpenClaw version probe is unavailable, so the employee-system boundary falls back to shape probes only.";
+    if (text === versionUnavailable) {
+      return "当前无法读取 OpenClaw 版本探测结果，因此员工系统边界暂时只能依赖接口形状探测。";
+    }
+
+    const belowFloorMatch = text.match(/^OpenClaw (.+) is below the guarded employee-system floor (.+)\.$/);
+    if (belowFloorMatch) {
+      return `OpenClaw ${belowFloorMatch[1]} 低于员工系统受控基线 ${belowFloorMatch[2]}。`;
+    }
+
+    const outsideTrainMatch = text.match(
+      /^OpenClaw (.+) is outside the currently validated (\d+) compatibility train\. Surface probes passed, but this upgrade should be re-tested before trusting room dispatch at scale\.$/,
+    );
+    if (outsideTrainMatch) {
+      return `OpenClaw ${outsideTrainMatch[1]} 已超出当前验证过的 ${outsideTrainMatch[2]} 年兼容范围。虽然接口探测暂时通过，但在继续大规模使用房间分发前，建议先重新做兼容回归。`;
+    }
+
+    const versionMismatchMatch = text.match(
+      /^CLI version (.+) and gateway self-version (.+) do not match\. This usually means the service was not fully restarted after an upgrade\.$/,
+    );
+    if (versionMismatchMatch) {
+      return `CLI 版本 ${versionMismatchMatch[1]} 与 Gateway 自报版本 ${versionMismatchMatch[2]} 不一致。通常意味着升级后服务还没有完全重启。`;
+    }
+
+    const insideTrainMatch = text.match(/^OpenClaw (.+) is inside the guarded employee-system train \(>= (.+)\)\.$/);
+    if (insideTrainMatch) {
+      return `OpenClaw ${insideTrainMatch[1]} 仍在员工系统受控兼容范围内（>= ${insideTrainMatch[2]}）。`;
+    }
+
+    if (text === "sessions --json still returns a sessions[] payload that the AI employee system can normalize.") {
+      return "sessions --json 仍会返回可被 AI 员工系统稳定归一化的 sessions[] 负载。";
+    }
+    if (text === "sessions --json probe is unavailable, so compatibility stays in best-effort mode until the next successful read.") {
+      return "当前无法完成 sessions --json 探测，因此兼容性暂时只能保持尽力验证，等待下一次成功读取。";
+    }
+    if (text === "sessions --json no longer exposes a sessions[] payload. The room timeline and usage snapshots must not trust an unknown shape.") {
+      return "sessions --json 已不再暴露 sessions[] 负载。房间共享时间线和用量快照不能继续信任未知结构。";
+    }
+    if (text === "cron list --json still exposes jobs[] for the task and schedule surfaces.") {
+      return "cron list --json 仍会暴露 jobs[]，任务与排程界面仍可安全读取。";
+    }
+    if (text === "cron list --json probe is unavailable, so timed-job compatibility cannot be fully verified yet.") {
+      return "当前无法完成 cron list --json 探测，因此定时任务兼容性暂时还不能完全确认。";
+    }
+    if (text === "cron list --json no longer exposes jobs[]. Timed-job rows should stay protected until the boundary adapter is updated.") {
+      return "cron list --json 已不再暴露 jobs[]。在边界适配器更新前，定时任务相关界面应继续保持受保护状态。";
+    }
+    if (text === "approvals get --json probe is unavailable. The review queue can still degrade gracefully, but approval details are not fully verified.") {
+      return "当前无法完成 approvals get --json 探测。审批队列仍可降级工作，但审批细节还没有完成完整验证。";
+    }
+    if (text === "approvals get --json still returns an object payload that the review queue can inspect safely.") {
+      return "approvals get --json 仍会返回可被审批队列安全读取的对象负载。";
+    }
+    if (text === "agent --help probe is unavailable, so dispatch compatibility stays best-effort until the next successful capability read.") {
+      return "当前无法完成 agent --help 探测，因此分发兼容性暂时只能保持尽力验证，等待下一次成功能力读取。";
+    }
+    if (text === "agent --help returned a non-help payload, so dispatch compatibility stays best-effort until a real help surface is observed.") {
+      return "agent --help 当前返回的不是标准帮助输出，因此分发兼容性暂时只能保持尽力验证，直到再次看到真实帮助界面。";
+    }
+    const missingFlagsMatch = text.match(
+      /^openclaw agent help no longer advertises the required guarded flags: (.+)\.$/,
+    );
+    if (missingFlagsMatch) {
+      return `openclaw agent help 已不再声明这些受控必需参数：${missingFlagsMatch[1]}。`;
+    }
+    if (text === "openclaw agent still exposes the guarded flags that the AI employee system uses for controlled dispatch.") {
+      return "openclaw agent 仍暴露 AI 员工系统进行受控分发所需的必需参数。";
+    }
+    if (text === "gateway status --json probe is unavailable, so abort compatibility cannot be fully verified yet.") {
+      return "当前无法完成 gateway status --json 探测，因此终止能力的兼容性暂时还不能完全确认。";
+    }
+
+    const gatewayReachableMatch = text.match(/^Gateway RPC is reachable at (.+), so room aborts still have a live upstream path\.$/);
+    if (gatewayReachableMatch) {
+      return `Gateway RPC 当前可在 ${gatewayReachableMatch[1]} 访问，房间终止仍保有可用的上游链路。`;
+    }
+
+    if (
+      text ===
+      "Gateway RPC is currently unreachable. This is a runtime liveness issue rather than a contract break, but aborts and live stream dispatch can fail until the gateway recovers."
+    ) {
+      return "Gateway RPC 当前不可达。这更像是运行时存活性问题而不是契约断裂，但在网关恢复前，终止操作和流式分发都有可能失败。";
+    }
+
+    return text;
+  }
+
+  function renderSettingsEmployeeContractPanel(summary, language) {
+    const t = (en, zh) => pickUiText(language, en, zh);
+    if (!summary) {
+      return `<section class="settings-status-panel" id="settings-employee-contract">
+      <div class="overview-command-head">
+        <h3>${escapeHtml(t("AI employee contract", "AI 员工契约"))}</h3>
+        <div>${badge("info", t("Loading", "读取中"))}</div>
+      </div>
+      <div class="empty-state">${escapeHtml(t("The guarded OpenClaw contract probe is loading.", "正在读取受控 OpenClaw 契约探测结果。"))}</div>
+    </section>`;
+    }
+
+    const headline =
+      summary.status === "blocked"
+        ? t("A guarded OpenClaw surface changed. Dispatch is blocked until the boundary is adapted.", "检测到受控 OpenClaw 接口已变化，在适配边界层前会先阻止分发。")
+        : summary.status === "warn"
+          ? t("The employee boundary is still usable, but this OpenClaw runtime needs a quick compatibility review.", "员工系统边界仍可使用，但当前 OpenClaw 版本建议再做一次兼容复核。")
+          : summary.status === "info"
+            ? t("The boundary probe is only partially available, so compatibility is still best-effort.", "当前只能拿到部分契约探测结果，因此兼容性仍处于尽力验证状态。")
+            : t("The AI employee system is currently talking to OpenClaw only through the guarded surface.", "当前 AI 员工系统只通过受控接口与 OpenClaw 交互。");
+    const warningHtml = summary.warnings.length === 0
+      ? ""
+      : `<div class="meta">${escapeHtml(summary.warnings.slice(0, 2).map((item) => localizeEmployeeContractText(item, language)).join(" | "))}</div>`;
+    const blockingHtml = summary.blockingReasons.length === 0
+      ? ""
+      : `<div class="meta">${escapeHtml(localizeEmployeeContractText(summary.blockingReasons[0], language))}</div>`;
+
+    return `<section class="settings-status-panel" id="settings-employee-contract">
+    <div class="overview-command-head">
+      <div>
+        <h3>${escapeHtml(t("AI employee contract", "AI 员工契约"))}</h3>
+        <div class="meta">${escapeHtml(headline)}</div>
+      </div>
+      <div>${badge(summary.status, insightStatusLabel(summary.status, language))}</div>
+    </div>
+    <div class="status-strip compact">
+      <div class="status-chip"><span>${escapeHtml(t("Read", "读取"))}</span><strong>${escapeHtml(summary.readReady ? t("Ready", "就绪") : t("Blocked", "阻止"))}</strong></div>
+      <div class="status-chip"><span>${escapeHtml(t("Dispatch", "分发"))}</span><strong>${escapeHtml(summary.dispatchReady ? t("Ready", "就绪") : t("Blocked", "阻止"))}</strong></div>
+      <div class="status-chip"><span>${escapeHtml(t("Abort", "终止"))}</span><strong>${escapeHtml(summary.abortReady ? t("Ready", "就绪") : t("Watch", "观察"))}</strong></div>
+    </div>
+    <div class="meta">${escapeHtml(t("Validated floor", "验证基线"))} ${escapeHtml(summary.validatedFloor)} · ${escapeHtml(t("Current", "当前"))} ${escapeHtml(summary.currentVersion ?? "-")}${summary.gatewayVersion ? ` · ${escapeHtml(t("Gateway", "网关"))} ${escapeHtml(summary.gatewayVersion)}` : ""}</div>
+    ${warningHtml}
+    ${blockingHtml}
+    <div class="decision-list">${summary.items.map((item) => `<div class="decision-row">
+          <div class="decision-row-copy">
+            <strong>${escapeHtml(localizeEmployeeContractItemLabel(item, language))}</strong>
+            <div class="meta">${badge(item.status, insightStatusLabel(item.status, language))} ${escapeHtml(localizeEmployeeContractText(item.detail, language))}</div>
+          </div>
+          <div class="decision-row-value">${escapeHtml(localizeEmployeeContractItemValue(item, language))}</div>
         </div>`).join("")}</div>
   </section>`;
   }
@@ -426,11 +667,216 @@ function createInsightRenderers(deps) {
     </section>`;
   }
 
+  function renderSettingsRuntimeContractPanel(updateSummary, employeeContractSummary, language) {
+    const t = (en, zh) => pickUiText(language, en, zh);
+    if (!updateSummary && !employeeContractSummary) {
+      return `<section class="settings-status-panel settings-runtime-contract-panel" id="settings-runtime-contract">
+      <div class="overview-command-head">
+        <div>
+          <h3>${escapeHtml(t("Runtime and contract", "运行版本与契约"))}</h3>
+          <div class="meta">${escapeHtml(t("Version and guarded contract signals are still loading.", "正在读取版本与受控契约状态。"))}</div>
+        </div>
+        <div>${badge("info", t("Loading", "读取中"))}</div>
+      </div>
+      <div class="empty-state">${escapeHtml(t("The runtime compatibility summary is still loading.", "运行时兼容摘要仍在读取中。"))}</div>
+    </section>`;
+    }
+
+    const mergedStatus = mergeInsightStatuses([updateSummary?.status, employeeContractSummary?.status]);
+    const headline =
+      mergedStatus === "blocked"
+        ? t("This OpenClaw runtime needs attention before you trust dispatch and room control.", "当前 OpenClaw 运行态需要先处理，再继续信任分发与房间控制。")
+        : mergedStatus === "warn"
+          ? t("The runtime is usable, but a quick compatibility review is still recommended.", "当前运行态可用，但仍建议顺手做一次兼容复核。")
+          : t("Version status and the guarded employee boundary are now kept together.", "版本状态与员工系统受控边界已合并在同一处查看。");
+
+    const currentVersion = updateSummary ? localizeCurrentVersionValue(updateSummary, language) : "-";
+    const latestVersion = updateSummary?.latestVersion ?? "-";
+    const contractSummary = employeeContractSummary ?? {
+      status: "info",
+      warnings: [],
+      blockingReasons: [],
+      readReady: false,
+      dispatchReady: false,
+      abortReady: false,
+      validatedFloor: "-",
+      currentVersion: "-",
+      gatewayVersion: "-",
+      items: [],
+    };
+    const versionItem = contractSummary.items.find((item) => item?.key === "version");
+    const attentionItems = contractSummary.items.filter((item) => item && item.key !== "version" && item.status !== "ok");
+    const fallbackItems =
+      attentionItems.length > 0
+        ? attentionItems
+        : contractSummary.items.filter((item) => item && item.key !== "version").slice(0, 2);
+    const visibleItems = [...(versionItem ? [versionItem] : []), ...fallbackItems].slice(0, 4);
+    const visibleKeys = new Set(visibleItems.map((item) => item.key));
+    const hiddenCount = contractSummary.items.filter((item) => item && !visibleKeys.has(item.key)).length;
+    const contractNotice = contractSummary.blockingReasons[0]
+      ? localizeEmployeeContractText(contractSummary.blockingReasons[0], language)
+      : contractSummary.warnings[0]
+        ? localizeEmployeeContractText(contractSummary.warnings[0], language)
+        : "";
+    const installSummary = updateSummary
+      ? `${t("Install method", "安装方式")} ${localizeUpdateInstallKind(updateSummary.installKind, language)} · ${t("Package manager", "包管理器")} ${updateSummary.packageManager ?? "-"} · ${t("Channel", "更新通道")} ${localizeUpdateChannelLabel(updateSummary.channelLabel, language)}`
+      : t("Update status is still loading.", "正在读取更新状态。");
+
+    return `<section class="settings-status-panel settings-runtime-contract-panel" id="settings-runtime-contract">
+    <div class="overview-command-head">
+      <div>
+        <h3>${escapeHtml(t("Runtime and contract", "运行版本与契约"))}</h3>
+        <div class="meta">${escapeHtml(headline)}</div>
+      </div>
+      <div>${badge(mergedStatus, insightStatusLabel(mergedStatus, language))}</div>
+    </div>
+    <div class="status-strip compact settings-runtime-contract-strip">
+      <div class="status-chip"><span>${escapeHtml(t("Current version", "当前版本"))}</span><strong>${escapeHtml(currentVersion)}</strong></div>
+      <div class="status-chip"><span>${escapeHtml(t("Latest version", "最新版本"))}</span><strong>${escapeHtml(latestVersion)}</strong></div>
+      <div class="status-chip"><span>${escapeHtml(t("Read", "读取"))}</span><strong>${escapeHtml(contractSummary.readReady ? t("Ready", "就绪") : t("Watch", "观察"))}</strong></div>
+      <div class="status-chip"><span>${escapeHtml(t("Dispatch", "分发"))}</span><strong>${escapeHtml(contractSummary.dispatchReady ? t("Ready", "就绪") : t("Watch", "观察"))}</strong></div>
+      <div class="status-chip"><span>${escapeHtml(t("Abort", "终止"))}</span><strong>${escapeHtml(contractSummary.abortReady ? t("Ready", "就绪") : t("Watch", "观察"))}</strong></div>
+    </div>
+    <div class="meta settings-runtime-contract-meta">${escapeHtml(installSummary)}</div>
+    <div class="meta settings-runtime-contract-meta">${escapeHtml(t("Validated floor", "验证基线"))} ${escapeHtml(contractSummary.validatedFloor ?? "-")} · ${escapeHtml(t("Gateway", "网关"))} ${escapeHtml(contractSummary.gatewayVersion ?? "-")}</div>
+    ${contractNotice ? `<div class="meta settings-runtime-contract-meta">${escapeHtml(contractNotice)}</div>` : ""}
+    ${visibleItems.length > 0 ? `<div class="decision-list settings-runtime-contract-list">${visibleItems.map((item) => `<div class="decision-row">
+          <div class="decision-row-copy">
+            <strong>${escapeHtml(localizeEmployeeContractItemLabel(item, language))}</strong>
+            <div class="meta">${badge(item.status, insightStatusLabel(item.status, language))} ${escapeHtml(localizeEmployeeContractText(item.detail, language))}</div>
+          </div>
+          <div class="decision-row-value">${escapeHtml(localizeEmployeeContractItemValue(item, language))}</div>
+        </div>`).join("")}</div>` : `<div class="empty-state settings-quiet-empty">${escapeHtml(t("No guarded contract probes are available yet.", "当前还没有可展示的受控契约探测结果。"))}</div>`}
+    ${hiddenCount > 0 ? `<div class="meta settings-runtime-contract-meta">${escapeHtml(t(`${hiddenCount} more probes are still available in the detailed contract surface.`, `还有 ${hiddenCount} 项探测结果保留在详细契约面板里。`))}</div>` : ""}
+  </section>`;
+  }
+
+  function renderSettingsSecurityDataPanel(securitySummary, usageCost, usageConnectorTodos, settingsBudgetLimitCard, language) {
+    const t = (en, zh) => pickUiText(language, en, zh);
+    const connectorSummary = usageCost
+      ? connectorInsightStatus(usageCost, language)
+      : {
+          status: "info",
+          connectedCount: 0,
+          totalCount: 6,
+          missingCount: 6,
+          detail: t("Usage-source status is still loading.", "正在读取用量数据接入状态。"),
+          value: t("Loading", "读取中"),
+        };
+    const connectorTodosMarkup = String(usageConnectorTodos || "");
+    const connectorHasAllConnectedCopy =
+      connectorTodosMarkup.includes("All usage connectors are enabled.") || connectorTodosMarkup.includes("所有用量连接器均已启用。");
+    const connectorTodoItems = connectorHasAllConnectedCopy
+      ? []
+      : Array.from(connectorTodosMarkup.matchAll(/<li\b[\s\S]*?<\/li>/gi)).map((match) => match[0]);
+    const visibleConnectorTodoItems = connectorTodoItems.slice(0, 2);
+    const hiddenConnectorTodoCount = Math.max(connectorTodoItems.length - visibleConnectorTodoItems.length, 0);
+    return `<section class="settings-status-panel settings-security-data-panel" id="settings-security-data">
+    <div class="overview-command-head">
+      <div>
+        <h3>${escapeHtml(t("Data access and budget", "数据接入与预算"))}</h3>
+        <div class="meta">${escapeHtml(
+          connectorSummary.status === "blocked"
+            ? t("Some supporting data inputs still need action.", "当前还有数据输入项需要处理。")
+            : connectorSummary.status === "warn"
+              ? t("Core usage connectors are available, with a few items still worth filling in.", "核心用量连接器已可用，但还有少量项目需要补齐。")
+              : t("Data access and budget controls are grouped together here.", "数据接入与预算控制已收在同一处。"),
+        )}</div>
+      </div>
+      <div>${badge(connectorSummary.status, insightStatusLabel(connectorSummary.status, language))}</div>
+    </div>
+    <div class="settings-data-budget-grid">
+      <div class="settings-security-data-section" id="settings-data-connections">
+        <div class="overview-command-head settings-subhead">
+          <div>
+            <div class="settings-section-label">${escapeHtml(t("Recommended data connections", "推荐数据接入"))}</div>
+            <div class="meta">${escapeHtml(connectorSummary.detail)}</div>
+          </div>
+          <div>${badge(connectorSummary.status, insightStatusLabel(connectorSummary.status, language))}</div>
+        </div>
+        <div class="status-strip compact settings-data-status-strip">
+          <div class="status-chip"><span>${escapeHtml(t("Connected", "已接入"))}</span><strong>${connectorSummary.connectedCount}/${connectorSummary.totalCount}</strong></div>
+          <div class="status-chip"><span>${escapeHtml(t("Missing", "待补齐"))}</span><strong>${connectorSummary.missingCount}</strong></div>
+        </div>
+        ${connectorHasAllConnectedCopy
+          ? `<div class="empty-state settings-quiet-empty">${escapeHtml(t("All usage connectors are already enabled.", "所有用量连接器均已启用。"))}</div>`
+          : visibleConnectorTodoItems.length > 0
+            ? `<ul class="story-list settings-connector-list settings-connector-list-inline">${visibleConnectorTodoItems.join("")}</ul>${hiddenConnectorTodoCount > 0 ? `<div class="meta">${escapeHtml(t(`${hiddenConnectorTodoCount} more items remain in the full connector list.`, `完整连接器清单里还有 ${hiddenConnectorTodoCount} 项。`))}</div>` : ""}`
+            : `<div class="empty-state settings-quiet-empty">${escapeHtml(t("Connector recommendations are still loading.", "连接器建议仍在读取中。"))}</div>`}
+      </div>
+      <div class="settings-security-data-budget">${settingsBudgetLimitCard}</div>
+    </div>
+  </section>`;
+    const mergedStatus = connectorSummary.status;
+    const headline =
+      mergedStatus === "blocked"
+        ? t("Some safety or data inputs still need action.", "当前还有安全或数据输入项需要处理。")
+        : mergedStatus === "warn"
+          ? t("Security and data access are broadly available, with a few items worth checking.", "安全与数据接入整体可用，但还有少量项目值得确认。")
+          : t("Safety checks and supporting data access now sit together.", "安全检查与支撑数据接入已合并在同一处查看。");
+
+    const securityCounts = securitySummary?.counts ?? { critical: 0, warn: 0, info: 0 };
+    const firstFinding = securitySummary?.findings?.[0] ? localizeSecurityFinding(securitySummary.findings[0], language) : null;
+    const todosMarkup = String(usageConnectorTodos || "");
+    const hasAllConnectedCopy =
+      todosMarkup.includes("All usage connectors are enabled.") || todosMarkup.includes("鎵€鏈夌敤閲忚繛鎺ュ櫒鍧囧凡鍚敤銆?");
+    const todoItems = hasAllConnectedCopy ? [] : Array.from(todosMarkup.matchAll(/<li\b[\s\S]*?<\/li>/gi)).map((match) => match[0]);
+    const visibleTodoItems = todoItems.slice(0, 2);
+    const hiddenTodoCount = Math.max(todoItems.length - visibleTodoItems.length, 0);
+
+    return `<section class="settings-status-panel settings-security-data-panel" id="settings-security-data">
+    <div class="overview-command-head">
+      <div>
+        <h3>${escapeHtml(t("Safety and data access", "安全与数据接入"))}</h3>
+        <div class="meta">${escapeHtml(headline)}</div>
+      </div>
+      <div>${badge(mergedStatus, insightStatusLabel(mergedStatus, language))}</div>
+    </div>
+    <div class="settings-security-data-grid">
+      <div class="settings-security-data-section" id="security-risk-summary">
+        <div class="settings-section-label">${escapeHtml(t("Security risk summary", "安全风险摘要"))}</div>
+        <div class="status-strip compact">
+          <div class="status-chip"><span>${escapeHtml(t("Critical", "高风险"))}</span><strong>${securityCounts.critical}</strong></div>
+          <div class="status-chip"><span>${escapeHtml(t("Warnings", "需关注"))}</span><strong>${securityCounts.warn}</strong></div>
+          <div class="status-chip"><span>${escapeHtml(t("Info", "提示"))}</span><strong>${securityCounts.info}</strong></div>
+        </div>
+        ${firstFinding
+          ? `<div class="settings-note-card">
+              <strong>${escapeHtml(firstFinding.title)}</strong>
+              <div class="meta">${escapeHtml(safeTruncate(normalizeInlineText(firstFinding.detail), 180))}</div>
+              ${firstFinding.remediation ? `<div class="meta">${escapeHtml(t("Next step", "下一步"))}：${escapeHtml(safeTruncate(normalizeInlineText(firstFinding.remediation), 140))}</div>` : ""}
+            </div>`
+          : `<div class="empty-state settings-quiet-empty">${escapeHtml(t("No actionable audit finding is visible right now.", "当前没有需要处理的安全审计结果。"))}</div>`}
+      </div>
+      <div class="settings-security-data-section" id="settings-data-connections">
+        <div class="overview-command-head settings-subhead">
+          <div>
+            <div class="settings-section-label">${escapeHtml(t("Recommended data connections", "推荐数据接入"))}</div>
+            <div class="meta">${escapeHtml(connectorSummary.detail)}</div>
+          </div>
+          <div>${badge(connectorSummary.status, insightStatusLabel(connectorSummary.status, language))}</div>
+        </div>
+        <div class="status-strip compact settings-data-status-strip">
+          <div class="status-chip"><span>${escapeHtml(t("Connected", "已接入"))}</span><strong>${connectorSummary.connectedCount}/${connectorSummary.totalCount}</strong></div>
+          <div class="status-chip"><span>${escapeHtml(t("Missing", "待补齐"))}</span><strong>${connectorSummary.missingCount}</strong></div>
+        </div>
+        ${hasAllConnectedCopy
+          ? `<div class="empty-state settings-quiet-empty">${escapeHtml(t("All usage connectors are already enabled.", "所有用量连接器均已启用。"))}</div>`
+          : visibleTodoItems.length > 0
+            ? `<ul class="story-list settings-connector-list settings-connector-list-inline">${visibleTodoItems.join("")}</ul>${hiddenTodoCount > 0 ? `<div class="meta">${escapeHtml(t(`${hiddenTodoCount} more items remain in the full connector list.`, `完整连接器清单里还有 ${hiddenTodoCount} 项。`))}</div>` : ""}`
+            : `<div class="empty-state settings-quiet-empty">${escapeHtml(t("Connector recommendations are still loading.", "连接器建议仍在读取中。"))}</div>`}
+        <div class="settings-security-data-budget">${settingsBudgetLimitCard}</div>
+      </div>
+    </div>
+  </section>`;
+  }
+
   function renderSettingsEnvironmentStatusCard(
     connectionSummary,
     usageCost,
     securitySummary,
     updateSummary,
+    employeeContractSummary,
     usageConnectorTodos,
     settingsBudgetLimitCard,
     language,
@@ -439,6 +885,7 @@ function createInsightRenderers(deps) {
       connectionSummary ? buildOpenClawConnectionState(connectionSummary, usageCost, language).overallStatus : "info",
       securitySummary?.status,
       updateSummary?.status,
+      employeeContractSummary?.status,
     ]);
     const headline =
       overallStatus === "blocked"
@@ -455,13 +902,15 @@ function createInsightRenderers(deps) {
       </div>
       <div>${badge(overallStatus, insightStatusLabel(overallStatus, language))}</div>
     </div>
-    <div class="settings-status-grid">
-      ${renderSettingsConnectionPanel(connectionSummary, usageCost, language)}
-      <div class="settings-status-stack settings-security-stack">
-        ${renderSettingsSecurityPanel(securitySummary, language)}
-        ${renderSettingsDataConnectionsPanel(usageConnectorTodos, settingsBudgetLimitCard, language)}
+    <div class="settings-environment-shell">
+      <div class="settings-environment-top">
+        <div class="settings-connection-column">
+          ${renderSettingsConnectionPanel(connectionSummary, usageCost, language)}
+          ${renderSettingsEmbeddedSecurityPanel(securitySummary, language)}
+        </div>
+        ${renderSettingsRuntimeContractPanel(updateSummary, employeeContractSummary, language)}
       </div>
-      ${renderSettingsUpdatePanel(updateSummary, language)}
+      ${renderSettingsSecurityDataPanel(securitySummary, usageCost, usageConnectorTodos, settingsBudgetLimitCard, language)}
     </div>
   </section>`;
   }
@@ -498,6 +947,54 @@ function createInsightRenderers(deps) {
   }
 
   function renderSettingsBudgetLimitCard(model, language, variant = "standalone") {
+    if (variant === "compact") {
+      const t = (en, zh) => pickUiText(language, en, zh);
+      const configured = typeof model.currentLimit === "number" && Number.isFinite(model.currentLimit);
+      const issueText = model.issues.length > 0 ? model.issues.join(" | ") : "";
+      const storageLabel = model.loadedFromFile
+        ? t("Runtime file", "\u8fd0\u884c\u65f6\u6587\u4ef6")
+        : t("Create on save", "\u4fdd\u5b58\u65f6\u521b\u5efa");
+      const storageText = t(
+        "Stored in runtime/budgets.json.",
+        "\u4fdd\u5b58\u5230 runtime/budgets.json\u3002",
+      );
+      return `<section class="card settings-inline-budget settings-inline-budget-compact" id="settings-budget-limit" data-budget-limit-root data-language="${escapeHtml(language)}" data-current-limit="${escapeHtml(configured ? String(model.currentLimit) : "")}">
+      <div class="overview-command-head">
+        <div>
+          <h2>${escapeHtml(t("Budget limit", "\u9884\u7b97\u4e0a\u9650"))}</h2>
+          <div class="meta">${escapeHtml(t("Enter a number to enable a cap, or leave it empty for unlimited spend.", "\u586b\u6570\u5b57\u5c31\u542f\u7528\u4e0a\u9650\uff0c\u7559\u7a7a\u5219\u4ee3\u8868\u65e0\u4e0a\u9650\u3001\u6ca1\u6709\u4efb\u4f55\u9884\u7b97\u9650\u5236\u3002"))}</div>
+        </div>
+        <div>${badge(configured ? "ok" : "info", configured ? t("Configured", "\u5df2\u914d\u7f6e") : t("Unlimited", "\u65e0\u4e0a\u9650"))}</div>
+      </div>
+      <div class="status-strip compact">
+        <div class="status-chip"><span>${escapeHtml(t("Current", "\u5f53\u524d\u4e0a\u9650"))}</span><strong data-budget-limit-current>${escapeHtml(configured ? model.currentLimit.toFixed(2) : t("Unlimited", "\u65e0\u4e0a\u9650"))}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Warn", "\u9884\u8b66\u6bd4\u4f8b"))}</span><strong>${escapeHtml(model.warnRatio !== void 0 ? `${Math.round(model.warnRatio * 100)}%` : "-")}</strong></div>
+        <div class="status-chip"><span>${escapeHtml(t("Storage", "\u5199\u5165"))}</span><strong>${escapeHtml(storageLabel)}</strong></div>
+      </div>
+      <div class="settings-budget-form">
+        <label class="settings-budget-field">
+          <span>${escapeHtml(t("Limit", "\u9884\u7b97\u503c\uff08\u7559\u7a7a\u4e3a\u65e0\u4e0a\u9650\uff09"))}</span>
+          <input
+            class="settings-budget-input"
+            type="number"
+            min="0.01"
+            step="0.01"
+            inputmode="decimal"
+            placeholder="${escapeHtml(t("Example: 20", "\u4f8b\u5982\uff1a20"))}"
+            value="${escapeHtml(configured ? String(model.currentLimit) : "")}"
+            data-budget-limit-input
+          />
+        </label>
+        <div class="settings-budget-actions">
+          <button class="btn primary" type="button" data-budget-limit-save>${escapeHtml(t("Save", "\u4fdd\u5b58"))}</button>
+          <button class="btn" type="button" data-budget-limit-clear>${escapeHtml(t("No limit", "\u8bbe\u4e3a\u65e0\u4e0a\u9650"))}</button>
+        </div>
+      </div>
+      <div class="meta">${escapeHtml(storageText)} 路 ${escapeHtml(issueText)}</div>
+      <div class="meta" data-budget-limit-status></div>
+    </section>`;
+    }
+
     const t = (en, zh) => pickUiText(language, en, zh);
     const configured = typeof model.currentLimit === "number" && Number.isFinite(model.currentLimit);
     const rootClass = variant === "embedded" ? "card settings-inline-budget" : "card";
@@ -591,8 +1088,8 @@ function createInsightRenderers(deps) {
     </section>`;
   }
 
-  function renderSettingsDataConnectionsPanelV2(_usageConnectorTodos, settingsBudgetLimitCard) {
-    return settingsBudgetLimitCard;
+  function renderSettingsDataConnectionsPanelV2(usageConnectorTodos, settingsBudgetLimitCard, language) {
+    return renderSettingsDataConnectionsPanel(usageConnectorTodos, settingsBudgetLimitCard, language);
   }
 
   function renderSettingsEnvironmentStatusCardV2(
@@ -600,6 +1097,7 @@ function createInsightRenderers(deps) {
     usageCost,
     securitySummary,
     updateSummary,
+    employeeContractSummary,
     usageConnectorTodos,
     settingsBudgetLimitCard,
     language,
@@ -608,6 +1106,7 @@ function createInsightRenderers(deps) {
       connectionSummary ? buildOpenClawConnectionState(connectionSummary, usageCost, language).overallStatus : "info",
       securitySummary?.status,
       updateSummary?.status,
+      employeeContractSummary?.status,
     ]);
     const headline =
       overallStatus === "blocked"
@@ -626,7 +1125,10 @@ function createInsightRenderers(deps) {
       </div>
       <div class="settings-status-grid settings-environment-grid">
         ${renderSettingsConnectionPanel(connectionSummary, usageCost, language)}
-        ${renderSettingsSecurityPanel(securitySummary, language)}
+        <div class="settings-status-stack settings-security-stack">
+          ${renderSettingsEmployeeContractPanel(employeeContractSummary, language)}
+          ${renderSettingsSecurityPanel(securitySummary, language)}
+        </div>
         ${renderSettingsUpdatePanel(updateSummary, language)}
         ${renderSettingsDataConnectionsPanelV2(usageConnectorTodos, settingsBudgetLimitCard, language)}
       </div>
@@ -1143,9 +1645,9 @@ function createInsightRenderers(deps) {
     renderContextPressureCard,
     renderInformationCertaintyCard,
     renderMemoryStateSection,
-    renderSettingsBudgetLimitCard: renderSettingsBudgetLimitCardV2,
+    renderSettingsBudgetLimitCard,
     renderSettingsConfigAccessCard,
-    renderSettingsEnvironmentStatusCard: renderSettingsEnvironmentStatusCardV2,
+    renderSettingsEnvironmentStatusCard,
     renderTaskCertaintySection,
   };
 }

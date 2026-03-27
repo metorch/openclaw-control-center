@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
+  invalidateOpenClawCliInsightsCache,
+  loadCachedOpenClawConnectionSummary,
+  loadCachedOpenClawUpdateSummary,
   recoverOpenClawCommandJson,
   summarizeOpenClawConnection,
   summarizeOpenClawMemory,
   summarizeOpenClawSecurity,
   summarizeOpenClawUpdate,
 } from "../src/runtime/openclaw-cli-insights";
+import { invalidateOpenClawCliInvocationCache } from "../src/runtime/openclaw-cli";
 
 test("summarizeOpenClawConnection reports gateway, config, runtime, and blocked states", () => {
   const summary = summarizeOpenClawConnection(
@@ -200,4 +207,132 @@ test("recoverOpenClawCommandJson extracts JSON after plugin log prelude", () => 
     rpc: { ok: true },
     config: { cli: { exists: true, valid: true } },
   });
+});
+
+test("cli insights keep settings connection and update healthy when cold-start probes are slow but still within guarded budgets", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openclaw-cli-insights-"));
+  const previousCliPath = process.env.OPENCLAW_CLI_PATH;
+  try {
+    const scriptPath = join(root, "fake-openclaw.mjs");
+    await writeFile(
+      scriptPath,
+      [
+        "const args = process.argv.slice(2);",
+        "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
+        "const print = (payload) => console.log(JSON.stringify(payload));",
+        "if (args[0] === 'status' && args[1] === '--json') {",
+        "  await sleep(8500);",
+        "  print({ runtimeVersion: '2026.3.24', sessions: { count: 9 }, agents: { agents: [{ agentId: 'main', sessionsCount: 9 }] } });",
+        "  process.exit(0);",
+        "}",
+        "if (args[0] === 'gateway' && args[1] === 'status' && args[2] === '--json') {",
+        "  await sleep(12500);",
+        "  print({",
+        "    service: { runtime: { status: 'running' } },",
+        "    rpc: { ok: true },",
+        "    gateway: { probeUrl: 'ws://127.0.0.1:18789' },",
+        "    config: { cli: { exists: true, valid: true }, daemon: { exists: true, valid: true } }",
+        "  });",
+        "  process.exit(0);",
+        "}",
+        "if (args[0] === 'update' && args[1] === 'status' && args[2] === '--json') {",
+        "  await sleep(8500);",
+        "  print({",
+        "    update: { installKind: 'package', packageManager: 'pnpm', registry: { latestVersion: '2026.3.24' } },",
+        "    channel: { label: 'stable (default)' },",
+        "    availability: { available: false, latestVersion: '2026.3.24' }",
+        "  });",
+        "  process.exit(0);",
+        "}",
+        "console.error('unexpected args: ' + args.join(' '));",
+        "process.exit(1);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    process.env.OPENCLAW_CLI_PATH = scriptPath;
+    invalidateOpenClawCliInvocationCache();
+    invalidateOpenClawCliInsightsCache();
+
+    const [connection, update] = await Promise.all([
+      loadCachedOpenClawConnectionSummary(),
+      loadCachedOpenClawUpdateSummary(),
+    ]);
+
+    assert.equal(connection.status, "ok");
+    assert.equal(connection.items[0]?.status, "ok");
+    assert.equal(connection.items[1]?.status, "ok");
+    assert.equal(connection.items[2]?.value, "9");
+    assert.equal(update.status, "ok");
+    assert.equal(update.currentVersion, "2026.3.24");
+    assert.equal(update.latestVersion, "2026.3.24");
+  } finally {
+    process.env.OPENCLAW_CLI_PATH = previousCliPath;
+    invalidateOpenClawCliInvocationCache();
+    invalidateOpenClawCliInsightsCache();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cli insights keep slow probe caches warm from completion time instead of request start", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openclaw-cli-insights-cache-"));
+  const previousCliPath = process.env.OPENCLAW_CLI_PATH;
+  const previousCountPath = process.env.OPENCLAW_CLI_TEST_COUNT_PATH;
+  const previousNow = Date.now;
+  try {
+    const scriptPath = join(root, "fake-openclaw.mjs");
+    const countPath = join(root, "invocations.log");
+    await writeFile(
+      scriptPath,
+      [
+        "import { appendFileSync } from 'node:fs';",
+        "const args = process.argv.slice(2);",
+        "const countPath = process.env.OPENCLAW_CLI_TEST_COUNT_PATH;",
+        "if (countPath) appendFileSync(countPath, args.join(' ') + '\\n');",
+        "const print = (payload) => console.log(JSON.stringify(payload));",
+        "if (args[0] === 'status' && args[1] === '--json') {",
+        "  print({ runtimeVersion: '2026.3.24', sessions: { count: 3 }, agents: { agents: [{ agentId: 'main', sessionsCount: 3 }] } });",
+        "  process.exit(0);",
+        "}",
+        "if (args[0] === 'gateway' && args[1] === 'status' && args[2] === '--json') {",
+        "  print({ service: { runtime: { status: 'running' } }, rpc: { ok: true }, gateway: { probeUrl: 'ws://127.0.0.1:18789' }, config: { cli: { exists: true, valid: true }, daemon: { exists: true, valid: true } } });",
+        "  process.exit(0);",
+        "}",
+        "console.error('unexpected args: ' + args.join(' '));",
+        "process.exit(1);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const fakeNowValues = [1000, 1000, 20_000, 20_000, 20_010, 20_010];
+    let lastNow = fakeNowValues[fakeNowValues.length - 1] ?? 20_010;
+    Date.now = () => {
+      if (fakeNowValues.length > 0) {
+        lastNow = fakeNowValues.shift() ?? lastNow;
+      }
+      return lastNow;
+    };
+
+    process.env.OPENCLAW_CLI_PATH = scriptPath;
+    process.env.OPENCLAW_CLI_TEST_COUNT_PATH = countPath;
+    invalidateOpenClawCliInvocationCache();
+    invalidateOpenClawCliInsightsCache();
+
+    await loadCachedOpenClawConnectionSummary();
+    await loadCachedOpenClawConnectionSummary();
+
+    const invocations = (await readFile(countPath, "utf8")).trim().split(/\r?\n/).filter(Boolean);
+    assert.equal(invocations.length, 2);
+    assert(invocations.includes("status --json"));
+    assert(invocations.includes("gateway status --json"));
+  } finally {
+    Date.now = previousNow;
+    process.env.OPENCLAW_CLI_PATH = previousCliPath;
+    process.env.OPENCLAW_CLI_TEST_COUNT_PATH = previousCountPath;
+    invalidateOpenClawCliInvocationCache();
+    invalidateOpenClawCliInsightsCache();
+    await rm(root, { recursive: true, force: true });
+  }
 });

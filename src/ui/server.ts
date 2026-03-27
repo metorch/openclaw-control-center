@@ -51,6 +51,7 @@ const import_local_safety_settings = require("../runtime/local-safety-settings")
 const import_import_dry_run = require("../runtime/import-dry-run");
 const import_local_token_auth = require("../runtime/local-token-auth");
 const import_openclaw_cli_insights = require("../runtime/openclaw-cli-insights");
+const import_openclaw_employee_contract = require("../runtime/openclaw-employee-contract");
 const import_operation_audit = require("../runtime/operation-audit");
 const import_approval_action_service = require("../runtime/approval-action-service");
 const import_action_queue_links = require("../runtime/action-queue-links");
@@ -95,7 +96,7 @@ const { createStaffModelHelpers } = require("./server-staff-models");
 const { createStaffOverviewHelpers } = require("./server-staff-overview");
 const { createFeatureRenderers } = require("./server-features");
 const { badge, escapeHtml, extractDateFromName, formatInt, formatPercent, formatTimeAgoFromNow, pickUiText, safeTruncate, toPlainSummary, toSortableMs, uniqueSorted } = require("./server-shared");
-const { renderAgentVisualEnhancerScript, renderCardHelpTooltipsScript, renderCollaborationFilterScript, renderCollaborationRoomOpenScript, renderDashboardRefreshScript, renderFeaturesScript, renderFileWorkbenchScript, renderNativeMotionScript, renderQuotaResetScript, renderSettingsBudgetLimitScript, renderSettingsSafetyScript, renderStaffModelScript, renderTaskBoardScript } = require("./server-inline-scripts");
+const { renderAgentVisualEnhancerScript, renderCardHelpTooltipsScript, renderCollaborationFilterScript, renderCollaborationRoomOpenScript, renderDashboardRefreshScript, renderFeaturesScript, renderFileWorkbenchScript, renderNativeMotionScript, renderQuotaResetScript, renderSettingsBudgetLimitScript, renderSettingsInsightsScript, renderSettingsSafetyScript, renderStaffModelScript, renderTaskBoardScript, renderTaskDiagnosticsScript } = require("./server-inline-scripts");
 const { agentTeamActionLabel, agentTeamEmbeddedUpdatedLabel, agentTeamFactLabel, agentTeamFreshnessTone, agentTeamPhaseLabel, agentTeamPreviewSourceLabel, agentTeamRunStatusLabel, agentTeamRuntimeSummary, agentTeamSuggestedPanelHref, hasFreshRuntimeTimestamp, isSameLocalCalendarDay, isStaleRuntimeTimestamp, pickLatestSessionActivityTimestamp, pickLatestTimestamp, renderAgentTeamArtifactPreviewCard, renderAgentTeamDocsBlock, renderAgentTeamInspectorCard, renderAgentTeamMemoryBlock, renderAgentTeamOverviewBlock, renderAgentTeamProjectsBlock, renderAgentTeamRunSummaryCard, renderAgentTeamSettingsBlock, renderAgentTeamTeamBlock } = require("./server-agent-team");
 const { createDetailPageRenderers } = require("./server-detail-pages");
 const { createDashboardFragmentHelpers } = require("./server-dashboard-fragments");
@@ -132,7 +133,7 @@ const dashboardFragmentHelpers = createDashboardFragmentHelpers({
 const { cronHealthLabel, cronPayloadOwner, cronPayloadOwnerAgentId, cronPayloadPurpose, cronRuntimePurpose, cronScheduleLabel, formatExecutorAgentLabel, heartbeatModeLabel, humanizeTimedJobScheduleLabel, humanizeTimedJobWindowLabel, sanitizeCronPurposeText, sessionStateLabel, summarizeNames } = createRuntimeLabelHelpers({ formatSeconds, humanizeOperatorLabel, normalizeInlineText, pickUiText, safeTruncate, toSortableMs });
 const { buildBudgetBars, buildParitySurfaceRows, compareApprovals, parseSubscriptionConnectPaths, renderActionQueue, renderBudgetBars, renderChecklistRows, renderExceptionsList, renderMetricSummary, renderParitySurfaceRows, renderProjectBoard, renderReadinessRows, renderSelectOptions } = dashboardFragmentHelpers;
 const { buildGlobalVisibilityDetailHref, buildGlobalVisibilityViewModel, loadOpenclawCronCatalog, renderGlobalVisibilityCard, renderGlobalVisibilityStrip, renderGlobalVisibilityStripCard } = createGlobalVisibilityRenderers({ asObject, badge, buildCronOverview: import_cron_overview.buildCronOverview, buildHomeHref, cronPayloadOwner, cronPayloadOwnerAgentId, cronPayloadPurpose, cronPollingIntervalMs: import_config.POLLING_INTERVALS_MS.cron, cronRuntimePurpose, cronScheduleLabel, escapeHtml, formatExecutorAgentLabel, getOpenClawCronJobsCandidates: () => OPENCLAW_CRON_JOBS_CANDIDATES, listSessionConversations: import_session_conversations.listSessionConversations, pickUiText, readTaskHeartbeatRuns: import_task_heartbeat.readTaskHeartbeatRuns, sanitizeCronPurposeText, summarizeNames });
-const { renderAuditPage, renderCronJobDetailPage, renderSessionDrilldownPage, renderSessionHistoryRows, renderSessionPreviewRows } = createDetailPageRenderers({ buildHomeHref, buildSessionDetailHref, cronHealthLabel, executionChainStageLabel: (stage, language = "zh") => executionChainHelpers.executionChainStageLabel(stage, language), formatSeconds, humanizeTimedJobScheduleLabel, renderSelectOptions, sessionStateLabel, summarizeVisibleSessionSnippet: (rawSnippet, language = "zh", maxLength = 96) => executionChainHelpers.summarizeVisibleSessionSnippet(rawSnippet, language, maxLength) });
+const { renderAuditPage, renderCronJobDetailPage, renderSessionDrilldownPage, renderSessionHistoryRows } = createDetailPageRenderers({ buildHomeHref, buildSessionDetailHref, cronHealthLabel, executionChainStageLabel: (stage, language = "zh") => executionChainHelpers.executionChainStageLabel(stage, language), formatSeconds, humanizeTimedJobScheduleLabel, renderSelectOptions, sessionStateLabel, summarizeVisibleSessionSnippet: (rawSnippet, language = "zh", maxLength = 96) => executionChainHelpers.summarizeVisibleSessionSnippet(rawSnippet, language, maxLength) });
 const { renderLegacyTaskBoard, renderTaskBoard, renderTaskDetailPage } = createTaskPageRenderers({ buildHomeHref, buildSessionDetailHref, renderGlobalVisibilityStrip, sessionStateLabel, summarizeVisibleSessionSnippet: (rawSnippet, language = "zh", maxLength = 96) => executionChainHelpers.summarizeVisibleSessionSnippet(rawSnippet, language, maxLength), taskStateLabel });
 const { asPercent, dataConnectionLabel, formatCurrency, formatSubscriptionNumericField, formatSubscriptionPercentField, formatSubscriptionTextField, normalizeQuotaWindowLabel, renderQuotaWindowRow, renderTokenPieChart, renderTokenShareRows, renderUsageBreakdownRows, renderUsageConnectorTodos, renderUsageContextRows, renderUsagePeriodCards, simplifyUsageLabel, usagePeriodLabel } = createUsageRenderers({ normalizeInlineText });
 const collaborationThreadHelpers = createCollaborationThreadHelpers({
@@ -204,7 +205,7 @@ const collaborationChatHelpers = createCollaborationChatHelpers({
     safeTruncate,
     toCollaborationApiAttachment: (attachment, roomId) => collaborationRoomHelpers.toCollaborationApiAttachment(attachment, roomId)
 });
-const { renderCollaborationThreadCards, renderOfficeCards, renderOfficeFloor, renderStaffOverviewCards, renderSubscriptionStatusCard, renderTaskExecutionChainCards } = createTeamPanelRenderers({ asPercent, collaborationParticipantRoleLabel: collaborationThreadHelpers.collaborationParticipantRoleLabel, collaborationRoleAgentLabel: collaborationThreadHelpers.collaborationRoleAgentLabel, deriveAgentAnimalIdentity: (agentId) => officeRuntimeHelpers.deriveAgentAnimalIdentity(agentId), executionChainCardTitle: (item, language) => executionChainHelpers.executionChainCardTitle(item, language), executionChainSourceLabel: (chain, language = "zh") => executionChainHelpers.executionChainSourceLabel(chain, language), executionChainStageLabel: (stage, language = "zh") => executionChainHelpers.executionChainStageLabel(stage, language), formatSubscriptionNumericField, humanizeOperatorLabel, normalizeQuotaWindowLabel, officeZoneLabel: (zone, language = "zh") => officeRuntimeHelpers.officeZoneLabel(zone, language), renderAgentAvatarFrame: (input) => officeRuntimeHelpers.renderAgentAvatarFrame({ ...input, escapeHtml }), renderQuotaWindowRow, sessionStateLabel, summarizeVisibleSessionSnippet: (rawSnippet, language = "zh", maxLength = 96) => executionChainHelpers.summarizeVisibleSessionSnippet(rawSnippet, language, maxLength) });
+const { renderCollaborationThreadCards, renderOfficeCards, renderStaffOverviewCards, renderSubscriptionStatusCard, renderTaskExecutionChainCards } = createTeamPanelRenderers({ asPercent, collaborationParticipantRoleLabel: collaborationThreadHelpers.collaborationParticipantRoleLabel, collaborationRoleAgentLabel: collaborationThreadHelpers.collaborationRoleAgentLabel, deriveAgentAnimalIdentity: (agentId) => officeRuntimeHelpers.deriveAgentAnimalIdentity(agentId), executionChainCardTitle: (item, language) => executionChainHelpers.executionChainCardTitle(item, language), executionChainSourceLabel: (chain, language = "zh") => executionChainHelpers.executionChainSourceLabel(chain, language), executionChainStageLabel: (stage, language = "zh") => executionChainHelpers.executionChainStageLabel(stage, language), formatSubscriptionNumericField, humanizeOperatorLabel, normalizeQuotaWindowLabel, officeZoneLabel: (zone, language = "zh") => officeRuntimeHelpers.officeZoneLabel(zone, language), renderAgentAvatarFrame: (input) => officeRuntimeHelpers.renderAgentAvatarFrame({ ...input, escapeHtml }), renderQuotaWindowRow, sessionStateLabel, summarizeVisibleSessionSnippet: (rawSnippet, language = "zh", maxLength = 96) => executionChainHelpers.summarizeVisibleSessionSnippet(rawSnippet, language, maxLength) });
 const { attachCollaborationRoomRefsToCards, buildCollaborationAttachmentSummary, buildCollaborationChatBootPreferences, buildCollaborationChatParticipantViews, buildCollaborationEventSyncSignature, buildCollaborationRoomApiView, buildCollaborationRoomStreamSignature, buildCollaborationTranscriptBackfillEvent, buildCollaborationTranscriptBackfillEvents, buildTranscriptBackfillDetail, compareCollaborationApiEventsByTime, describeCollaborationRoomEvent, extractCollaborationMentionTokens, findUnknownCollaborationMentions, formatBytesCompact, formatCollaborationDuration, isCollaborationRelayPromptMessage, isDuplicateCollaborationSyncEvent, listCollaborationTranscriptRooms, loadCollaborationParticipantDirectory, mergeCollaborationRoomApiEvents, normalizeCollaborationAttachmentIds, normalizeCollaborationEventSyncText, normalizeCollaborationRoomIdPayload, normalizeCollaborationRoomIdQuery, registerCollaborationSyncEventSignature, resolveCollaborationParticipantName, shouldCountUnreadCollaborationApiEvent, shouldCountUnreadCollaborationEvent, summarizeCollaborationAttachmentNames, toCollaborationApiAttachment } = collaborationRoomHelpers;
 const { buildCollaborationAgentPrompt, buildCollaborationAgentPromptV2, buildCollaborationAgentReplyDetail, buildCollaborationPromptContextLines, buildCollaborationRoomApiEvent, collectCollaborationAgentReplyAttachments, createCollaborationRoomMessage, adjudicateCollaborationRoomOutcome, terminateCollaborationRoomWork, dispatchCollaborationRoomMessage, dispatchCollaborationTurnToAgent, dispatchCollaborationTurnToAgentV2, isAbsoluteLikePath, isPathInsideAnyRoot, isPathInsideRoot, isReadableCollaborationArtifactPath, isSupportedCollaborationArtifactPath, resolveCollaborationArtifactPaths, resolveCollaborationParticipantWorkspaceRoot, shouldHintCollaborationArtifactReply } = collaborationChatHelpers;
 const { buildCollaborationThreadCards, buildCollaborationTimelineSteps, buildInterSessionCollaborationCards, buildInterSessionCollaborationTimelineSteps, collaborationInterSessionCurrentOwnerLabel, collaborationInterSessionRouteLabel, collaborationInterSessionSummary, collaborationParticipantRoleLabel, collaborationRoleAgentLabel, collaborationRouteLabel, collaborationStatusRank, collaborationThreadKindLabel, collaborationThreadStatusLabel, collaborationThreadSummary, deriveCollaborationTaskTitle, deriveInterSessionTaskTitle, extractCollaborationTaskLabel, foldCollaborationThreadCards, mergeCollaborationThreadCards, normalizeAgentIdCandidate, resolveCollaborationCurrentOwner, resolveInterSessionCollaborationStatus, resolveCollaborationThreadStatus } = collaborationThreadHelpers;
@@ -216,7 +217,7 @@ const OPENCLAW_CRON_JOBS_CANDIDATES = [(0, import_node_path.join)(OPENCLAW_HOME_
 const DOCS_DIR = (0, import_node_path.join)(process.cwd(), "docs");
 const README_PATH = (0, import_node_path.join)(process.cwd(), "README.md");
 const AGENT_ROOT_DIR = process.env.OPENCLAW_AGENT_ROOT?.trim() || (0, import_node_path.join)(process.cwd(), "..");
-const HTML_HEAVY_CACHE_TTL_MS = 3e3;
+const HTML_HEAVY_CACHE_TTL_MS = 1e4;
 const HTML_USAGE_CACHE_TTL_MS = 1e4;
 const HTML_SNAPSHOT_CACHE_TTL_MS = 1e4;
 const HTML_LIVE_SESSIONS_CACHE_TTL_MS = import_config.POLLING_INTERVALS_MS.sessionsList;
@@ -227,6 +228,9 @@ const RAW_UPLOAD_MAX_BYTES = import_collaboration_room.COLLABORATION_ATTACHMENT_
 const EDITABLE_TEXT_FILE_MAX_BYTES = 1024 * 1024;
 const EDITABLE_TEXT_CONTENT_MAX_CHARS = 24e4;
 const SEARCH_LIMIT_MAX = 200;
+const TASK_EVIDENCE_SESSION_KEY_LIMIT = 24;
+const TASK_EVIDENCE_HISTORY_LIMIT = 12;
+const SETTINGS_INSIGHT_PREVIEW_TIMEOUT_MS = 150;
 const TASK_RUNTIME_ACTIVITY_WINDOW_MS = 6 * 60 * 60 * 1e3;
 const STALLED_RUNNING_SESSION_WINDOW_MS = 2 * 60 * 60 * 1e3;
 const OPENCLAW_WORKSPACE_ROOT = resolveOpenClawWorkspaceRootImpl({ explicitWorkspaceRoot: process.env.OPENCLAW_WORKSPACE_ROOT?.trim(), openclawHomeDir: OPENCLAW_HOME_DIR, configPath: OPENCLAW_CONFIG_PATH });
@@ -358,7 +362,7 @@ const { primeUiRenderCaches, readNotificationCenter, refreshDashboardSources } =
 let renderStaffRecentActivityCache;
 function invalidateUiRenderCaches() { sessionConversationHelpers.invalidateSessionConversationCaches(); runtimeCacheHelpers.invalidateRuntimeCaches(); renderStaffRecentActivityCache = void 0; readModelHelpers.invalidateReadModelCaches(); }
 __name(invalidateUiRenderCaches, "invalidateUiRenderCaches");
-function invalidateDashboardRefreshCaches() { invalidateUiRenderCaches(); (0, import_agent_team_embed.invalidateAgentTeamEmbedSnapshotCache)(); (0, import_doc_hub.invalidateStructuredDocHubCache)(); (0, import_openclaw_cli_insights.invalidateOpenClawCliInsightsCache)(); (0, import_usage_cost.invalidateUsageCostSourceCache)(); }
+function invalidateDashboardRefreshCaches() { invalidateUiRenderCaches(); (0, import_agent_team_embed.invalidateAgentTeamEmbedSnapshotCache)(); (0, import_doc_hub.invalidateStructuredDocHubCache)(); (0, import_openclaw_cli_insights.invalidateOpenClawCliInsightsCache)(); (0, import_openclaw_employee_contract.invalidateOpenClawEmployeeContractCache)(); (0, import_usage_cost.invalidateUsageCostSourceCache)(); }
 __name(invalidateDashboardRefreshCaches, "invalidateDashboardRefreshCaches");
 function isLoopbackRequestAddress(value) {
     const normalized = String(value || "").trim();
@@ -421,6 +425,7 @@ function renderSafetyValueChip(value, tone) {
     return `<span class="settings-safety-chip ${escapeHtml(tone)}">${escapeHtml(value)}</span>`;
 }
 __name(renderSafetyValueChip, "renderSafetyValueChip");
+/*
 function renderSafetyToggleControl(key, checked, label, language) {
     const valueLabel = checked ? pickUiText(language, "On", "开启") : pickUiText(language, "Off", "关闭");
     return `<div class="settings-safety-control" data-safety-toggle-control>
@@ -589,6 +594,98 @@ function buildSafetySettingsRowsHtmlV2(input) {
             checked: input.runtime.approvalActionsEnabled,
             status: input.runtime.approvalActionsEnabled ? "warn" : "disabled",
             note: input.runtime.approvalActionsEnabled ? t("Approval actions are allowed to execute live writes.", "允许审批动作执行真实写入。") : t("Approval write is currently off.", "已关闭审批写入。")
+        }),
+        `<tr>
+          <td>${escapeHtml(t("Effective mode", "当前生效模式"))}</td>
+          <td>${badge(modeTone, modeValue)}</td>
+          <td>${renderSafetyValueChip(modeValue, modeTone)}</td>
+          <td>${escapeHtml(input.importGuard.defaultMode === "blocked" ? t("The current combination still keeps the system in protected mode.", "当前组合仍让系统保持在保护模式。") : input.importGuard.defaultMode === "dry_run" ? t("The current combination defaults to a dry run first.", "当前组合会默认先进入演练模式。") : t("The current combination allows live write execution.", "当前组合允许实时写入执行。"))}</td>
+        </tr>`
+    ].join("");
+}
+__name(buildSafetySettingsRowsHtmlV2, "buildSafetySettingsRowsHtmlV2");
+*/
+function renderSafetyToggleControlV2(key, checked, label, language, copy) {
+    const onLabel = copy?.onLabel ?? pickUiText(language, "On", "开启");
+    const offLabel = copy?.offLabel ?? pickUiText(language, "Off", "关闭");
+    const valueLabel = checked ? onLabel : offLabel;
+    return `<div class="settings-safety-control" data-safety-toggle-control>
+      <button class="settings-switch-toggle${checked ? " is-on" : ""}" type="button" role="switch" aria-label="${escapeHtml(label)}" aria-checked="${checked ? "true" : "false"}" data-safety-toggle="${escapeHtml(key)}" data-next-value="${checked ? "false" : "true"}" data-label-on="${escapeHtml(onLabel)}" data-label-off="${escapeHtml(offLabel)}">
+        <span class="settings-switch-toggle-track"><span class="settings-switch-toggle-thumb"></span></span>
+      </button>
+      <span class="settings-switch-toggle-label" data-safety-toggle-label>${escapeHtml(valueLabel)}</span>
+    </div>`;
+}
+__name(renderSafetyToggleControlV2, "renderSafetyToggleControlV2");
+function buildSafetySettingsRowsHtmlV2(input) {
+    const t = (en, zh) => pickUiText(input.language, en, zh);
+    const eyeIcon = `<svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 4.5c4.3 0 7.7 2.8 9 5.5-1.3 2.7-4.7 5.5-9 5.5S2.3 12.7 1 10c1.3-2.7 4.7-5.5 9-5.5Zm0 1.6C6.8 6.1 4 8.1 2.8 10c1.2 1.9 4 3.9 7.2 3.9s6-2 7.2-3.9c-1.2-1.9-4-3.9-7.2-3.9Zm0 1.6a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6Z" fill="currentColor"></path></svg>`;
+    const toggleRow = (item) => `<tr>
+      <td>${escapeHtml(item.label)}</td>
+      <td>${badge(item.status, item.stateLabel ?? void 0)}</td>
+      <td>${renderSafetyToggleControlV2(item.key, item.checked, item.label, input.language, item.copy)}</td>
+      <td>${escapeHtml(item.note)}</td>
+    </tr>`;
+    const tokenModeStatus = input.runtime.localTokenAuthRequired ? input.importGuard.localTokenConfigured ? "enabled" : "blocked" : "disabled";
+    const tokenModeStateLabel = input.runtime.localTokenAuthRequired ? input.importGuard.localTokenConfigured ? t("Required", "需验证") : t("Missing passphrase", "缺少口令") : t("Off", "关闭");
+    const tokenRow = `<tr data-safety-token-row data-configured="${input.importGuard.localTokenConfigured ? "true" : "false"}">
+      <td>${escapeHtml(t("Safety passphrase", "安全口令配置"))}</td>
+      <td>${badge(tokenModeStatus, tokenModeStateLabel)}</td>
+      <td>
+        <div class="settings-secret-inline">
+          ${renderSafetyToggleControlV2("localTokenAuthRequired", input.runtime.localTokenAuthRequired, t("Safety passphrase mode", "安全口令模式"), input.language, { onLabel: t("Required", "需验证"), offLabel: t("Off", "关闭") })}
+          <div class="settings-secret-field">
+            <input class="settings-secret-input" type="password" autocomplete="off" spellcheck="false" value="${escapeHtml(input.runtime.localApiToken)}" aria-label="${escapeHtml(t("Safety passphrase", "安全口令"))}" data-safety-token-input />
+            <button class="btn settings-secret-visibility" type="button" aria-label="${escapeHtml(t("Show or hide safety passphrase", "显示或隐藏安全口令"))}" data-safety-token-visibility>${eyeIcon}</button>
+          </div>
+        </div>
+      </td>
+      <td>${escapeHtml(input.runtime.localTokenAuthRequired ? input.importGuard.localTokenConfigured ? t("This passphrase is required before local write actions can proceed. Press Enter or leave the field to save a change.", "本地写入操作需要先通过这个口令验证。修改后按回车，或离开输入框即可保存。") : t("Passphrase mode is on, but no passphrase is configured yet. Set one here, or turn the mode off.", "安全口令模式已开启，但当前还没有配置口令。可以在这里设置，或直接关闭该模式。") : t("Passphrase mode is off. Local write actions no longer require this passphrase.", "安全口令模式已关闭，本地写入操作将不再要求输入这个口令。"))}</td>
+    </tr>`;
+    const tokenGateValue = input.tokenGateStatus === "armed" ? t("Ready", "已就绪") : input.tokenGateStatus === "blocked_no_token" ? t("Passphrase missing", "缺少口令") : t("Gate off", "未启用");
+    const tokenGateTone = input.tokenGateStatus === "armed" ? "enabled" : input.tokenGateStatus === "blocked_no_token" ? "blocked" : "disabled";
+    const modeValue = safetyGuardModeLabel(input.importGuard.defaultMode, input.language);
+    const modeTone = input.importGuard.defaultMode === "blocked" ? "blocked" : input.importGuard.defaultMode === "dry_run" ? "warn" : "ok";
+    return [
+        toggleRow({
+            key: "readonlyMode",
+            label: t("Read-only protection", "只读保护"),
+            checked: input.runtime.readonlyMode,
+            status: input.runtime.readonlyMode ? "enabled" : "warn",
+            note: input.runtime.readonlyMode ? t("Only safety drills are allowed right now; real writes are blocked.", "当前只允许安全演练，不会写入真实变更。") : t("Real writes are allowed, so please use this carefully.", "允许真实写入，请确认后再使用。")
+        }),
+        tokenRow,
+        toggleRow({
+            key: "importMutationEnabled",
+            label: t("Import write switch", "导入写入开关"),
+            checked: input.runtime.importMutationEnabled,
+            status: input.runtime.importMutationEnabled ? "warn" : "disabled",
+            note: input.runtime.importMutationEnabled ? t("Import mutation routes are allowed to write.", "允许导入变更真正写入。") : t("Import write is currently off.", "导入写入当前已关闭。")
+        }),
+        toggleRow({
+            key: "importMutationDryRun",
+            label: t("Default protection mode", "默认保护模式"),
+            checked: input.runtime.importMutationDryRun,
+            status: modeTone,
+            stateLabel: modeValue,
+            copy: {
+                onLabel: t("Dry run", "演练"),
+                offLabel: t("Live", "实时")
+            },
+            note: input.runtime.readonlyMode ? t("Read-only protection is still on, so the effective mode remains protected.", "只读保护仍然开启，所以实际模式依然会保持保护状态。") : !input.runtime.importMutationEnabled ? t("Import write is off, so this only sets the next default once writing is enabled again.", "导入写入当前已关闭，所以这里只是提前设置恢复写入后的默认模式。") : input.runtime.importMutationDryRun ? t("Enabled means import changes rehearse first before you decide whether to write.", "开启后默认先演练，再决定是否真正写入。") : t("Disabled means import changes can write live as long as the other safety gates allow it.", "关闭后只要其他安全开关放行，导入变更就可以直接实时写入。")
+        }),
+        `<tr>
+          <td>${escapeHtml(t("Current protection state", "当前保护状态"))}</td>
+          <td>${badge(tokenGateTone, tokenGateValue)}</td>
+          <td>${renderSafetyValueChip(tokenGateValue, safetyValueTone(tokenGateTone))}</td>
+          <td>${escapeHtml(t("This only affects state-changing routes and does not block normal viewing.", "只影响会改数据的操作，不影响普通查看。"))}</td>
+        </tr>`,
+        toggleRow({
+            key: "approvalActionsEnabled",
+            label: t("Approval write switch", "审批写入开关"),
+            checked: input.runtime.approvalActionsEnabled,
+            status: input.runtime.approvalActionsEnabled ? "warn" : "disabled",
+            note: input.runtime.approvalActionsEnabled ? t("Approval actions are allowed to execute live writes.", "允许审批动作执行实时写入。") : t("Approval write is currently off.", "审批写入当前已关闭。")
         }),
         `<tr>
           <td>${escapeHtml(t("Effective mode", "当前生效模式"))}</td>
@@ -860,6 +957,7 @@ function startUiServer(port, toolClient) {
                 const usageView = resolveUsageView(url.searchParams);
                 const search = resolveDashboardSearchQuery(url.searchParams);
                 const feature = section === "features" ? normalizeDashboardFeature(normalizeQueryString(url.searchParams.get("feature"), "feature", 40, false)) : void 0;
+                const renderPartial = normalizeQueryString(url.searchParams.get("partial"), "partial", 40, true);
                 const taskBoardPage = normalizeOptionalPositiveInt(url.searchParams.get("task_board_page"), "task_board_page") ?? 1;
                 const taskFollowupPage = normalizeOptionalPositiveInt(url.searchParams.get("task_followup_page"), "task_followup_page") ?? 1;
                 const requestedCollaborationRoomId = (0, import_collaboration_room.normalizeCollaborationRoomId)(url.searchParams.get("roomId"));
@@ -871,7 +969,7 @@ function startUiServer(port, toolClient) {
                     const target = `${buildHomeHref(filters, compactStatusStrip, section, language, usageView)}${legacyAnchor ? `#${legacyAnchor}` : ""}`;
                     return redirect(res, 302, target);
                 }
-                if (hasAnyQueryKey(url.searchParams, ["quick", "status", "owner", "project", "compact", "lang", "usage_view"])) {
+                if (!renderPartial && hasAnyQueryKey(url.searchParams, ["quick", "status", "owner", "project", "compact", "lang", "usage_view"])) {
                     await (0, import_ui_preferences.saveUiPreferences)({ ...prefs.preferences, language, compactStatusStrip, quickFilter: filters.quick ?? "all", taskFilters: { status: filters.status, owner: filters.owner, project: filters.project }, updatedAt: new Date().toISOString() });
                 }
                 const collaborationChatPreferences = requestedCollaborationRoomId
@@ -886,7 +984,7 @@ function startUiServer(port, toolClient) {
                         }
                     }
                     : prefs.preferences.collaborationChat;
-                const html = await renderHtml(filters, toolClient, { section, feature, language, compactStatusStrip, usageView, preferencesPath: prefs.path, taskCardOrder: prefs.preferences.taskCardOrder, taskBoardViewMode: prefs.preferences.taskBoardViewMode, taskBoardPage, taskFollowupPage, localMutationUnlock: prefs.preferences.localMutationUnlock, collaborationChat: collaborationChatPreferences, search });
+                const html = await renderHtml(filters, toolClient, { section, feature, language, compactStatusStrip, usageView, preferencesPath: prefs.path, taskCardOrder: prefs.preferences.taskCardOrder, taskBoardViewMode: prefs.preferences.taskBoardViewMode, taskBoardPage, taskFollowupPage, localMutationUnlock: prefs.preferences.localMutationUnlock, collaborationChat: collaborationChatPreferences, search, renderPartial });
                 return writeText(res, 200, html, "text/html; charset=utf-8");
             }
             if (method === "POST" && path === "/api/dashboard/refresh") {
@@ -1131,6 +1229,13 @@ function startUiServer(port, toolClient) {
                     res.setHeader("content-disposition", `inline; filename="${sanitizeHeaderFileName(artifact.descriptor.name)}"`);
                 }
                 return writeBinary(res, 200, artifact.buffer, artifact.descriptor.contentType);
+            }
+            if (method === "GET" && path === "/api/settings/environment-card") {
+                assertAllowedQueryParams(url.searchParams, ["lang"], true);
+                const snapshot = await readReadModelSnapshotWithLiveSessions(toolClient);
+                const language = resolveUiLanguage(url.searchParams);
+                const html = await renderSettingsEnvironmentStatusCardFragment(snapshot, language);
+                return writeJson(res, 200, { ok: true, html });
             }
             if ((method === "POST" || method === "PATCH") && path === "/api/settings/budget-limit") {
                 assertMutationAuthorized(req, "/api/settings/budget-limit");
@@ -2157,7 +2262,7 @@ function startUiServer(port, toolClient) {
         }
     });
     const bindAddress = process.env.UI_BIND_ADDRESS ?? "127.0.0.1";
-    server.listen(port, bindAddress, () => { const displayUrl = bindAddress === "0.0.0.0" ? `http://<your-ip>:${port}` : `http://${bindAddress}:${port}`; console.log(`[mission-control] ui listening at ${displayUrl}`); void Promise.resolve().then(() => (0, import_openclaw_cli_insights.primeOpenClawCliInsights)()); void primeUiRenderCaches(toolClient); });
+    server.listen(port, bindAddress, () => { const displayUrl = bindAddress === "0.0.0.0" ? `http://<your-ip>:${port}` : `http://${bindAddress}:${port}`; console.log(`[mission-control] ui listening at ${displayUrl}`); void Promise.resolve().then(() => (0, import_openclaw_cli_insights.primeOpenClawCliInsights)()); void Promise.resolve().then(() => (0, import_openclaw_employee_contract.primeOpenClawEmployeeContract)()); void primeUiRenderCaches(toolClient); });
     return server;
 }
 __name(startUiServer, "startUiServer");
@@ -2171,10 +2276,76 @@ function delay(ms) { return new Promise(resolve2 => setTimeout(resolve2, ms)); }
 __name(delay, "delay");
 function normalizeInlineText(input) { return input.replace(/\s+/g, " ").trim(); }
 __name(normalizeInlineText, "normalizeInlineText");
+function rankTaskForEvidence(task) {
+    if (task.status === "blocked")
+        return 0;
+    if (task.status === "in_progress")
+        return 1;
+    if (task.status === "todo")
+        return 2;
+    if (task.status === "done")
+        return 4;
+    return 3;
+}
+__name(rankTaskForEvidence, "rankTaskForEvidence");
+function selectTaskEvidenceSessionKeys(tasks, maxKeys = TASK_EVIDENCE_SESSION_KEY_LIMIT) {
+    const selected = [];
+    const seen = new Set;
+    const sortedTasks = [...tasks].sort((a, b) => {
+        const rankDiff = rankTaskForEvidence(a) - rankTaskForEvidence(b);
+        if (rankDiff !== 0)
+            return rankDiff;
+        const aDueMs = toSortableMs(a.dueAt);
+        const bDueMs = toSortableMs(b.dueAt);
+        const aDueSort = a.status === "done" || aDueMs <= 0 ? Number.POSITIVE_INFINITY : aDueMs;
+        const bDueSort = b.status === "done" || bDueMs <= 0 ? Number.POSITIVE_INFINITY : bDueMs;
+        if (aDueSort !== bDueSort)
+            return aDueSort - bDueSort;
+        const updatedDiff = toSortableMs(b.updatedAt) - toSortableMs(a.updatedAt);
+        if (updatedDiff !== 0)
+            return updatedDiff;
+        return String(a.taskId || "").localeCompare(String(b.taskId || ""));
+    });
+    for (const task of sortedTasks) {
+        for (const sessionKey of task.sessionKeys.map((item) => item.trim()).filter(Boolean)) {
+            if (seen.has(sessionKey))
+                continue;
+            seen.add(sessionKey);
+            selected.push(sessionKey);
+            if (selected.length >= maxKeys)
+                return selected;
+        }
+    }
+    return selected;
+}
+__name(selectTaskEvidenceSessionKeys, "selectTaskEvidenceSessionKeys");
+function resolveUsageCostModeForSection(section) {
+    if (section === "usage-cost")
+        return "full";
+    if (section === "settings")
+        return "settings";
+    return "summary";
+}
+__name(resolveUsageCostModeForSection, "resolveUsageCostModeForSection");
+async function loadSettingsInsightPreview(loader, timeoutMs = SETTINGS_INSIGHT_PREVIEW_TIMEOUT_MS) {
+    const timeoutSentinel = Symbol("settings-insight-preview-timeout");
+    const loaderPromise = Promise.resolve().then(() => loader()).catch(() => void 0);
+    const result = await Promise.race([loaderPromise, delay(timeoutMs).then(() => timeoutSentinel)]);
+    return result === timeoutSentinel ? void 0 : result;
+}
+__name(loadSettingsInsightPreview, "loadSettingsInsightPreview");
 function humanizeTimedJobScheduleLabelForSmoke(scheduleLabel, language) { return humanizeTimedJobScheduleLabel(scheduleLabel, language); }
 __name(humanizeTimedJobScheduleLabelForSmoke, "humanizeTimedJobScheduleLabelForSmoke");
 function humanizeTimedJobWindowLabelForSmoke(nextRun, dueInSeconds, language) { return humanizeTimedJobWindowLabel(nextRun, dueInSeconds, language); }
 __name(humanizeTimedJobWindowLabelForSmoke, "humanizeTimedJobWindowLabelForSmoke");
+async function renderSettingsEnvironmentStatusCardFragment(snapshot, language) {
+    const usageCost = await loadCachedUsageCost(snapshot, "settings");
+    const [settingsBudgetPolicy, connectionHealthSummary, securitySummary, updateSummary, employeeContractSummary] = await Promise.all([(0, import_budget_policy.loadBudgetPolicy)(), (0, import_openclaw_cli_insights.loadCachedOpenClawConnectionSummary)(), (0, import_openclaw_cli_insights.loadCachedOpenClawSecuritySummary)(), (0, import_openclaw_cli_insights.loadCachedOpenClawUpdateSummary)(), (0, import_openclaw_employee_contract.loadCachedOpenClawEmployeeContractSummary)()]);
+    const settingsBudgetLimitCard = renderSettingsBudgetLimitCard(buildSettingsBudgetLimitModel(settingsBudgetPolicy), language, "compact");
+    const usageConnectorTodos = renderUsageConnectorTodos(usageCost.connectors.todos, language);
+    return renderSettingsEnvironmentStatusCard(connectionHealthSummary, usageCost, securitySummary, updateSummary, employeeContractSummary, usageConnectorTodos, settingsBudgetLimitCard, language);
+}
+__name(renderSettingsEnvironmentStatusCardFragment, "renderSettingsEnvironmentStatusCardFragment");
 async function renderHtml(filters, toolClient, options) {
     const renderStartedAt = performance.now();
     let renderPhaseAt = renderStartedAt;
@@ -2184,7 +2355,21 @@ async function renderHtml(filters, toolClient, options) {
     const t = __name((en, zh) => pickUiText(options.language, en, zh), "t");
     const sectionLinks = dashboardSectionLinks(options.language);
     const activeSection = normalizeDashboardSectionForNav(options.section);
-    const usageCostMode = activeSection === "usage-cost" || activeSection === "settings" ? "full" : "summary";
+    const renderPartial = options.renderPartial === "task-diagnostics" ? "task-diagnostics" : void 0;
+    const taskDiagnosticsPartial = activeSection === "projects-tasks" && renderPartial === "task-diagnostics";
+    const showOverviewSection = activeSection === "overview";
+    const showTeamSection = activeSection === "team" || activeSection === "office-space";
+    const showCollaborationSection = activeSection === "collaboration";
+    const showMemorySection = activeSection === "memory";
+    const showDocsSection = activeSection === "docs";
+    const showFeaturesSection = activeSection === "features";
+    const showUsageSection = activeSection === "usage-cost";
+    const showProjectsSection = activeSection === "projects-tasks";
+    const showAlertsSection = activeSection === "alerts";
+    const showReplaySection = activeSection === "replay-audit";
+    const showSettingsSection = activeSection === "settings";
+    const needsProjectsTemplates = showProjectsSection || taskDiagnosticsPartial;
+    const usageCostMode = resolveUsageCostModeForSection(activeSection);
     const sectionMeta = sectionLinks.find(item => item.key === activeSection) ?? sectionLinks[0];
     const sectionTitle = activeSection === "features" && options.feature === "geo" ? t("GEO Suite", "GEO \u5957\u4EF6") : resolveDashboardSectionTitle(sectionMeta, options.language);
     const sectionLeadText = activeSection === "overview" ? t("Decide from one screen: system health, items needing your intervention, who is active, and AI burn.", "\u4E00\u4E2A\u9996\u9875\u53EA\u56DE\u7B54\u56DB\u4EF6\u4E8B\uFF1A\u7CFB\u7EDF\u662F\u5426\u6B63\u5E38\u3001\u54EA\u91CC\u9700\u8981\u4F60\u4ECB\u5165\u3001\u8C01\u5728\u5FD9\u3001AI \u7528\u91CF\u662F\u5426\u5F02\u5E38\u3002") : activeSection === "collaboration" ? t("Follow how work moves between agents: who accepted it, who received the handoff, and where collaboration is currently waiting.", "\u76F4\u63A5\u770B\u4EFB\u52A1\u662F\u600E\u4E48\u5728\u667A\u80FD\u4F53\u4E4B\u95F4\u6D41\u8F6C\u7684\uFF1A\u8C01\u5148\u63A5\u5355\u3001\u540E\u6765\u4EA4\u7ED9\u4E86\u8C01\u3001\u5F53\u524D\u5361\u5728\u54EA\u4E00\u6BB5\u534F\u4F5C\u91CC\u3002") : activeSection === "projects-tasks" ? t("Start with the task and schedule card wall. It now merges tracked tasks, due times, and timed jobs into one place before you drill into execution detail.", "\u5148\u770B\u4EFB\u52A1\u4E0E\u6392\u7A0B\u5361\u7247\u5899\u3002\u73B0\u5728\u4F1A\u5148\u628A\u8DDF\u8E2A\u4EFB\u52A1\u3001\u622A\u6B62\u65F6\u95F4\u548C\u5B9A\u65F6\u4EFB\u52A1\u5408\u5230\u4E00\u8D77\uFF0C\u518D\u5F80\u4E0B\u94BB\u6267\u884C\u7EC6\u8282\u3002") : activeSection === "features" ? t("Open focused capability pages inside the AI employee system shell. GEO is the first suite entry and now defaults to one-click full-suite execution, while advanced tools stay folded until needed.", "\u5728 AI \u5458\u5DE5\u7CFB\u7EDF\u58F3\u5185\u6253\u5F00\u805A\u7126\u80FD\u529B\u9875\u3002GEO \u662F\u7B2C\u4E00\u4E2A\u5957\u4EF6\u5165\u53E3\uFF0C\u9ED8\u8BA4\u8D70\u4E00\u952E\u5B8C\u6574\u5957\u4EF6\u6D41\u7A0B\uFF0C\u53EA\u6709\u5728\u9700\u8981\u65F6\u624D\u5C55\u5F00\u9AD8\u7EA7\u5DE5\u5177\u3002") : sectionMeta.blurb;
@@ -2198,6 +2383,8 @@ async function renderHtml(filters, toolClient, options) {
     const needsUpdateSummary = activeSection === "settings";
     const needsMemoryState = activeSection === "memory";
     const needsCollaborationThreads = activeSection === "collaboration";
+    const needsTaskDiagnostics = activeSection === "projects-tasks" && taskDiagnosticsPartial;
+    const needsTaskExecutionChains = needsCollaborationThreads || needsTaskDiagnostics;
     const needsCollaborationRoomRefs = needsCollaborationThreads || activeSection === "projects-tasks";
     const needsMemorySection = needsMemoryFiles;
     const needsDocsHub = needsWorkspaceFiles;
@@ -2220,13 +2407,13 @@ async function renderHtml(filters, toolClient, options) {
     const nonOkBudgets = (budgets.evaluations ?? []).filter(item => item.status === "warn" || item.status === "over").slice(0, 8);
     const projectOptions = uniqueSorted(snapshot.projects.projects.map(project => project.projectId));
     const ownerOptions = uniqueSorted(realTasks.map(task => task.owner));
+    const taskEvidenceSessionKeys = needsTaskEvidence ? selectTaskEvidenceSessionKeys(tasks) : [];
     const sessionPreview = needsSessionPreview ? await loadCachedSessionPreview(snapshot, toolClient) : { generatedAt: snapshot.generatedAt, total: 0, page: 1, pageSize: 0, filters: {}, items: [] };
     const collaborationPreview = needsCollaborationThreads ? await loadCachedCollaborationPreview(snapshot, toolClient) : { generatedAt: snapshot.generatedAt, total: 0, page: 1, pageSize: 0, filters: {}, items: [] };
-    const sessionRows = renderSessionPreviewRows(sessionPreview.items, options.language);
     markRenderPhase("session-preview");
     const [cronOverview, openclawCronJobs, replayPreview, usageCost, officeRoster, officePresence, agentTeamEmbed] = await Promise.all([(0, import_cron_overview.buildCronOverview)(snapshot, import_config.POLLING_INTERVALS_MS.cron), loadOpenclawCronCatalog(options.language), loadCachedReplayPreview(), loadCachedUsageCost(snapshot, usageCostMode), (0, import_agent_roster.loadBestEffortAgentRoster)(), loadCachedOfficeSessionPresence(), (0, import_agent_team_embed.loadAgentTeamEmbedSnapshot)()]);
     markRenderPhase("shared-data");
-    const [teamSnapshot, memoryFiles, memoryFacetOptions, workspaceFiles, settingsBudgetPolicy, workspaceFacetOptions, workspaceAgentScopes, docHubSnapshot, taskEvidenceItems, connectionHealthSummary, securitySummary, updateSummary, memoryStateSummary, geoAuditState, geoAuditSummary, featureControlState] = await Promise.all([needsTeamSnapshot ? loadTeamSnapshot(officeRoster) : Promise.resolve({ missionStatement: t("No shared mission loaded.", "\u5C1A\u672A\u52A0\u8F7D\u5171\u540C\u76EE\u6807\u3002"), members: [], sourcePath: OPENCLAW_CONFIG_PATH, detail: t("Loaded on the staff page only.", "\u4EC5\u5728\u5458\u5DE5\u9875\u52A0\u8F7D\u3002"), modelOptions: [], modelEditable: false }), needsMemorySection ? listEditableFiles("memory") : Promise.resolve([]), needsMemorySection ? listMemoryFacetOptions() : Promise.resolve([]), needsDocsHub ? listEditableFiles("workspace") : Promise.resolve([]), (0, import_budget_policy.loadBudgetPolicy)(), needsDocsHub ? listWorkspaceFacetOptions() : Promise.resolve([]), needsDocsHub ? loadEditableAgentScopes() : Promise.resolve([]), needsDocsHub ? (0, import_docs_hub.loadStructuredDocHubSnapshot)(snapshot, toolClient) : Promise.resolve({ generatedAt: snapshot.generatedAt, sourcePath: (0, import_node_path.join)(process.cwd(), "runtime", "doc-hub-chat.json"), detail: t("Loaded on the docs page only.", "\u4EC5\u5728\u6587\u6863\u9875\u52A0\u8F7D\u3002"), items: [] }), needsTaskEvidence ? loadCachedTaskEvidenceSessions(snapshot, toolClient, tasks.flatMap(task => task.sessionKeys), 24) : Promise.resolve([]), needsSettingsInsights ? (0, import_openclaw_cli_insights.loadCachedOpenClawConnectionSummary)() : Promise.resolve(void 0), needsSettingsInsights ? (0, import_openclaw_cli_insights.loadCachedOpenClawSecuritySummary)() : Promise.resolve(void 0), needsSettingsInsights ? (0, import_openclaw_cli_insights.loadCachedOpenClawUpdateSummary)() : Promise.resolve(void 0), needsMemorySection ? (0, import_openclaw_cli_insights.loadCachedOpenClawMemorySummary)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_geo_audit.getGeoAuditState)() : Promise.resolve(void 0), needsGeoAuditSummary ? (0, import_geo_audit.getGeoAuditSummary)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_feature_control.loadFeatureControlState)() : Promise.resolve(void 0)]);
+    const [teamSnapshot, memoryFiles, memoryFacetOptions, workspaceFiles, settingsBudgetPolicy, workspaceFacetOptions, workspaceAgentScopes, docHubSnapshot, taskEvidenceItems, connectionHealthSummary, securitySummary, updateSummary, employeeContractSummary, memoryStateSummary, geoAuditState, geoAuditSummary, featureControlState] = await Promise.all([needsTeamSnapshot ? loadTeamSnapshot(officeRoster) : Promise.resolve({ missionStatement: t("No shared mission loaded.", "\u5C1A\u672A\u52A0\u8F7D\u5171\u540C\u76EE\u6807\u3002"), members: [], sourcePath: OPENCLAW_CONFIG_PATH, detail: t("Loaded on the staff page only.", "\u4EC5\u5728\u5458\u5DE5\u9875\u52A0\u8F7D\u3002"), modelOptions: [], modelEditable: false }), needsMemorySection ? listEditableFiles("memory") : Promise.resolve([]), needsMemorySection ? listMemoryFacetOptions() : Promise.resolve([]), needsDocsHub ? listEditableFiles("workspace") : Promise.resolve([]), (0, import_budget_policy.loadBudgetPolicy)(), needsDocsHub ? listWorkspaceFacetOptions() : Promise.resolve([]), needsDocsHub ? loadEditableAgentScopes() : Promise.resolve([]), needsDocsHub ? (0, import_docs_hub.loadStructuredDocHubSnapshot)(snapshot, toolClient) : Promise.resolve({ generatedAt: snapshot.generatedAt, sourcePath: (0, import_node_path.join)(process.cwd(), "runtime", "doc-hub-chat.json"), detail: t("Loaded on the docs page only.", "\u4EC5\u5728\u6587\u6863\u9875\u52A0\u8F7D\u3002"), items: [] }), needsTaskEvidence ? loadCachedTaskEvidenceSessions(snapshot, toolClient, taskEvidenceSessionKeys, TASK_EVIDENCE_HISTORY_LIMIT) : Promise.resolve([]), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawConnectionSummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawSecuritySummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawUpdateSummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_employee_contract.loadCachedOpenClawEmployeeContractSummary)()) : Promise.resolve(void 0), needsMemorySection ? (0, import_openclaw_cli_insights.loadCachedOpenClawMemorySummary)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_geo_audit.getGeoAuditState)() : Promise.resolve(void 0), needsGeoAuditSummary ? (0, import_geo_audit.getGeoAuditSummary)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_feature_control.loadFeatureControlState)() : Promise.resolve(void 0)]);
     markRenderPhase("section-assets");
     const collaborationDirectory = await loadCollaborationParticipantDirectory();
     const dashboardRefreshGeneratedAt = pickLatestSessionActivityTimestamp(snapshot.generatedAt, sessionPreview.generatedAt, collaborationPreview.generatedAt, docHubSnapshot.generatedAt, agentTeamEmbed.runtime.updatedAt) ?? snapshot.generatedAt;
@@ -2243,11 +2430,11 @@ async function renderHtml(filters, toolClient, options) {
     const collaborationSessionKeys = needsCollaborationThreads ? collectCollaborationEvidenceSessionKeys(collaborationPreview.items) : [];
     const collaborationEvidenceItems = needsCollaborationThreads && collaborationSessionKeys.length > 0 ? await loadCachedTaskEvidenceSessions(snapshot, toolClient, collaborationSessionKeys, 6) : [];
     const collaborationSignalItems = mergeSessionConversationItems(collaborationEvidenceItems, mergeSessionConversationItems(taskSignalItems, collaborationPreview.items));
-    const taskExecutionChainCards = buildTaskExecutionChainCards({ tasks: collaborationScopedTasks, sessions: snapshot.sessions, sessionItems: needsCollaborationThreads ? collaborationSignalItems : taskSignalItems, language: options.language, includeSnapshotUnmappedSessions: !needsCollaborationThreads });
+    const taskExecutionChainCards = needsTaskExecutionChains ? buildTaskExecutionChainCards({ tasks: collaborationScopedTasks, sessions: snapshot.sessions, sessionItems: needsCollaborationThreads ? collaborationSignalItems : taskSignalItems, language: options.language, includeSnapshotUnmappedSessions: !needsCollaborationThreads }) : [];
     const collaborationThreadCards = needsCollaborationThreads ? mergeCollaborationThreadCards(buildCollaborationThreadCards({ cards: taskExecutionChainCards, sessionItems: collaborationSignalItems, language: options.language, primaryAgentId: collaborationDirectory.primaryAgentId }), buildInterSessionCollaborationCards({ sessionItems: collaborationSignalItems, language: options.language, primaryAgentId: collaborationDirectory.primaryAgentId })) : [];
     const collaborationRoomStates = needsCollaborationRoomRefs ? await (0, import_collaboration_room.loadAllCollaborationRooms)() : [];
     const collaborationRoomStateById = new Map(collaborationRoomStates.map((roomState) => [roomState.roomId, roomState]));
-    const taskExecutionChainCardsWithRoomRefs = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(taskExecutionChainCards, collaborationRoomStates, options.language) : taskExecutionChainCards;
+    const taskExecutionChainCardsWithRoomRefs = needsTaskExecutionChains && collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(taskExecutionChainCards, collaborationRoomStates, options.language) : taskExecutionChainCards;
     const collaborationThreadCardsWithRoomRefs = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(collaborationThreadCards, collaborationRoomStates, options.language) : collaborationThreadCards;
     const taskCertaintyCards = buildTaskCertaintyCards({ tasks, sessions: snapshot.sessions, sessionItems: taskSignalItems, approvals: snapshot.approvals, language: options.language });
     const taskSpotlightCards = buildTaskSpotlightCards({ tasks, certaintyCards: taskCertaintyCards, sessions: snapshot.sessions, sessionItems: taskSignalItems, approvals: snapshot.approvals, manualOrder: options.taskCardOrder, language: options.language });
@@ -2257,8 +2444,8 @@ async function renderHtml(filters, toolClient, options) {
     const spawnedExecutionChainCount = taskExecutionChainCardsWithRoomRefs.filter(item => item.executionChain.spawned).length;
     const runningExecutionChainCount = taskExecutionChainCardsWithRoomRefs.filter(item => item.executionChain.stage === "running").length;
     const mappedExecutionChainCount = taskExecutionChainCardsWithRoomRefs.filter(item => !item.unmapped).length;
-    const taskExecutionChainHtml = renderTaskExecutionChainCards(taskExecutionChainCardsWithRoomRefs, options.language);
-    const collaborationThreadHtml = renderCollaborationThreadCards(collaborationThreadCardsWithRoomRefs, options.language);
+    const taskExecutionChainHtml = needsTaskExecutionChains ? renderTaskExecutionChainCards(taskExecutionChainCardsWithRoomRefs, options.language) : "";
+    const collaborationThreadHtml = needsCollaborationThreads ? renderCollaborationThreadCards(collaborationThreadCardsWithRoomRefs, options.language) : "";
     const collaborationThreadVisibleCount = collaborationThreadCardsWithRoomRefs.length;
     const collaborationThreadTotalCount = collaborationThreadCardsWithRoomRefs.reduce((sum, item) => sum + item.aggregateCount, 0);
     const collaborationActiveCount = collaborationThreadCardsWithRoomRefs.reduce((sum, item) => sum + (item.status === "active" ? item.aggregateCount : 0), 0);
@@ -2270,7 +2457,6 @@ async function renderHtml(filters, toolClient, options) {
         return sum + item.aggregateItems.filter(entry => isSameLocalCalendarDay(entry.latestAt, Date.now())).length;
     }, 0);
     const primaryDispatcherFilterLabel = pickUiText(options.language, `${collaborationDirectory.primaryDisplayName} dispatched`, `\u53EA\u770B ${collaborationDirectory.primaryDisplayName} \u6D3E\u53D1`);
-    const taskRoleSummaries = buildTaskRoleSummaries(controlCenterMappingTasks);
     const pendingApprovalsCount = allApprovals.filter(item => item.status === "pending").length;
     const inProgressTasksCount = realTasks.filter(task => task.status === "in_progress").length;
     const blockedTasksCount = realTasks.filter(task => task.status === "blocked").length;
@@ -2334,8 +2520,8 @@ async function renderHtml(filters, toolClient, options) {
     const approvalsPreviewMeta = allApprovals.length > topApprovals.length ? t(`Showing the latest ${topApprovals.length} of ${allApprovals.length} approval items.`, `\u5F53\u524D\u5C55\u793A\u6700\u8FD1 ${topApprovals.length}/${allApprovals.length} \u6761\u5BA1\u6279\u8BB0\u5F55\u3002`) : t(`Showing ${topApprovals.length} approval items.`, `\u5F53\u524D\u5C55\u793A ${topApprovals.length} \u6761\u5BA1\u6279\u8BB0\u5F55\u3002`);
     const approvalsItems = topApprovals.length === 0 ? `<li>${escapeHtml(t("No approvals yet.", "\u6682\u65E0\u5BA1\u6279\u8BB0\u5F55"))}</li>` : topApprovals.map(approval => { const status = approval.status ?? "unknown"; const target = approval.agentId ?? approval.sessionKey ?? t("Unknown target", "\u672A\u77E5\u76EE\u6807"); const commandLabel = approval.command ? escapeHtml(approval.command) : t("Approval action", "\u5BA1\u6279\u52A8\u4F5C"); const when = approval.requestedAt ? ` \xB7 ${escapeHtml(t("Requested at", "\u63D0\u4EA4\u4E8E"))} ${escapeHtml(approval.requestedAt)}` : ""; return `<li>${badge(status)} ${commandLabel} \xB7 <strong>${escapeHtml(target)}</strong>${when}</li>`; }).join("");
     const budgetItems = nonOkBudgets.length === 0 ? `<tr><td colspan="4">${escapeHtml(t("All budgets are currently within the safe range.", "\u5F53\u524D\u9884\u7B97\u5168\u90E8\u5728\u5B89\u5168\u8303\u56F4\u5185\u3002"))}</td></tr>` : nonOkBudgets.map(item => { return `<tr><td>${badge(item.status ?? "ok")}</td><td>${escapeHtml(item.scope ?? t("Unknown scope", "\u672A\u77E5\u8303\u56F4"))}</td><td>${escapeHtml(item.label ?? t("Untitled", "\u672A\u547D\u540D"))}</td><td>${renderMetricSummary(item)}</td></tr>`; }).join("");
-    const taskRows = tasks.length === 0 ? `<tr><td colspan="7">${escapeHtml(t("No tasks match the current filter.", "\u5F53\u524D\u7B5B\u9009\u4E0B\u6682\u65E0\u4EFB\u52A1\u3002"))}</td></tr>` : tasks.slice(0, 50).map(task => `<tr><td>${escapeHtml(task.projectTitle)}</td><td><code>${escapeHtml(task.taskId)}</code></td><td>${escapeHtml(task.title)}</td><td>${badge(task.status, taskStateLabel(task.status, options.language))}</td><td>${escapeHtml(task.owner)}</td><td>${escapeHtml(task.dueAt ?? "-")}</td><td>${escapeHtml(task.updatedAt)}</td></tr>`).join("");
-    const taskGroupedListHtml = tasks.length === 0 ? `<div class="empty-state">${escapeHtml(t("No tasks match the current filter.", "\u5F53\u524D\u7B5B\u9009\u4E0B\u6682\u65E0\u4EFB\u52A1\u3002"))}</div>` : `<div class="group-list">${TASK_STATES.map(state => {
+    const taskRows = needsTaskDiagnostics ? tasks.length === 0 ? `<tr><td colspan="7">${escapeHtml(t("No tasks match the current filter.", "\u5F53\u524D\u7B5B\u9009\u4E0B\u6682\u65E0\u4EFB\u52A1\u3002"))}</td></tr>` : tasks.slice(0, 50).map(task => `<tr><td>${escapeHtml(task.projectTitle)}</td><td><code>${escapeHtml(task.taskId)}</code></td><td>${escapeHtml(task.title)}</td><td>${badge(task.status, taskStateLabel(task.status, options.language))}</td><td>${escapeHtml(task.owner)}</td><td>${escapeHtml(task.dueAt ?? "-")}</td><td>${escapeHtml(task.updatedAt)}</td></tr>`).join("") : "";
+    const taskGroupedListHtml = needsTaskDiagnostics ? tasks.length === 0 ? `<div class="empty-state">${escapeHtml(t("No tasks match the current filter.", "\u5F53\u524D\u7B5B\u9009\u4E0B\u6682\u65E0\u4EFB\u52A1\u3002"))}</div>` : `<div class="group-list">${TASK_STATES.map(state => {
         const bucket = tasks.filter(task => task.status === state);
         if (bucket.length === 0)
             return "";
@@ -2353,7 +2539,7 @@ async function renderHtml(filters, toolClient, options) {
         }).join("");
         const more = bucket.length > 16 ? `<div class="meta">${escapeHtml(t(`${bucket.length - 16} more tasks are collapsed.`, `\u5176\u4F59 ${bucket.length - 16} \u4E2A\u4EFB\u52A1\u5DF2\u6298\u53E0\u3002`))}</div>` : "";
         return `<details class="group-section" open><summary>${escapeHtml(taskStateLabel(state, options.language))} (${bucket.length})</summary><ul class="group-items">${itemRows}</ul>${more}</details>`;
-    }).join("")}</div>`;
+    }).join("")}</div>` : "";
     const toolGroupedListHtml = toolSessions.length === 0 ? `<div class="empty-state">${escapeHtml(t("No tool-call sessions yet.", "\u6682\u65E0\u5DE5\u5177\u8C03\u7528\u4F1A\u8BDD\u3002"))}</div>` : `<div class="group-list"><details class="group-section" open><summary>${escapeHtml(t("Active tool sessions", "\u6D3B\u8DC3\u5DE5\u5177\u4F1A\u8BDD"))} (${toolSessions.length})</summary><ul class="group-items">${toolSessions.map(item => {
         const toolCount = item.toolEventCount ?? (item.latestKind === "tool_event" ? 1 : 0);
         return `<li class="group-item">
@@ -2396,7 +2582,7 @@ async function renderHtml(filters, toolClient, options) {
         anchorId: "task-timeline",
         extraParams: options.taskFollowupPage > 1 ? { task_followup_page: String(options.taskFollowupPage) } : {}
     });
-    const projectBoard = renderProjectBoard(snapshot.projectSummaries, options.language);
+    const projectBoard = needsTaskDiagnostics ? renderProjectBoard(snapshot.projectSummaries, options.language) : "";
     const actionQueueItems = renderActionQueue(actionQueue);
     const effectiveQuick = filters.quick ?? "all";
     const quickFilters = renderQuickFilters(filters, options.compactStatusStrip, options.section, options.language, options.usageView);
@@ -2417,10 +2603,9 @@ async function renderHtml(filters, toolClient, options) {
     const overviewUsageSummaryHtml = usageToday?.sourceStatus === "not_connected" ? `<div class="overview-usage-summary"><div class="overview-usage-chip"><span>${escapeHtml(t("Today", "\u4ECA\u65E5"))}</span><strong>${escapeHtml(t("Not connected", "\u672A\u8FDE\u63A5"))}</strong><small>${escapeHtml(t("Live usage is not available yet", "\u6682\u65E0\u5B9E\u65F6\u7528\u91CF"))}</small></div><div class="overview-usage-chip"><span>${escapeHtml(t("Cost", "\u8D39\u7528"))}</span><strong>${escapeHtml(t("Unavailable", "\u6682\u65E0"))}</strong><small>${escapeHtml(t("Waiting for usage source", "\u7B49\u5F85\u7528\u91CF\u6570\u636E\u6E90"))}</small></div><div class="overview-usage-chip wide"><span>${escapeHtml(t("Subscription window", "\u8BA2\u9605\u7A97\u53E3"))}</span><strong>${escapeHtml(usageCost.subscription.status === "connected" ? subscriptionWindowHint : t("Needs connection", "\u5F85\u8FDE\u63A5"))}</strong><small>${escapeHtml(usageCost.subscription.planLabel || t("Quota data will appear after the connector is ready.", "\u8FDE\u63A5\u5668\u5C31\u7EEA\u540E\u4F1A\u663E\u793A\u914D\u989D\u6570\u636E\u3002"))}</small></div></div>` : `<div class="overview-usage-summary"><div class="overview-usage-chip"><span>${escapeHtml(t("Today", "\u4ECA\u65E5"))}</span><strong>${escapeHtml(formatInt(usageToday?.tokens ?? 0))}</strong><small>${escapeHtml(t("tokens", "tokens"))}</small></div><div class="overview-usage-chip"><span>${escapeHtml(t("Estimated cost", "\u9884\u4F30\u8D39\u7528"))}</span><strong>${escapeHtml(formatCurrency(usageToday?.estimatedCost ?? 0))}</strong><small>${escapeHtml(t("today", "\u4ECA\u65E5"))}</small></div><div class="overview-usage-chip wide"><span>${escapeHtml(t("Subscription window", "\u8BA2\u9605\u7A97\u53E3"))}</span><strong>${escapeHtml(subscriptionWindowHint)}</strong><small>${escapeHtml(usageCost.subscription.planLabel || t("Current quota rhythm", "\u5F53\u524D\u914D\u989D\u8282\u594F"))}</small></div></div>`;
     const signalStrip = signalItems.map(item => `<div class="status-chip"><span>${escapeHtml(item.label)}</span><strong>${item.value}</strong></div>`).join("");
     const showSignalsFallback = signalItems.length === 0;
-    const officeFloorHtml = renderOfficeFloor(officeCards, options.language);
     const staffOverviewCards = needsTeamSnapshot ? await buildStaffOverviewCards({ snapshot, client: toolClient, members: teamSnapshot.members, officeCards, executionAgentSummaries, language: options.language, modelOptions: teamSnapshot.modelOptions, modelEditable: teamSnapshot.modelEditable, configPath: teamSnapshot.sourcePath }) : [];
     const staffOverviewCardsHtml = renderStaffOverviewCards(staffOverviewCards, options.language, options.localMutationUnlock);
-    const subscriptionStatusHtml = renderSubscriptionStatusCard(usageCost.subscription, options.language);
+    const subscriptionStatusHtml = showUsageSection ? renderSubscriptionStatusCard(usageCost.subscription, options.language) : "";
     const sectionNav = sectionLinks.map(item => {
         const href = buildHomeHref(filters, options.compactStatusStrip, item.key, options.language, options.usageView);
         const activeClass = item.key === activeSection ? " active" : "";
@@ -2439,11 +2624,11 @@ async function renderHtml(filters, toolClient, options) {
     });
     const dashboardRefreshControls = renderDashboardRefreshControls(options.language, { localMutationUnlock: options.localMutationUnlock, localTokenAuthRequired: import_config.LOCAL_TOKEN_AUTH_REQUIRED, localTokenConfigured: import_config.LOCAL_API_TOKEN !== "" });
     const agentTeamLinks = agentTeamSidebarLinks(filters, options);
-    const agentTeamOverviewBlock = renderAgentTeamOverviewBlock(agentTeamEmbed, options.language, agentTeamLinks);
-    const agentTeamMemoryBlock = renderAgentTeamMemoryBlock(agentTeamEmbed, options.language);
-    const agentTeamDocsBlock = renderAgentTeamDocsBlock(agentTeamEmbed, options.language);
-    const agentTeamProjectsBlock = renderAgentTeamProjectsBlock(agentTeamEmbed, options.language);
-    const agentTeamSettingsBlock = renderAgentTeamSettingsBlock(agentTeamEmbed, options.language);
+    const agentTeamOverviewBlock = showOverviewSection ? renderAgentTeamOverviewBlock(agentTeamEmbed, options.language, agentTeamLinks) : "";
+    const agentTeamMemoryBlock = showMemorySection ? renderAgentTeamMemoryBlock(agentTeamEmbed, options.language) : "";
+    const agentTeamDocsBlock = showDocsSection ? renderAgentTeamDocsBlock(agentTeamEmbed, options.language) : "";
+    const agentTeamProjectsBlock = needsTaskDiagnostics ? renderAgentTeamProjectsBlock(agentTeamEmbed, options.language) : "";
+    const agentTeamSettingsBlock = showSettingsSection ? renderAgentTeamSettingsBlock(agentTeamEmbed, options.language) : "";
     const agentTeamInspectorCard = renderAgentTeamInspectorCard(agentTeamEmbed, options.language);
     const agentTeamRunSummaryCard = renderAgentTeamRunSummaryCard(agentTeamEmbed, options.language);
     const agentTeamArtifactPreviewCard = renderAgentTeamArtifactPreviewCard(agentTeamEmbed, options.language);
@@ -2460,7 +2645,7 @@ async function renderHtml(filters, toolClient, options) {
       <summary>${escapeHtml(t("More runtime context", "\u66F4\u591A\u8FD0\u884C\u4E0A\u4E0B\u6587"))}</summary>
       <div class="fold-body inspector-secondary-stack">${inspectorSecondaryPanels}</div>
     </details>` : "";
-    const replayMomentsRows = replayMoments.length === 0 ? `<li>${escapeHtml(t("No timeline events yet.", "\u6682\u65E0\u65F6\u95F4\u7EBF\u4E8B\u4EF6\u3002"))}</li>` : replayMoments.map(item => `<li><code>${escapeHtml(item.timestamp)}</code> ${escapeHtml(item.summary)}</li>`).join("");
+    const replayMomentsRows = activeSection === "replay-audit" || needsTaskDiagnostics ? replayMoments.length === 0 ? `<li>${escapeHtml(t("No timeline events yet.", "\u6682\u65E0\u65F6\u95F4\u7EBF\u4E8B\u4EF6\u3002"))}</li>` : replayMoments.map(item => `<li><code>${escapeHtml(item.timestamp)}</code> ${escapeHtml(item.summary)}</li>`).join("") : "";
     const isTodayUsageView = options.usageView === "today";
     const usagePeriodsForView = isTodayUsageView ? usageCost.periods.filter(item => item.key === "today") : usageCost.periods;
     const usagePeriodCards = renderUsagePeriodCards(usagePeriodsForView, options.language);
@@ -2565,8 +2750,7 @@ async function renderHtml(filters, toolClient, options) {
     const usageFallbackExecutionRows = executionAgentSummaries.filter(item => item.recentTokens30d > 0).slice(0, 8).map(item => renderExecutionAgentItem(item, "usage")).join("");
     const executionAgentRows = activeExecutionAgentRows || usageFallbackExecutionRows;
     const executionAgentDisplayCount = (activeExecutionAgentRows ? executionAgentSummaries.filter(item => item.activeSessions > 0 || item.activeTasks > 0 || item.enabledCronJobs > 0) : executionAgentSummaries.filter(item => item.recentTokens30d > 0)).slice(0, 8).length;
-    const taskRoleRows = taskRoleSummaries.map(item => `<li><strong>${escapeHtml(item.owner)}</strong><div class="meta">${escapeHtml(t("Board labels", "\u770B\u677F\u6807\u7B7E"))} ${item.activeTasks} ${escapeHtml(t("items", "\u4E2A"))} \xB7 ${escapeHtml(t("Examples", "\u793A\u4F8B"))}\uFF1A${escapeHtml(item.sampleTaskIds.join("\u3001") || t("None", "\u6682\u65E0"))}</div></li>`).join("");
-    const mappingTaskRows = controlCenterMappingTasks.map(task => `<tr><td>${escapeHtml(task.taskId)}</td><td>${escapeHtml(task.owner)}</td><td>${badge(task.status, taskStateLabel(task.status, options.language))}</td></tr>`).join("");
+    const mappingTaskRows = needsTaskDiagnostics ? controlCenterMappingTasks.map(task => `<tr><td>${escapeHtml(task.taskId)}</td><td>${escapeHtml(task.owner)}</td><td>${badge(task.status, taskStateLabel(task.status, options.language))}</td></tr>`).join("") : "";
     const cronTable = allCronRows.length === 0 ? `<div class="empty-state">${escapeHtml(t("No timed jobs yet. They will appear here after you create them.", "\u6682\u65E0\u5B9A\u65F6\u4EFB\u52A1\u3002\u521B\u5EFA\u540E\u4F1A\u663E\u793A\u5728\u8FD9\u91CC\u3002"))}</div>` : `<table>
           <thead><tr><th>${escapeHtml(t("Job", "\u4EFB\u52A1"))}</th><th>${escapeHtml(t("Agent", "\u667A\u80FD\u4F53"))}</th><th>${escapeHtml(t("Purpose", "\u4EFB\u52A1\u76EE\u7684"))}</th><th>${escapeHtml(t("Status", "\u72B6\u6001"))}</th><th>${escapeHtml(t("Next run", "\u4E0B\u6B21\u8FD0\u884C"))}</th><th>${escapeHtml(t("Due in", "\u8DDD\u79BB\u6267\u884C"))}</th></tr></thead>
           <tbody>${cronRows}</tbody>
@@ -2618,8 +2802,15 @@ async function renderHtml(filters, toolClient, options) {
     }).join("")}</div>`;
     const usageDetailHref = buildHomeHref({ quick: "all" }, options.compactStatusStrip, "usage-cost", options.language, options.usageView);
     const agentTeamTeamBlock = renderAgentTeamTeamBlock(agentTeamEmbed, options.language);
-    const settingsBudgetLimitCard = renderSettingsBudgetLimitCard(buildSettingsBudgetLimitModel(settingsBudgetPolicy), options.language);
-    const settingsEnvironmentStatusCard = renderSettingsEnvironmentStatusCard(connectionHealthSummary, usageCost, securitySummary, updateSummary, usageConnectorTodos, settingsBudgetLimitCard, options.language);
+    const settingsBudgetLimitCard = renderSettingsBudgetLimitCard(buildSettingsBudgetLimitModel(settingsBudgetPolicy), options.language, "compact");
+    const settingsEnvironmentStatusCard = renderSettingsEnvironmentStatusCard(connectionHealthSummary, usageCost, securitySummary, updateSummary, employeeContractSummary, usageConnectorTodos, settingsBudgetLimitCard, options.language);
+    const settingsInsightsPending = activeSection === "settings" && (!connectionHealthSummary || !securitySummary || !updateSummary || !employeeContractSummary);
+    const settingsEnvironmentStatusEndpoint = `/api/settings/environment-card?lang=${encodeURIComponent(options.language)}`;
+    const settingsInsightsPendingText = settingsInsightsPending ? t("Loading the latest environment signals in the background...", "正在后台补齐最新环境信号。") : "";
+    const settingsEnvironmentStatusShell = `<div data-settings-environment-shell data-settings-insights-pending="${settingsInsightsPending ? "1" : "0"}" data-settings-insights-endpoint="${escapeHtml(settingsEnvironmentStatusEndpoint)}">
+    ${settingsInsightsPending ? `<div class="meta" data-settings-environment-pending-status>${escapeHtml(settingsInsightsPendingText)}</div>` : ""}
+    ${settingsEnvironmentStatusCard}
+  </div>`;
     const settingsConfigAccessCard = renderSettingsConfigAccessCard(importGuardRows, options.language);
     const contextPressureCard = renderContextPressureCard(usageCost, options.language);
     const memoryStateSection = renderMemoryStateSection(memoryStateSummary, options.language);
@@ -2704,8 +2895,8 @@ async function renderHtml(filters, toolClient, options) {
         }).join("")}</div>
         </nav>`;
     };
-    const visibleActionQueueItems = actionQueue.queue.filter(item => !item.acknowledged);
-    const actionQueuePreviewCards = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(visibleActionQueueItems.map(item => ({
+    const visibleActionQueueItems = needsProjectsTemplates ? actionQueue.queue.filter(item => !item.acknowledged) : [];
+    const actionQueuePreviewCards = needsProjectsTemplates ? collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(visibleActionQueueItems.map(item => ({
         itemId: item.itemId,
         message: item.message,
         level: item.level,
@@ -2721,8 +2912,8 @@ async function renderHtml(filters, toolClient, options) {
         detailHref: item.links[0]?.href ?? decisionHubHref,
         sessionKeys: collectActionQueueSessionKeys(item),
         sourceEventIds: [buildCollaborationBootstrapSourceKey("action_queue", item.itemId)]
-    }));
-    const approvalPreviewCards = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(topApprovals.map(approval => ({
+    })) : [];
+    const approvalPreviewCards = needsProjectsTemplates ? collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(topApprovals.map(approval => ({
         approvalId: approval.approvalId,
         command: approval.command,
         status: approval.status,
@@ -2742,7 +2933,7 @@ async function renderHtml(filters, toolClient, options) {
         detailHref: decisionHubHref,
         sessionKeys: approval.sessionKey ? [approval.sessionKey] : [],
         sourceEventIds: [buildCollaborationBootstrapSourceKey("approval", approval.approvalId)]
-    }));
+    })) : [];
     const isNoisyTrackedTaskProjectId = (projectId) => {
         const normalized = String(projectId ?? "").trim().toLowerCase();
         if (!normalized)
@@ -2879,7 +3070,7 @@ async function renderHtml(filters, toolClient, options) {
             return t("Queue detail", "\u961F\u5217\u8BE6\u60C5");
         return t("Diagnostic detail", "\u8BCA\u65AD\u8BE6\u60C5");
     };
-    const taskDecisionCards = [...actionQueuePreviewCards.map(item => ({
+    const taskDecisionCards = needsProjectsTemplates ? [...actionQueuePreviewCards.map(item => ({
             kind: "action",
             linkedRoomId: item.linkedRoomId,
             linkedRoomNeedsHydration: item.linkedRoomId ? !collaborationRoomHasMeaningfulConversation(collaborationRoomStateById.get(item.linkedRoomId)) : true,
@@ -2910,21 +3101,21 @@ async function renderHtml(filters, toolClient, options) {
             roomSource: "task-decision-approval",
             bootstrapKind: "approval",
             bootstrapId: approval.approvalId
-        }))];
+        }))] : [];
     const taskDecisionPageSize = 10;
     const taskDecisionTotalPages = Math.max(1, Math.ceil(taskDecisionCards.length / taskDecisionPageSize));
     const taskDecisionCurrentPage = 1;
     const taskDecisionPageStart = taskDecisionCards.length === 0 ? 0 : (taskDecisionCurrentPage - 1) * taskDecisionPageSize + 1;
     const taskDecisionPageEnd = taskDecisionCards.length === 0 ? 0 : Math.min(taskDecisionCards.length, taskDecisionCurrentPage * taskDecisionPageSize);
-    const taskDecisionPagerHtml = renderInlinePager({
+    const taskDecisionPagerHtml = needsProjectsTemplates ? renderInlinePager({
         label: t("Decision queue pages", "\u51B3\u7B56\u961F\u5217\u5206\u9875"),
         currentPage: taskDecisionCurrentPage,
         totalPages: taskDecisionTotalPages,
         totalItems: taskDecisionCards.length,
         startIndex: taskDecisionPageStart,
         endIndex: taskDecisionPageEnd
-    });
-    const taskDecisionPreviewHtml = taskDecisionCards.length > 0 ? `<div class="meta">${escapeHtml(t("Put approvals and decision items together here so you can clear the highest-friction blockers first. If a row has no room yet, use Start room; if the room exists but is still an empty shell, use Fill room first. Raw session detail stays secondary.", "\u628A\u5BA1\u6279\u8BF7\u6C42\u4E0E\u5F85\u51B3\u7B56\u4E8B\u9879\u653E\u5728\u4E00\u8D77\uFF0C\u4F18\u5148\u6E05\u6389\u6700\u963B\u585E\u63A8\u8FDB\u7684\u9879\u3002\u5982\u679C\u8FD9\u4E00\u884C\u8FD8\u6CA1\u6709\u623F\u95F4\uFF0C\u8BF7\u5148\u70B9\u201C\u8865\u5F00\u623F\u95F4\u201D\uFF1B\u5982\u679C\u623F\u95F4\u5DF2\u5B58\u5728\u4F46\u8FD8\u662F\u7A7A\u58F3\uFF0C\u8BF7\u5148\u70B9\u201C\u8865\u9F50\u8BB0\u5F55\u201D\u3002\u539F\u59CB\u4F1A\u8BDD\u8BE6\u60C5\u4ECD\u7136\u53EA\u662F\u6B21\u8981\u8BCA\u65AD\u5165\u53E3\u3002"))}</div>
+    }) : "";
+    const taskDecisionPreviewHtml = needsProjectsTemplates ? taskDecisionCards.length > 0 ? `<div class="meta">${escapeHtml(t("Put approvals and decision items together here so you can clear the highest-friction blockers first. If a row has no room yet, use Start room; if the room exists but is still an empty shell, use Fill room first. Raw session detail stays secondary.", "\u628A\u5BA1\u6279\u8BF7\u6C42\u4E0E\u5F85\u51B3\u7B56\u4E8B\u9879\u653E\u5728\u4E00\u8D77\uFF0C\u4F18\u5148\u6E05\u6389\u6700\u963B\u585E\u63A8\u8FDB\u7684\u9879\u3002\u5982\u679C\u8FD9\u4E00\u884C\u8FD8\u6CA1\u6709\u623F\u95F4\uFF0C\u8BF7\u5148\u70B9\u201C\u8865\u5F00\u623F\u95F4\u201D\uFF1B\u5982\u679C\u623F\u95F4\u5DF2\u5B58\u5728\u4F46\u8FD8\u662F\u7A7A\u58F3\uFF0C\u8BF7\u5148\u70B9\u201C\u8865\u9F50\u8BB0\u5F55\u201D\u3002\u539F\u59CB\u4F1A\u8BDD\u8BE6\u60C5\u4ECD\u7136\u53EA\u662F\u6B21\u8981\u8BCA\u65AD\u5165\u53E3\u3002"))}</div>
       <div data-inline-page-root data-language="${escapeHtml(options.language)}" data-inline-page-size="${taskDecisionPageSize}" data-inline-current-page="${taskDecisionCurrentPage}">
       <div class="decision-list">${taskDecisionCards.map(item => {
         const primaryAction = item.linkedRoomId && !item.linkedRoomNeedsHydration ? `<button class="btn" type="button" data-collaboration-room-open="${escapeHtml(item.linkedRoomId)}" data-collaboration-room-source="${escapeHtml(item.roomSource)}">${escapeHtml(item.primaryLabel)}</button>` : `<button class="btn" type="button" data-collaboration-room-bootstrap="${escapeHtml(item.bootstrapKind)}" data-collaboration-room-bootstrap-id="${escapeHtml(item.bootstrapId)}" data-collaboration-room-bootstrap-source="${escapeHtml(item.roomSource)}">${escapeHtml(item.primaryLabel)}</button>`;
@@ -2940,30 +3131,8 @@ async function renderHtml(filters, toolClient, options) {
             </div>`;
     }).join("")}</div>
       ${taskDecisionPagerHtml}
-      </div>` : `<div class="empty-state">${escapeHtml(t("Nothing is waiting for your review right now.", "\u5F53\u524D\u6CA1\u6709\u7B49\u5F85\u4F60\u51B3\u7B56\u7684\u4E8B\u9879\u3002"))}</div>`;
-    const taskHubStatCardsHtml = `<div class="task-hub-stat-grid">
-    <article class="task-hub-stat">
-      <span>${escapeHtml(t("Confirmed live", "\u5DF2\u786E\u8BA4\u5728\u8DD1"))}</span>
-      <strong>${taskCertaintyStrongCount}</strong>
-      <small>${escapeHtml(t("Tasks already backed by fresh runtime signals", "\u5DF2\u7ECF\u6709\u65B0\u9C9C\u8FD0\u884C\u4FE1\u53F7\u652F\u6491\u7684\u4EFB\u52A1"))}</small>
-    </article>
-    <article class="task-hub-stat">
-      <span>${escapeHtml(t("Need review", "\u5F85\u786E\u8BA4"))}</span>
-      <strong>${pendingDecisionCount}</strong>
-      <small>${escapeHtml(t("Approvals and action items", "\u5BA1\u6279\u4E0E\u5F85\u5904\u7406\u4E8B\u9879"))}</small>
-    </article>
-    <article class="task-hub-stat">
-      <span>${escapeHtml(t("Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1"))}</span>
-      <strong>${enabledCronCount}</strong>
-      <small>${escapeHtml(t("Enabled cron jobs", "\u5DF2\u542F\u7528\u7684 Cron"))}</small>
-    </article>
-    <article class="task-hub-stat">
-      <span>${escapeHtml(t("Needs inspection", "\u9700\u6392\u67E5"))}</span>
-      <strong>${taskCertaintyWeakCount}</strong>
-      <small>${escapeHtml(t("Tasks whose runtime signals still look weak", "\u8FD0\u884C\u4FE1\u53F7\u4ECD\u7136\u504F\u5F31\u7684\u4EFB\u52A1"))}</small>
-    </article>
-  </div>`;
-    const overviewSection = `
+      </div>` : `<div class="empty-state">${escapeHtml(t("Nothing is waiting for your review right now.", "\u5F53\u524D\u6CA1\u6709\u7B49\u5F85\u4F60\u51B3\u7B56\u7684\u4E8B\u9879\u3002"))}</div>` : "";
+    const overviewSection = showOverviewSection ? `
     <section class="overview-v3-shell" id="overview-decision-home">
       <article class="card overview-primary-card" id="overview-primary-card">
         <div class="overview-primary-head">
@@ -3098,40 +3267,24 @@ async function renderHtml(filters, toolClient, options) {
         </details>
       </div>
     </details>
-  `;
+  ` : "";
     const calendarBuckets = new Map;
-    for (const event of calendarEvents) {
-        const bucket = calendarBuckets.get(event.day) ?? [];
-        bucket.push(event);
-        calendarBuckets.set(event.day, bucket);
+    if (needsProjectsTemplates) {
+        for (const event of calendarEvents) {
+            const bucket = calendarBuckets.get(event.day) ?? [];
+            bucket.push(event);
+            calendarBuckets.set(event.day, bucket);
+        }
     }
-    const calendarBoardHtml = calendarBuckets.size === 0 ? `<div class="empty-state">${escapeHtml(t("No future schedule yet. You can add timed jobs from tasks or automations.", "\u6682\u65E0\u672A\u6765\u6392\u7A0B\u3002\u4F60\u53EF\u4EE5\u5728\u4EFB\u52A1\u6216\u81EA\u52A8\u5316\u91CC\u6DFB\u52A0\u5B9A\u65F6\u4EFB\u52A1\u3002"))}</div>` : `<div class="calendar-grid">${[...calendarBuckets.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(0, 12).map(([day, events]) => {
+    const calendarBoardHtml = needsProjectsTemplates ? calendarBuckets.size === 0 ? `<div class="empty-state">${escapeHtml(t("No future schedule yet. You can add timed jobs from tasks or automations.", "\u6682\u65E0\u672A\u6765\u6392\u7A0B\u3002\u4F60\u53EF\u4EE5\u5728\u4EFB\u52A1\u6216\u81EA\u52A8\u5316\u91CC\u6DFB\u52A0\u5B9A\u65F6\u4EFB\u52A1\u3002"))}</div>` : `<div class="calendar-grid">${[...calendarBuckets.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(0, 12).map(([day, events]) => {
         const rows = events.slice(0, 10).map(item => `<li class="calendar-event">
                   <div class="calendar-event-head"><strong>${escapeHtml(item.title)}</strong>${badge(item.status)}</div>
                   <div class="meta">${escapeHtml(item.type)} \xB7 ${escapeHtml(item.at)}</div>
                   <div class="meta">${escapeHtml(item.detail)}</div>
                 </li>`).join("");
         return `<article class="calendar-day"><h3>${escapeHtml(day)}</h3><div class="meta">${events.length} ${escapeHtml(t("scheduled items", "\u6761\u6392\u7A0B"))}</div><ul class="calendar-event-list">${rows}</ul></article>`;
-    }).join("")}</div>`;
-    const legacyCalendarSection = `
-    <section class="card" id="calendar-board">
-      <div id="task-timeline">
-        <h2>${escapeHtml(t("Today and next schedule", "\u4ECA\u65E5\u4E0E\u4E0B\u4E00\u6279\u6392\u7A0B"))}</h2>
-        <div class="meta">${escapeHtml(t("See timed jobs and due dates together so you can confirm the AI employee system actually scheduled them, instead of only saying it did in chat.", "\u628A\u5B9A\u65F6\u4EFB\u52A1\u548C\u4EFB\u52A1\u622A\u6B62\u653E\u5728\u4E00\u8D77\u770B\uFF0C\u786E\u8BA4 AI \u5458\u5DE5\u7CFB\u7EDF\u771F\u7684\u6392\u4E0A\u4E86\uFF0C\u800C\u4E0D\u662F\u53EA\u5728\u5BF9\u8BDD\u91CC\u8BF4\u201C\u5DF2\u5B89\u6392\u201D\u3002"))}</div>
-        <div class="timeline-summary-strip">
-          <div class="timeline-stat"><span>${escapeHtml(t("Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1"))}</span><strong>${allCronRows.length}</strong><small>${escapeHtml(t("Catalog total", "\u540D\u5F55\u603B\u6570"))}</small></div>
-          <div class="timeline-stat"><span>${escapeHtml(t("Enabled", "\u542F\u7528"))}</span><strong>${enabledCronCount}</strong><small>${escapeHtml(t("Ready to run", "\u5DF2\u51C6\u5907\u6267\u884C"))}</small></div>
-          <div class="timeline-stat"><span>${escapeHtml(t("Upcoming due", "\u5373\u5C06\u622A\u6B62"))}</span><strong>${upcomingTaskDueCount}</strong><small>${escapeHtml(t("Tasks with due dates", "\u5E26\u622A\u6B62\u65F6\u95F4\u7684\u4EFB\u52A1"))}</small></div>
-        </div>
-      </div>
-      ${calendarBoardHtml}
-      <details class="compact-table-details" style="margin-top:12px;">
-        <summary>${escapeHtml(t("Open Cron table detail", "\u67E5\u770B Cron \u8868\u683C\u660E\u7EC6"))}</summary>
-        <div class="fold-body">${cronTable}</div>
-      </details>
-    </section>
-  `;
-    const legacyCronExecutionSection = `
+    }).join("")}</div>` : "";
+    const legacyCronExecutionSection = needsTaskDiagnostics ? `
     <section class="card" id="cron-execution-board">
       <div class="overview-command-head">
         <h2>${escapeHtml(t("Cron execution board", "Cron \u6267\u884C\u770B\u677F"))}</h2>
@@ -3145,8 +3298,8 @@ async function renderHtml(filters, toolClient, options) {
         <div class="fold-body">${cronTable}</div>
       </details>
     </section>
-  `;
-    const taskExecutionChainSection = `
+  ` : "";
+    const taskExecutionChainSection = needsTaskDiagnostics ? `
     <section class="card" id="task-execution-chain">
       <div class="overview-command-head">
         <h2>${escapeHtml(t("Execution chain", "\u6267\u884C\u94FE"))}</h2>
@@ -3156,8 +3309,8 @@ async function renderHtml(filters, toolClient, options) {
       <div class="meta">${escapeHtml(t("Isolated runs", "\u9694\u79BB\u6267\u884C"))} ${spawnedExecutionChainCount} \xB7 ${escapeHtml(t("Running now", "\u5F53\u524D\u6267\u884C\u4E2D"))} ${runningExecutionChainCount} \xB7 ${escapeHtml(t("Mapped tasks", "\u5DF2\u5173\u8054\u4EFB\u52A1"))} ${mappedExecutionChainCount}</div>
       ${taskExecutionChainHtml}
     </section>
-  `;
-    const teamSection = `
+  ` : "";
+    const teamSection = showTeamSection ? `
     <section class="card">
       <h2>${escapeHtml(t("Staff overview", "\u5458\u5DE5\u603B\u89C8"))}</h2>
       <div class="meta">${escapeHtml(t("The default view shows only name, role, current status, current work, recent output, and whether each person is on the schedule.", "\u9ED8\u8BA4\u89C6\u56FE\u53EA\u663E\u793A\u5458\u5DE5\u540D\u5B57\u3001\u89D2\u8272\u5B9A\u4F4D\u3001\u5F53\u524D\u72B6\u6001\u3001\u6B63\u5728\u5904\u7406\u4EC0\u4E48\u3001\u6700\u8FD1\u4EA7\u51FA\uFF0C\u4EE5\u53CA\u662F\u5426\u5728\u6392\u73ED\u91CC\u3002"))}</div>
@@ -3172,8 +3325,8 @@ async function renderHtml(filters, toolClient, options) {
         <div class="meta">${escapeHtml(teamSnapshot.detail)}</div>
       </div>
     </details>
-  `;
-    const collaborationSection = `
+  ` : "";
+    const collaborationSection = showCollaborationSection ? `
     <section class="card" id="collaboration-hub">
       <div class="overview-command-head">
         <div>
@@ -3217,12 +3370,12 @@ async function renderHtml(filters, toolClient, options) {
       </div>
       ${collaborationThreadHtml}
     </section>
-  `;
+  ` : "";
     const memoryMainCount = memoryFiles.filter(entry => entry.facetKey === "main").length;
     const memoryWorkbench = needsMemorySection ? await renderEditableFileWorkbench({ scope: "memory", language: options.language, localMutationUnlock: options.localMutationUnlock, title: t("Memory file workbench", "\u8BB0\u5FC6\u6587\u4EF6\u5DE5\u4F5C\u53F0"), description: t("Browse and edit AI employee system memory files directly. Saving writes back to the source files.", "\u76F4\u63A5\u6D4F\u89C8\u548C\u4FEE\u6539 AI \u5458\u5DE5\u7CFB\u7EDF\u7684\u8BB0\u5FC6\u6587\u4EF6\u3002\u4FDD\u5B58\u540E\u4F1A\u5199\u56DE\u539F\u6587\u4EF6\u3002"), entries: memoryFiles, emptyMessage: t("There are no editable memory files right now.", "\u5F53\u524D\u6CA1\u6709\u53EF\u7F16\u8F91\u7684\u8BB0\u5FC6\u6587\u4EF6\u3002"), defaultFacetKey: "main", includeAllFacet: false, facetOptions: memoryFacetOptions }) : "";
     const mainMemoryFacetLabel = memoryFacetOptions.find(item => item.key === "main")?.label ?? import_operator_display.DEFAULT_PRIMARY_OPERATOR_DISPLAY_NAME;
     const memoryViewsLabel = joinDisplayList(memoryFacetOptions.map(item => item.label), options.language);
-    const memorySection = `
+    const memorySection = showMemorySection ? `
     <section class="card">
       <h2>${escapeHtml(t("Memory overview", "\u8BB0\u5FC6\u6982\u89C8"))}</h2>
       <div class="meta">${escapeHtml(mainMemoryFacetLabel)} ${escapeHtml(t("memories", "\u8BB0\u5FC6"))} ${memoryMainCount} ${escapeHtml(t("files", "\u4EFD"))} \xB7 ${escapeHtml(t("Agents found", "\u5DF2\u53D1\u73B0\u667A\u80FD\u4F53"))} ${Math.max(0, memoryFacetOptions.filter(item => item.key !== "main").length)} ${escapeHtml(t("items", "\u4E2A"))}</div>
@@ -3233,9 +3386,9 @@ async function renderHtml(filters, toolClient, options) {
     ${memoryWorkbench}
     ${memoryStateSection}
     ${agentTeamMemoryBlock}
-  `;
-    const docsSection = await (0, import_docs_hub.renderDocsSection)({ language: options.language, workspaceFiles, workspaceFacetOptions, projectSummaries: snapshot.projectSummaries, agentScopes: workspaceAgentScopes, docHubSnapshot, agentTeamDocsBlockHtml: agentTeamDocsBlock });
-    const featuresSection = renderFeaturesSection({
+  ` : "";
+    const docsSection = showDocsSection ? await (0, import_docs_hub.renderDocsSection)({ language: options.language, workspaceFiles, workspaceFacetOptions, projectSummaries: snapshot.projectSummaries, agentScopes: workspaceAgentScopes, docHubSnapshot, agentTeamDocsBlockHtml: agentTeamDocsBlock }) : "";
+    const featuresSection = showFeaturesSection ? renderFeaturesSection({
         compactStatusStrip: options.compactStatusStrip,
         feature: options.feature,
         featureControl: featureControlState?.state?.features ?? (0, import_feature_control.defaultFeatureControlState)().features,
@@ -3252,8 +3405,8 @@ async function renderHtml(filters, toolClient, options) {
         },
         language: options.language,
         usageView: options.usageView
-    });
-    const usageSection = `
+    }) : "";
+    const usageSection = showUsageSection ? `
     <section class="card">
       <h2>${escapeHtml(t("Measurement scope", "\u7EDF\u8BA1\u53E3\u5F84"))}</h2>
       ${usageViewSwitchHtml}
@@ -3310,155 +3463,15 @@ async function renderHtml(filters, toolClient, options) {
         <div class="meta">${escapeHtml(t("Estimated days remaining", "\u9884\u8BA1\u5269\u4F59\u5929\u6570"))} ${usageCost.budget.isUnlimited ? t("No limit", "\u65E0\u4E0A\u9650") : usageCost.budget.projectedDaysToLimit !== void 0 ? usageCost.budget.projectedDaysToLimit.toFixed(1) : t("Data source not connected", "\u6570\u636E\u6E90\u672A\u8FDE\u63A5")}</div>
       </div>
     </details>
-  `;
-    const officeSection = `
-    <section class="card">
-      <h2>\u770B\u677F\u6620\u5C04\u8BF4\u660E</h2>
-      <div class="meta">Alex / Sam / Taylor / Unassigned \u8FD9\u7C7B\u540D\u79F0\u53EA\u662F control-center \u7684\u5206\u7EC4\u6807\u7B7E\uFF0C\u4E0D\u662F\u667A\u80FD\u4F53\uFF0C\u4E0D\u4F1A\u5355\u72EC\u6D88\u8017\u9884\u7B97\u3002</div>
-      <details class="compact-table-details" style="margin-top:8px;" open>
-        <summary>\u67E5\u770B\u6620\u5C04\u6807\u7B7E\uFF08\u4E0D\u6267\u884C\u4EFB\u52A1\uFF09</summary>
-        <div class="fold-body">
-          <ul class="story-list">${taskRoleRows || "<li>\u5F53\u524D\u6CA1\u6709\u6620\u5C04\u6807\u7B7E\u3002</li>"}</ul>
-        </div>
-      </details>
-    </section>
-    <details class="card compact-details" open>
-      <summary>\u6267\u884C\u5206\u533A\uFF08\u5DE5\u4F4D\uFF09</summary>
-      <div class="fold-body">${officeFloorHtml}</div>
-    </details>
-    <details class="card compact-details" open>
-      <summary>\u6700\u8FD1\u4F1A\u8BDD\uFF08${sessionPreview.items.length}/${sessionPreview.total}\uFF09</summary>
-      <div class="fold-body">
-        ${sessionPreview.items.length === 0 ? '<div class="empty-state">\u6682\u65E0\u4F1A\u8BDD\u6570\u636E\u3002</div>' : `<div class="group-list"><details class="group-section" open><summary>\u6700\u8FD1\u6D3B\u8DC3\u4F1A\u8BDD\uFF08${sessionPreview.items.length}\uFF09</summary><ul class="group-items">${sessionPreview.items.slice(0, 14).map(item => `<li class="group-item"><div class="group-item-head"><strong>${escapeHtml(item.label ?? item.sessionKey)}</strong>${badge(item.state, sessionStateLabel(item.state))}</div><div class="meta">\u667A\u80FD\u4F53 ${escapeHtml(item.agentId ?? "-")} \xB7 \u6700\u8FD1 ${escapeHtml(item.lastMessageAt ?? "-")}</div><div class="meta">\u6700\u65B0\u4E8B\u4EF6 ${escapeHtml(item.latestKind ?? "message")} \xB7 \u5386\u53F2 ${item.historyCount}</div><div class="meta"><a ${buildSessionLinkAttrs({ sessionKey: item.sessionKey, language: options.language, buildSessionDetailHref, escapeHtml, source: "overview-recent-sessions" })}>\u67E5\u770B\u4F1A\u8BDD\u8BE6\u60C5\u9875</a></div></li>`).join("")}</ul></details></div>`}
-        <details class="compact-table-details" style="margin-top:12px;">
-          <summary>\u67E5\u770B\u539F\u59CB\u8868\u683C</summary>
-          <div class="fold-body">
-            <table>
-              <thead><tr><th>\u4F1A\u8BDD</th><th>\u72B6\u6001</th><th>\u52A9\u624B</th><th>\u6700\u8FD1\u6D3B\u52A8</th></tr></thead>
-              <tbody>${sessionRows}</tbody>
-            </table>
-          </div>
-        </details>
-      </div>
-    </details>
-  `;
+  ` : "";
     const teamUnifiedSection = teamSection;
     const hasTrackedTaskPanels = true;
-    const trackedTaskDetailsOpen = pendingDecisionCount > 0 || taskCertaintyCards.length > 0;
-    const trackedTaskSummaryText = hasTrackedTaskPanels ? t(`Tracked tasks ${taskCertaintyCards.length} \xB7 Follow-up ${pendingDecisionCount}`, `\u8DDF\u8E2A\u4EFB\u52A1 ${taskCertaintyCards.length} \xB7 \u5F85\u5904\u7406 ${pendingDecisionCount}`) : t("No tracked task rows yet", "\u8FD8\u6CA1\u6709\u8DDF\u8E2A\u4EFB\u52A1\u6761\u76EE");
+    const trackedTaskDetailsOpen = false;
+    const trackedTaskSummaryText = needsProjectsTemplates && hasTrackedTaskPanels ? t(`Tracked tasks ${taskCertaintyCards.length} \xB7 Follow-up ${pendingDecisionCount}`, `\u8DDF\u8E2A\u4EFB\u52A1 ${taskCertaintyCards.length} \xB7 \u5F85\u5904\u7406 ${pendingDecisionCount}`) : t("No tracked task rows yet", "\u8FD8\u6CA1\u6709\u8DDF\u8E2A\u4EFB\u52A1\u6761\u76EE");
     const trackedTaskExplanation = hasTrackedTaskPanels ? t("This lower-priority area is only for tracked task rows, decisions, and runtime evidence.", "\u8FD9\u5757\u4F4E\u4F18\u5148\u7EA7\u533A\u57DF\u53EA\u770B\u53EF\u8DDF\u8E2A\u4EFB\u52A1\u6761\u76EE\u3001\u5F85\u5904\u7406\u4E8B\u9879\u548C\u8FD0\u884C\u8BC1\u636E\u3002") : liveSessionCount > 0 ? t("Staff status comes from live sessions. Cron jobs, heartbeat, and ad-hoc sessions can keep agents busy before anything becomes a tracked task row.", "\u5458\u5DE5\u72B6\u6001\u6765\u81EA\u5B9E\u65F6\u4F1A\u8BDD\u3002Cron\u3001\u5FC3\u8DF3\u548C\u4E34\u65F6\u4F1A\u8BDD\u53EF\u80FD\u5DF2\u7ECF\u8BA9\u667A\u80FD\u4F53\u5728\u5DE5\u4F5C\uFF0C\u4F46\u8FD8\u6CA1\u6709\u5F62\u6210\u53EF\u8DDF\u8E2A\u7684\u4EFB\u52A1\u6761\u76EE\u3002") : t("There is no tracked task row visible right now. Start here only when you actually use the task store.", "\u5F53\u524D\u8FD8\u6CA1\u6709\u53EF\u89C1\u7684\u8DDF\u8E2A\u4EFB\u52A1\u6761\u76EE\u3002\u53EA\u6709\u771F\u6B63\u4F7F\u7528\u4EFB\u52A1\u5E93\u65F6\uFF0C\u8FD9\u91CC\u624D\u4F1A\u51FA\u73B0\u5185\u5BB9\u3002");
-    const legacyTrackedTaskDetailsBody = hasTrackedTaskPanels ? `
-      <section class="task-hub-shell" id="task-hub">
-        <article class="card task-hub-primary" id="task-hub-primary">
-          <div class="overview-command-head">
-            <div>
-              <h2>${escapeHtml(t("Task hub", "\u4EFB\u52A1\u4E2D\u67A2"))}</h2>
-              <div class="meta">${escapeHtml(t("One place for tracked tasks, follow-up items, and runtime evidence.", "\u628A\u53EF\u8DDF\u8E2A\u4EFB\u52A1\u3001\u5F85\u5904\u7406\u4E8B\u9879\u548C\u8FD0\u884C\u8BC1\u636E\u653E\u5728\u4E00\u8D77\u3002"))}</div>
-            </div>
-            <div>${overviewPrimaryStatus}</div>
-          </div>
-          ${taskHubStatCardsHtml}
-          <div class="overview-task-strip">
-            <div>
-              <div class="meta">${escapeHtml(t("Current focus", "\u5F53\u524D\u5173\u6CE8"))}</div>
-              <div class="overview-task-metric">${badge(currentTaskHealth)} ${escapeHtml(t("Confirmed live", "\u5DF2\u786E\u8BA4\u5728\u8DD1"))} ${taskCertaintyStrongCount} \xB7 ${escapeHtml(t("Need follow-up", "\u9700\u8DDF\u8FDB"))} ${taskCertaintyFollowupCount} \xB7 ${escapeHtml(t("Needs inspection", "\u9700\u6392\u67E5"))} ${taskCertaintyWeakCount}</div>
-              ${mappingTaskHint ? `<div class="meta">${escapeHtml(mappingTaskHint)}</div>` : ""}
-            </div>
-            <div class="overview-quick-links">
-              <a class="btn" href="${escapeHtml(currentTaskHealthHref)}">${escapeHtml(t("Open tracked tasks", "\u67E5\u770B\u8DDF\u8E2A\u4EFB\u52A1"))}</a>
-              <a class="btn" href="${escapeHtml(focusHref)}">${escapeHtml(t("Open follow-up items", "\u67E5\u770B\u5F85\u5904\u7406"))}</a>
-            </div>
-          </div>
-        </article>
-        <article class="card" id="task-decision-center">
-          <div class="overview-command-head">
-            <h2>${escapeHtml(t("Waiting for your decision", "\u7B49\u5F85\u4F60\u51B3\u7B56"))}</h2>
-            <div>${badge(pendingDecisionCount > 0 ? "warn" : "ok", pendingDecisionCount > 0 ? t("Queue active", "\u961F\u5217\u6D3B\u8DC3") : t("Clear", "\u5DF2\u6E05\u7A7A"))}</div>
-          </div>
-          <div class="meta">${escapeHtml(t("Pending decisions", "\u5F85\u5904\u7406\u4E8B\u9879"))} ${pendingDecisionCount} \xB7 ${escapeHtml(t("Approvals", "\u5BA1\u6279"))} ${pendingApprovalsCount} \xB7 ${escapeHtml(t("Unacked alerts", "\u672A\u786E\u8BA4\u544A\u8B66"))} ${actionQueue.counts.unacked}</div>
-          ${taskDecisionPreviewHtml}
-        </article>
-      </section>
-      ${taskExecutionChainSection}
-      <section class="task-hub-grid task-hub-board-grid">
-        <section class="card" id="task-lane">
-          <h2>${escapeHtml(t("Task cards", "\u4EFB\u52A1\u5361\u7247"))}</h2>
-          <div class="meta task-top-intro">${escapeHtml(t("Sorted by priority so unresolved items stay on top and active work stays easy to scan.", "\u6309\u4F18\u5148\u7EA7\u6392\u5E8F\uFF0C\u672A\u89E3\u51B3\u9879\u4F1A\u6392\u5728\u6700\u524D\uFF0C\u6B63\u5728\u63A8\u8FDB\u7684\u5DE5\u4F5C\u4E5F\u80FD\u4E00\u773C\u770B\u6E05\u3002"))}</div>
-          <div class="meta task-top-intro">${escapeHtml(t("Yellow = in progress, green = queued, red = failed, blocked, or still unresolved.", "\u9EC4\u8272\u8868\u793A\u8FDB\u884C\u4E2D\uFF0C\u7EFF\u8272\u8868\u793A\u6392\u961F\u4E2D\uFF0C\u7EA2\u8272\u8868\u793A\u5931\u8D25\u3001\u963B\u585E\u6216\u4ECD\u672A\u89E3\u51B3\u3002"))}</div>
-          <div class="task-top-meta-row">
-            <div class="meta task-top-meta">${escapeHtml(t("Current focus", "\u5F53\u524D\u5173\u6CE8"))}\uFF1A${escapeHtml(quickFilterLabel(effectiveQuick, options.language))}</div>
-            ${controlCenterMappingTasks.length > 0 ? `<div class="meta task-top-meta">${escapeHtml(t(`${controlCenterMappingTasks.length} board-only mapping examples are hidden because they are not real execution tasks.`, `\u5DF2\u9690\u85CF ${controlCenterMappingTasks.length} \u4E2A\u770B\u677F\u6620\u5C04\u6837\u4F8B\uFF08\u975E\u771F\u5B9E\u6267\u884C\u4EFB\u52A1\uFF09\u3002`))}</div>` : ""}
-          </div>
-          <div class="task-top-controls">
-          <div class="quick-filters">${quickFilters}</div>
-          <form method="GET" action="/" class="filters task-top-filters">
-            <input type="hidden" name="section" value="${escapeHtml(options.section)}" />
-            <input type="hidden" name="lang" value="${escapeHtml(options.language)}" />
-            <input type="hidden" name="quick" value="${escapeHtml(effectiveQuick)}" />
-            <input type="hidden" name="compact" value="${options.compactStatusStrip ? "1" : "0"}" />
-            <input type="hidden" name="usage_view" value="${options.usageView === "today" ? "today" : "cumulative"}" />
-            <div>
-              <label for="status">${escapeHtml(t("Status", "\u72B6\u6001"))}</label>
-              <select id="status" name="status">
-                ${renderSelectOptions([{ value: "", label: t("All", "\u5168\u90E8") }, ...TASK_STATES.map(state => ({ value: state, label: taskStateLabel(state, options.language) }))], filters.status ?? "")}
-              </select>
-            </div>
-            <div>
-              <label for="owner">${escapeHtml(t("Agent", "\u667A\u80FD\u4F53"))}</label>
-              <select id="owner" name="owner">
-                ${renderSelectOptions([{ value: "", label: t("All", "\u5168\u90E8") }, ...ownerOptions.map(owner => ({ value: owner, label: owner }))], filters.owner ?? "")}
-              </select>
-            </div>
-            <div>
-              <label for="project">${escapeHtml(t("Project", "\u9879\u76EE"))}</label>
-              <select id="project" name="project">
-                ${renderSelectOptions([{ value: "", label: t("All", "\u5168\u90E8") }, ...projectOptions.map(project => ({ value: project, label: project }))], filters.project ?? "")}
-              </select>
-            </div>
-            <div class="filter-actions">
-              <button class="btn" type="submit">${escapeHtml(t("Apply", "\u5E94\u7528"))}</button>
-              <a href="${escapeHtml(clearHref)}">${escapeHtml(t("Clear filters", "\u6E05\u7A7A\u7B5B\u9009"))}</a>
-            </div>
-          </form>
-          </div>
-          ${taskBoard}
-          <div style="height:10px;"></div>
-          <h3 style="margin:0 0 6px 0;">${escapeHtml(t("Task groups (native view)", "\u4EFB\u52A1\u5206\u7EC4\u5217\u8868\uFF08\u539F\u751F\u89C6\u56FE\uFF09"))}</h3>
-          ${taskGroupedListHtml}
-          ${controlCenterMappingTasks.length === 0 ? "" : `<details class="compact-table-details" style="margin-top:12px;" open>
-                   <summary>${escapeHtml(t("Open board mapping examples (non-executing)", "\u67E5\u770B\u770B\u677F\u6620\u5C04\u6837\u4F8B\uFF08\u4E0D\u6267\u884C\u4EFB\u52A1\uFF09"))}</summary>
-                   <div class="fold-body">
-                     <table>
-                       <thead><tr><th>${escapeHtml(t("Example task", "\u6837\u4F8B\u4EFB\u52A1"))}</th><th>${escapeHtml(t("Label", "\u6807\u7B7E"))}</th><th>${escapeHtml(t("Status", "\u72B6\u6001"))}</th></tr></thead>
-                       <tbody>${mappingTaskRows}</tbody>
-                     </table>
-                   </div>
-                 </details>`}
-        </section>
-        <div class="task-hub-sidebar">
-          <section class="card" id="project-lane">
-            <h2>${escapeHtml(t("Project lanes", "\u9879\u76EE\u6CF3\u9053"))}</h2>
-            ${projectBoard}
-          </section>
-          <section class="card" id="task-live-feed">
-            <h2>${escapeHtml(t("Live activity feed", "\u5B9E\u65F6\u6D3B\u52A8\u6D41"))}</h2>
-            <div class="meta">${escapeHtml(t("Use this to confirm what the AI employee system and each employee are doing right now.", "\u7528\u4E8E\u786E\u8BA4 AI \u5458\u5DE5\u7CFB\u7EDF\u4E0E\u5404\u5458\u5DE5\u5F53\u524D\u6B63\u5728\u6267\u884C\u4EC0\u4E48\u3002"))}</div>
-            <ul class="story-list">${replayMomentsRows}</ul>
-          </section>
-        </div>
-      </section>
-      <details class="card compact-details" id="task-table">
-        <summary>${escapeHtml(t(`Task table (raw detail, ${tasks.length}/${allTasks.length})`, `\u4EFB\u52A1\u8868\u683C\uFF08\u539F\u59CB\u660E\u7EC6\uFF0C${tasks.length}/${allTasks.length}\uFF09`))}</summary>
-        <div class="fold-body">
-          <table>
-            <thead><tr><th>${escapeHtml(t("Project", "\u9879\u76EE"))}</th><th>${escapeHtml(t("Task", "\u4EFB\u52A1"))}</th><th>${escapeHtml(t("Title", "\u6807\u9898"))}</th><th>${escapeHtml(t("Status", "\u72B6\u6001"))}</th><th>${escapeHtml(t("Agent", "\u667A\u80FD\u4F53"))}</th><th>${escapeHtml(t("Due", "\u622A\u6B62"))}</th><th>${escapeHtml(t("Updated", "\u66F4\u65B0\u65F6\u95F4"))}</th></tr></thead>
-            <tbody>${taskRows}</tbody>
-          </table>
-        </div>
-      </details>
-    ` : `<div class="meta">${escapeHtml(trackedTaskExplanation)}</div>`;
+    const taskDiagnosticsEndpoint = needsProjectsTemplates ? `${buildHomeHref(filters, options.compactStatusStrip, "projects-tasks", options.language, options.usageView)}&partial=task-diagnostics` : "";
     const taskQueueDefaultTab = pendingDecisionCount > 0 ? "decision" : "followup";
-    const trackedTaskDetailsBody = hasTrackedTaskPanels ? `
+    const trackedTaskDetailsLoadedHtml = needsTaskDiagnostics && hasTrackedTaskPanels ? `
       <div class="task-diagnostics-stack">
         <details class="card compact-details" id="task-execution-chain-panel">
           <summary>${escapeHtml(t("Execution chain", "\u6267\u884C\u94FE"))}</summary>
@@ -3515,7 +3528,11 @@ async function renderHtml(filters, toolClient, options) {
         </details>
       </div>
     ` : `<div class="meta">${escapeHtml(trackedTaskExplanation)}</div>`;
-    const taskQueueCard = `
+    const trackedTaskDetailsBody = needsProjectsTemplates && needsTaskDiagnostics ? trackedTaskDetailsLoadedHtml : needsProjectsTemplates ? `<div class="task-diagnostics-shell" data-task-diagnostics-shell data-task-diagnostics-pending="1" data-task-diagnostics-loaded="0" data-task-diagnostics-endpoint="${escapeHtml(taskDiagnosticsEndpoint)}">
+      <div class="meta">${escapeHtml(t("Open this fold only when you need execution proof, project dynamics, or raw task records. The content will load on demand so the task page stays fast.", "\u53EA\u5728\u9700\u8981\u6267\u884C\u8BC1\u636E\u3001\u9879\u76EE\u52A8\u6001\u6216\u539F\u59CB\u4EFB\u52A1\u8BB0\u5F55\u65F6\u518D\u5C55\u5F00\u3002\u5185\u5BB9\u4F1A\u6309\u9700\u52A0\u8F7D\uFF0C\u8BA9\u4EFB\u52A1\u9875\u9996\u5C4F\u4FDD\u6301\u8F7B\u5FEB\u3002"))}</div>
+      <div class="meta" data-task-diagnostics-status>${escapeHtml(t(`Queued: ${trackedTaskSummaryText}`, `待加载：${trackedTaskSummaryText}`))}</div>
+    </div>` : "";
+    const taskQueueCard = needsProjectsTemplates ? `
     <section class="task-queue-card" id="task-queue" data-task-queue-root data-task-queue-default-tab="${escapeHtml(taskQueueDefaultTab)}">
       <div class="overview-command-head">
         <div>
@@ -3538,8 +3555,8 @@ async function renderHtml(filters, toolClient, options) {
         ${taskFollowupListHtml}
       </section>
     </section>
-  `;
-    const calendarSection = `
+  ` : "";
+    const calendarSection = showProjectsSection ? `
     <section class="card" id="calendar-board">
       <div class="overview-command-head">
         <div>
@@ -3600,23 +3617,9 @@ async function renderHtml(filters, toolClient, options) {
         <div class="fold-body">${calendarBoardHtml}</div>
       </details>
     </section>
-  `;
-    const cronExecutionSection = `
-    <section class="card" id="cron-execution-board">
-      <div class="overview-command-head">
-        <h2>${escapeHtml(t("Cron execution board", "Cron \u6267\u884C\u770B\u677F"))}</h2>
-        <div>${badge(cronOverview.health.status, cronHealthLabel(cronOverview.health.status, options.language))}</div>
-      </div>
-      <div class="meta">${escapeHtml(t("This row focuses only on timed-job execution itself. Keep it below the main card wall so it acts as an execution monitor instead of competing with task priority.", "\u8FD9\u4E00\u6392\u53EA\u770B\u5B9A\u65F6\u4EFB\u52A1\u6267\u884C\u672C\u8EAB\uFF0C\u653E\u5728\u4E3B\u5361\u7247\u5899\u4E0B\u65B9\uFF0C\u4F5C\u4E3A\u6267\u884C\u76D1\u63A7\u800C\u4E0D\u662F\u548C\u4EFB\u52A1\u4F18\u5148\u7EA7\u62A2\u4F4D\u7F6E\u3002"))}</div>
-      <div class="meta">${escapeHtml(t("Next", "\u4E0B\u6B21"))} ${escapeHtml(cronOverview.nextRunAt ?? t("None", "\u6682\u65E0"))} \xB7 ${escapeHtml(t("Heartbeat", "\u5FC3\u8DF3"))} ${escapeHtml(heartbeatNextRun)} \xB7 ${escapeHtml(t("Enabled", "\u5DF2\u542F\u7528"))} ${enabledCronCount}</div>
-      ${cronExecutionCardsHtml}
-      <details class="compact-table-details" style="margin-top:12px;">
-        <summary>${escapeHtml(t("Open Cron table detail", "\u67E5\u770B Cron \u8868\u683C\u660E\u7EC6"))}</summary>
-        <div class="fold-body">${cronTable}</div>
-      </details>
-    </section>
-  `;
-    const projectsSection = `
+  ` : "";
+    const projectsSection = showProjectsSection ? `
+    <section class="task-flow-stack">
     <section id="task-workbench">
       ${calendarSection}
     </section>
@@ -3627,8 +3630,9 @@ async function renderHtml(filters, toolClient, options) {
         ${trackedTaskDetailsBody}
       </div>
     </details>
-  `;
-    const alertsSection = `
+    </section>
+  ` : "";
+    const alertsSection = showAlertsSection ? `
     <section class="card">
       <h2>${escapeHtml(t("Attention items", "\u5173\u6CE8\u4E8B\u9879"))}</h2>
       <div class="meta">${escapeHtml(t("Blocked", "\u963B\u585E"))} ${exceptions.counts.blocked} \xB7 ${escapeHtml(t("Errors", "\u5F02\u5E38"))} ${exceptions.counts.errors} \xB7 ${escapeHtml(t("Pending approvals", "\u5F85\u5BA1\u6279"))} ${exceptions.counts.pendingApprovals} \xB7 ${escapeHtml(t("Stalled runs", "\u505C\u6EDE\u6267\u884C"))} ${stalledRunningSessionCount}</div>
@@ -3647,8 +3651,8 @@ async function renderHtml(filters, toolClient, options) {
       <summary>${escapeHtml(t("Budget watch", "\u9884\u7B97\u76D1\u63A7"))}</summary>
       <div class="fold-body">${nonOkBudgets.length === 0 ? `<div class="empty-state">${escapeHtml(t("Budget status looks healthy right now.", "\u9884\u7B97\u72B6\u6001\u5065\u5EB7\uFF0C\u5F53\u524D\u65E0\u9884\u8B66\u3002"))}</div>` : `<table><thead><tr><th>${escapeHtml(t("Status", "\u72B6\u6001"))}</th><th>${escapeHtml(t("Scope", "\u8303\u56F4"))}</th><th>${escapeHtml(t("Target", "\u5BF9\u8C61"))}</th><th>${escapeHtml(t("Usage", "\u4F7F\u7528\u60C5\u51B5"))}</th></tr></thead><tbody>${budgetItems}</tbody></table>`}</div>
     </details>
-  `;
-    const replaySection = `
+  ` : "";
+    const replaySection = showReplaySection ? `
     <section class="card">
       <h2>${escapeHtml(t("Replay activity", "\u6D3B\u52A8\u56DE\u653E"))}</h2>
       ${replaySignals.length === 0 ? `<div class="empty-state">${escapeHtml(t("No replay data yet. It will appear after the monitor has been running.", "\u6682\u65E0\u56DE\u653E\u6570\u636E\u3002\u76D1\u63A7\u8FD0\u884C\u540E\u4F1A\u51FA\u73B0\u3002"))}</div>` : `<div class="status-strip">${replaySignals.map(item => `<div class="status-chip"><span>${escapeHtml(item.label)}</span><strong>${item.value}</strong></div>`).join("")}</div>`}
@@ -3664,12 +3668,12 @@ async function renderHtml(filters, toolClient, options) {
       <summary>${escapeHtml(t("Recent timeline", "\u6700\u8FD1\u65F6\u95F4\u7EBF"))}</summary>
       <div class="fold-body"><ul class="story-list">${replayMomentsRows}</ul></div>
     </details>
-  `;
-    const settingsSection = `
-    ${settingsEnvironmentStatusCard}
+  ` : "";
+    const settingsSection = showSettingsSection ? `
+    ${settingsEnvironmentStatusShell}
     ${settingsConfigAccessCard}
     ${agentTeamSettingsBlock}
-  `;
+  ` : "";
     let sectionBody = overviewSection;
     if (options.section === "calendar")
         sectionBody = projectsSection;
@@ -3695,6 +3699,13 @@ async function renderHtml(filters, toolClient, options) {
         sectionBody = replaySection;
     if (options.section === "settings")
         sectionBody = settingsSection;
+    if (taskDiagnosticsPartial) {
+        const renderTotalMs = Math.round(performance.now() - renderStartedAt);
+        if (renderTotalMs >= 1e3) {
+            console.warn("[mission-control] slow html render", { section: `${activeSection}:task-diagnostics`, totalMs: renderTotalMs, phases: renderPhases.join(" | ") });
+        }
+        return trackedTaskDetailsLoadedHtml;
+    }
     const globalVisibilityCard = renderGlobalVisibilityCard(globalVisibilityModel, options.language);
     const globalVisibilityBlock = options.section === "overview" ? globalVisibilityCard : "";
     const globalVisibilityQuickRows = [{ label: pickUiText(options.language, "Timed jobs", "\u5B9A\u65F6\u4EFB\u52A1"), count: globalVisibilityModel.signalCounts.schedule, href: buildGlobalVisibilityDetailHref("cron", options.language) }, { label: pickUiText(options.language, "Heartbeat", "\u4EFB\u52A1\u5FC3\u8DF3"), count: globalVisibilityModel.signalCounts.heartbeat, href: buildGlobalVisibilityDetailHref("heartbeat", options.language) }, { label: pickUiText(options.language, "Current tasks", "\u5F53\u524D\u4EFB\u52A1"), count: globalVisibilityModel.signalCounts.currentTasks, href: buildGlobalVisibilityDetailHref("current_task", options.language) }, { label: pickUiText(options.language, "Tool calls", "\u5DE5\u5177\u8C03\u7528"), count: globalVisibilityModel.signalCounts.toolCalls, href: buildGlobalVisibilityDetailHref("tool_call", options.language) }].map(item => `<div class="meta"><a href="${escapeHtml(item.href)}">${escapeHtml(item.label)}</a>\uFF1A${item.count}</div>`).join("");
@@ -3704,19 +3715,21 @@ async function renderHtml(filters, toolClient, options) {
         `${pickUiText(options.language, "Current tasks", "\u5F53\u524D\u4EFB\u52A1")} ${globalVisibilityModel.signalCounts.currentTasks}`,
         `${pickUiText(options.language, "Tool calls", "\u5DE5\u5177\u8C03\u7528")} ${globalVisibilityModel.signalCounts.toolCalls}`
       ].join(" \xB7 "))}</div>` : `<div class="meta"><a href="${escapeHtml(buildHomeHref({ quick: "all" }, true, "overview", options.language, options.usageView))}">${escapeHtml(t("See four signals in overview", "\u5728\u603B\u89C8\u67E5\u770B\u56DB\u9879\u4FE1\u53F7"))}</a></div>`;
-    const taskBoardScript = renderTaskBoardScript();
-    const fileWorkbenchScript = renderFileWorkbenchScript();
-    const staffModelScript = renderStaffModelScript();
+    const taskBoardScript = showProjectsSection ? renderTaskBoardScript() : "";
+    const fileWorkbenchScript = showMemorySection || showDocsSection ? renderFileWorkbenchScript() : "";
+    const staffModelScript = showTeamSection ? renderStaffModelScript() : "";
     const agentVisualEnhancerScript = renderAgentVisualEnhancerScript();
     const nativeMotionScript = renderNativeMotionScript(options.language);
-    const collaborationFilterScript = renderCollaborationFilterScript(options.language, primaryDispatcherFilterLabel);
+    const collaborationFilterScript = showCollaborationSection ? renderCollaborationFilterScript(options.language, primaryDispatcherFilterLabel) : "";
     const quotaResetScript = renderQuotaResetScript();
     const dashboardRefreshScript = renderDashboardRefreshScript(options.language, { localMutationUnlock: options.localMutationUnlock, localTokenAuthRequired: import_config.LOCAL_TOKEN_AUTH_REQUIRED, localTokenConfigured: import_config.LOCAL_API_TOKEN !== "", localTokenHeader: import_config.LOCAL_TOKEN_HEADER, embeddedLocalToken: options.localMutationUnlock ? import_config.LOCAL_API_TOKEN : "" });
-    const settingsBudgetLimitScript = renderSettingsBudgetLimitScript(options.language);
-    const settingsSafetyScript = renderSettingsSafetyScript(options.language);
+    const settingsBudgetLimitScript = showSettingsSection ? renderSettingsBudgetLimitScript(options.language) : "";
+    const settingsInsightsScript = showSettingsSection ? renderSettingsInsightsScript(options.language) : "";
+    const settingsSafetyScript = showSettingsSection ? renderSettingsSafetyScript(options.language) : "";
     const cardHelpTooltipsScript = renderCardHelpTooltipsScript(options.language);
     const collaborationRoomOpenScript = renderCollaborationRoomOpenScript(options.language);
-    const featuresScript = renderFeaturesScript(options.language);
+    const taskDiagnosticsScript = showProjectsSection ? renderTaskDiagnosticsScript(options.language) : "";
+    const featuresScript = showFeaturesSection ? renderFeaturesScript(options.language) : "";
     const collaborationChatBootPreferences = await buildCollaborationChatBootPreferences({
         preferences: options.collaborationChat,
         directory: collaborationDirectory
@@ -5047,6 +5060,102 @@ async function renderHtml(filters, toolClient, options) {
       gap: 12px;
       grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
       align-items: start;
+    }
+    .settings-environment-shell {
+      margin-top: 12px;
+      display: grid;
+      gap: 12px;
+    }
+    .settings-environment-top {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .settings-connection-column {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+    .settings-environment-top > .settings-status-panel,
+    .settings-environment-top > .settings-connection-column {
+      min-width: 0;
+    }
+    .settings-runtime-contract-panel .status-strip,
+    .settings-security-data-section .status-strip {
+      margin-top: 10px;
+    }
+    .settings-runtime-contract-strip {
+      grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
+    }
+    .settings-runtime-contract-meta {
+      margin-top: 10px;
+    }
+    .settings-runtime-contract-list {
+      margin-top: 12px;
+    }
+    .settings-security-data-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 0.84fr) minmax(0, 1.16fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .settings-data-budget-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(300px, 0.92fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .settings-security-data-section {
+      min-width: 0;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(140, 166, 202, 0.22);
+      background:
+        linear-gradient(180deg, rgba(250, 252, 255, 0.96), rgba(255, 255, 255, 0.92)),
+        radial-gradient(circle at 100% 0%, rgba(0, 113, 227, 0.05), transparent 58%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.9);
+    }
+    .settings-section-label {
+      font-size: 12px;
+      line-height: 1.45;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: #5b6370;
+      text-transform: uppercase;
+    }
+    .settings-subhead {
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .settings-note-card,
+    .settings-quiet-empty {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px dashed rgba(140, 166, 202, 0.28);
+      background: rgba(248, 251, 255, 0.9);
+    }
+    .settings-note-card strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+    .settings-embedded-security-panel {
+      box-shadow: none;
+      background:
+        linear-gradient(180deg, rgba(250, 252, 255, 0.96), rgba(255, 255, 255, 0.92)),
+        radial-gradient(circle at 100% 0%, rgba(0, 113, 227, 0.05), transparent 58%);
+    }
+    .settings-security-data-budget {
+      margin-top: 12px;
+    }
+    .settings-security-data-budget .settings-inline-budget-compact {
+      box-shadow: none;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 251, 255, 0.95)),
+        radial-gradient(circle at 100% 0%, rgba(0, 113, 227, 0.04), transparent 60%);
     }
     .settings-config-grid {
       grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.9fr);
@@ -8286,6 +8395,10 @@ async function renderHtml(filters, toolClient, options) {
         grid-column: auto;
         grid-row: auto;
       }
+      .settings-environment-shell { gap: 10px; }
+      .settings-environment-top,
+      .settings-security-data-grid,
+      .settings-data-budget-grid,
       .settings-environment-grid { grid-template-columns: 1fr; }
       .settings-environment-grid > #settings-connection-health,
       .settings-environment-grid > #security-risk-summary,
@@ -8321,6 +8434,9 @@ async function renderHtml(filters, toolClient, options) {
       .collaboration-timeline-step { grid-template-columns: 1fr; }
       .file-workbench { grid-template-columns: 1fr; }
       .settings-budget-form { grid-template-columns: 1fr; }
+      .settings-environment-top { grid-template-columns: 1fr; }
+      .settings-security-data-grid { grid-template-columns: 1fr; }
+      .settings-data-budget-grid { grid-template-columns: 1fr; }
       .settings-environment-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .settings-environment-grid > #settings-connection-health,
       .settings-environment-grid > #settings-budget-limit {
@@ -9390,11 +9506,13 @@ async function renderHtml(filters, toolClient, options) {
   </div>
   ${dashboardRefreshScript}
   ${settingsBudgetLimitScript}
+  ${settingsInsightsScript}
   ${settingsSafetyScript}
   ${cardHelpTooltipsScript}
   ${agentVisualEnhancerScript}
   ${featuresScript}
   ${collaborationRoomOpenScript}
+  ${taskDiagnosticsScript}
   ${taskBoardScript}
   ${fileWorkbenchScript}
   ${staffModelScript}
@@ -9524,7 +9642,7 @@ async function updateOpenClawAgentModel(agentId, input, fallbackModel) {
 __name(updateOpenClawAgentModel, "updateOpenClawAgentModel");
 function humanizeOperatorLabel(value) { return (0, import_operator_display.humanizeOperatorDisplayName)(value) ?? "\u672A\u77E5\u52A9\u624B"; }
 __name(humanizeOperatorLabel, "humanizeOperatorLabel");
-function normalizeLookupKey(input) { return input.trim().toLowerCase(); }
+function normalizeLookupKey(input) { return String(input ?? "").trim().toLowerCase(); }
 __name(normalizeLookupKey, "normalizeLookupKey");
 function staffStatusLabel(status, language = "zh") { return officeRuntimeHelpers.staffStatusLabel(status, language); }
 __name(staffStatusLabel, "staffStatusLabel");
@@ -9539,7 +9657,7 @@ async function loadCachedStaffRecentActivity(snapshot, client, agentIds, languag
         return renderStaffRecentActivityCache.value;
     }
     const value = await loadStaffRecentActivity(snapshot, client, agentIds, language);
-    renderStaffRecentActivityCache = { snapshotAt: snapshot.generatedAt, language, agentKey, value, expiresAt: now + HTML_HEAVY_CACHE_TTL_MS };
+    renderStaffRecentActivityCache = { snapshotAt: snapshot.generatedAt, language, agentKey, value, expiresAt: Date.now() + HTML_HEAVY_CACHE_TTL_MS };
     return value;
 }
 __name(loadCachedStaffRecentActivity, "loadCachedStaffRecentActivity");
@@ -9774,6 +9892,10 @@ function renderShellNavPinToggle(label) {
 __name(renderShellNavPinToggle, "renderShellNavPinToggle");
 function renderDashboardSectionNavForSmoke(section, language = "en") { const activeSection = normalizeDashboardSectionForNav(section); return dashboardSectionLinks(language).map(item => { const activeClass = item.key === activeSection ? " active" : ""; const current = item.key === activeSection ? ' aria-current="page"' : ""; return `<a class="nav-link${activeClass}" data-nav-link-key="${escapeHtml(item.key)}" href="/?section=${encodeURIComponent(item.key)}"${current}><span class="nav-link-icon" aria-hidden="true">${renderShellIcon(item.icon ?? "overview", item.label)}</span><span class="nav-link-copy"><span class="nav-link-title">${escapeHtml(item.label)}</span><small>${escapeHtml(item.blurb)}</small></span></a>`; }).join(""); }
 __name(renderDashboardSectionNavForSmoke, "renderDashboardSectionNavForSmoke");
+function resolveUsageCostModeForSectionForSmoke(section) { return resolveUsageCostModeForSection(normalizeDashboardSectionForNav(section)); }
+__name(resolveUsageCostModeForSectionForSmoke, "resolveUsageCostModeForSectionForSmoke");
+function selectTaskEvidenceSessionKeysForSmoke(tasks, maxKeys = TASK_EVIDENCE_SESSION_KEY_LIMIT) { return selectTaskEvidenceSessionKeys(tasks, maxKeys); }
+__name(selectTaskEvidenceSessionKeysForSmoke, "selectTaskEvidenceSessionKeysForSmoke");
 function renderDashboardShellForSmoke(section, language = "en") {
     const activeSection = normalizeDashboardSectionForNav(section);
     const nav = renderDashboardSectionNavForSmoke(activeSection, language);
@@ -10056,7 +10178,7 @@ const officeRuntimeHelpers = createOfficeRuntimeHelpers({
     safeTruncate,
     stableHashIndex
 });
-const { agentTeamArtifactMatchesAgent, agentTeamTimelineItemMatchesAgent, buildAgentAnimalIdentityMap, buildExecutionAgentSummaries, buildOfficeAgentRosterIds, buildOfficeSpaceCards, buildStaffRecentActivityFallbackFromAgentTeamEmbed, buildTaskRoleSummaries, compareAgentTeamArtifactsByLatest, compareAgentTeamTimelineItemsByLatest, dedupeModelOptionsForCard, deriveAgentAnimalIdentity, describeAgentTeamStage, formatAgentTeamArtifactRecentOutput, formatAgentTeamTimelineRecentOutput, formatStaffRecentOutput, historyImpliesStaffStopped, isExplicitStopSignalMessage, isResidualPostStopMessage, isStaffVisibleOutputMessage, pickRecentStaffActivity, resolveOfficeCardStatus, staffCurrentWorkLabel, toSortableRuntimeTimestamp, uniqueAgentTeamArtifacts } = officeRuntimeHelpers;
+const { agentTeamArtifactMatchesAgent, agentTeamTimelineItemMatchesAgent, buildAgentAnimalIdentityMap, buildExecutionAgentSummaries, buildOfficeAgentRosterIds, buildOfficeSpaceCards, buildStaffRecentActivityFallbackFromAgentTeamEmbed, compareAgentTeamArtifactsByLatest, compareAgentTeamTimelineItemsByLatest, dedupeModelOptionsForCard, deriveAgentAnimalIdentity, describeAgentTeamStage, formatAgentTeamArtifactRecentOutput, formatAgentTeamTimelineRecentOutput, formatStaffRecentOutput, historyImpliesStaffStopped, isExplicitStopSignalMessage, isResidualPostStopMessage, isStaffVisibleOutputMessage, pickRecentStaffActivity, resolveOfficeCardStatus, staffCurrentWorkLabel, toSortableRuntimeTimestamp, uniqueAgentTeamArtifacts } = officeRuntimeHelpers;
 const dashboardQueryHelpers = createDashboardQueryHelpers({
     RequestValidationError,
     assertAllowedQueryParams,
@@ -10088,7 +10210,7 @@ const dashboardQueryHelpers = createDashboardQueryHelpers({
     taskStates: TASK_STATES
 });
 const { applyProjectFilters, applyTaskFilters, buildBoundedSearchResult, buildDashboardSearchResult, mergeUiPreferencesPatch, parseAuditSeverity, parseProjectFilters, parseReplayWindowQuery, parseSearchQuery, parseSessionQuery, parseTaskFilters, renderDashboardSearchResult, resolveCompactStatusStrip, resolveDashboardSearchQuery, resolveDashboardSection, resolveDashboardTaskFilters, resolveLegacyDashboardAnchor, resolveLegacyDashboardSection, resolveUiLanguage, resolveUsageView, safeSubstringMatch } = dashboardQueryHelpers;
-export { buildDashboardSearchResultForSmoke, buildExecutionAgentSummaries, buildOfficeAgentRosterIds, buildOfficeSpaceCards, buildStaffOverviewCards, buildStaffRecentActivityFallbackFromAgentTeamEmbedForSmoke, deriveAgentAnimalIdentity, humanizeTimedJobScheduleLabelForSmoke, humanizeTimedJobWindowLabelForSmoke, mergeCollaborationRoomApiEventsForSmoke, pickLatestSessionActivityTimestampForSmoke, renderAuditPageForSmoke, renderDashboardSectionNavForSmoke, renderDashboardShellForSmoke, renderGlobalVisibilityCardForSmoke, renderInformationCertaintyCardForSmoke, renderSessionDrilldownPageForSmoke, renderSubscriptionStatusCardForSmoke, renderTaskBoardEmptyStateForSmoke, renderTaskCertaintySectionForSmoke, renderTaskExecutionChainCardsForSmoke, resolveDashboardSection, resolveEditableAgentScopesFromConfigForSmoke, resolveEditableAgentScopesWithFallbackForSmoke, resolveLegacyDashboardSectionForSmoke, resolveOpenClawWorkspaceRootForSmoke, startUiServer, };
+export { buildDashboardSearchResultForSmoke, buildExecutionAgentSummaries, buildOfficeAgentRosterIds, buildOfficeSpaceCards, buildStaffOverviewCards, buildStaffRecentActivityFallbackFromAgentTeamEmbedForSmoke, deriveAgentAnimalIdentity, humanizeTimedJobScheduleLabelForSmoke, humanizeTimedJobWindowLabelForSmoke, mergeCollaborationRoomApiEventsForSmoke, pickLatestSessionActivityTimestampForSmoke, renderAuditPageForSmoke, renderDashboardSectionNavForSmoke, renderDashboardShellForSmoke, renderGlobalVisibilityCardForSmoke, renderInformationCertaintyCardForSmoke, renderSessionDrilldownPageForSmoke, renderSubscriptionStatusCardForSmoke, renderTaskBoardEmptyStateForSmoke, renderTaskCertaintySectionForSmoke, renderTaskExecutionChainCardsForSmoke, resolveDashboardSection, resolveEditableAgentScopesFromConfigForSmoke, resolveEditableAgentScopesWithFallbackForSmoke, resolveLegacyDashboardSectionForSmoke, resolveOpenClawWorkspaceRootForSmoke, resolveUsageCostModeForSectionForSmoke, selectTaskEvidenceSessionKeysForSmoke, startUiServer, };
 
 /*
 Source anchors moved to ./server.source-anchors.txt to keep this recovered UI shim

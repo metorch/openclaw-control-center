@@ -303,7 +303,7 @@ function createSessionConversationHelpers(deps) {
         historyLimit,
         sessionKey: cacheKey,
         value,
-        expiresAt: now + heavyCacheTtlMs,
+        expiresAt: Date.now() + heavyCacheTtlMs,
       };
       return value;
     } finally {
@@ -339,7 +339,7 @@ function createSessionConversationHelpers(deps) {
       pageSize: 12,
       historyLimit: 5,
     });
-    sessionPreviewCache = { snapshotKey, value, expiresAt: now + heavyCacheTtlMs };
+    sessionPreviewCache = { snapshotKey, value, expiresAt: Date.now() + heavyCacheTtlMs };
     return value;
   }
 
@@ -410,7 +410,7 @@ function createSessionConversationHelpers(deps) {
       collaborationPreviewCache = {
         snapshotKey,
         value,
-        expiresAt: now + heavyCacheTtlMs,
+        expiresAt: Date.now() + heavyCacheTtlMs,
       };
       return value;
     } finally {

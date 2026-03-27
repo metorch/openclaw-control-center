@@ -29,6 +29,215 @@ function createTaskPageRenderers(deps) {
     return numeric;
   }
 
+  function serializeJsonForHtmlScript(value) {
+    return JSON.stringify(value)
+      .replace(/</g, "\\u003c")
+      .replace(/>/g, "\\u003e")
+      .replace(/&/g, "\\u0026")
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029");
+  }
+
+  function orderTaskBoardItems(items, storedOrder) {
+    if (!Array.isArray(storedOrder) || storedOrder.length === 0) return items;
+    const byId = new Map(items.map((item) => [item.cardId, item]));
+    const ordered = [];
+    const seen = new Set();
+    storedOrder.forEach((cardId) => {
+      const item = byId.get(cardId);
+      if (!item || seen.has(cardId)) return;
+      ordered.push(item);
+      seen.add(cardId);
+    });
+    items.forEach((item) => {
+      if (seen.has(item.cardId)) return;
+      ordered.push(item);
+    });
+    return ordered;
+  }
+
+  function buildTaskBoardLabels(language) {
+    return {
+      dragHandleLabel: pickUiText(language, "Drag to reorder", "\u62D6\u62FD\u6392\u5E8F"),
+      openDetailLabel: pickUiText(language, "Open detail", "\u67E5\u770B\u8BE6\u60C5"),
+      selectLabel: pickUiText(language, "Select task", "\u9009\u62E9\u4EFB\u52A1"),
+      selectShortLabel: pickUiText(language, "Select", "\u9009\u62E9"),
+      deleteLabel: pickUiText(language, "Delete", "\u5220\u9664"),
+      nextStepLabel: pickUiText(language, "Next step", "\u4E0B\u4E00\u6B65"),
+      typeLabel: pickUiText(language, "Type", "\u7C7B\u578B"),
+      taskTypeLabel: pickUiText(language, "Task", "\u4EFB\u52A1"),
+      timedJobTypeLabel: pickUiText(language, "Timed job", "\u5B9A\u65F6\u4EFB\u52A1"),
+      titleLabel: pickUiText(language, "Title", "\u6807\u9898"),
+      statusLabel: pickUiText(language, "Status", "\u72B6\u6001"),
+      focusLabel: pickUiText(language, "Focus", "\u5173\u6CE8\u70B9"),
+      recentLabel: pickUiText(language, "Recent signal", "\u6700\u8FD1\u4FE1\u53F7"),
+      updatedLabel: pickUiText(language, "Updated", "\u66F4\u65B0"),
+      actionsLabel: pickUiText(language, "Actions", "\u64CD\u4F5C"),
+      topLabelTask: pickUiText(language, "Time", "\u65F6\u95F4"),
+      topLabelTimedJob: pickUiText(language, "Auto run", "\u81EA\u52A8\u6267\u884C"),
+      rowOneTaskLabel: pickUiText(language, "Current state", "\u5F53\u524D\u72B6\u6001"),
+      rowOneTimedJobLabel: pickUiText(language, "Purpose", "\u7528\u9014"),
+      rowTwoTaskLabel: pickUiText(language, "Recent signal", "\u6700\u8FD1\u4FE1\u53F7"),
+      rowTwoTimedJobLabel: pickUiText(language, "Runtime", "\u8FD0\u884C\u72B6\u6001"),
+    };
+  }
+
+  function createTaskBoardClientItem(card, language, labels) {
+    const linkedRoomId = card.cardKind === "task" && typeof card.linkedRoomId === "string"
+      ? card.linkedRoomId.trim()
+      : "";
+    const displayTitle = truncateTaskBoardTitle(card.title);
+    const isTimedJob = card.cardKind === "timed_job";
+    return {
+      cardId: card.cardId,
+      cardKind: card.cardKind,
+      taskId: card.taskId,
+      projectId: card.projectId || "",
+      selectionKey: `${card.projectId || ""}::${card.taskId}`,
+      title: card.title,
+      displayTitle,
+      scheduleLabel: card.scheduleLabel,
+      dueLabel: card.dueLabel,
+      projectTitle: card.projectTitle,
+      ownerLabel: card.ownerLabel,
+      summary: card.summary,
+      recentSignal: card.recentSignal,
+      nextStep: card.nextStep,
+      detailHref: card.detailHref,
+      linkedRoomId,
+      focusValue: isTimedJob ? card.scheduleLabel : card.priorityLabel,
+      updatedLabel: card.updatedLabel,
+      boardStatusTone: isTimedJob ? "ok" : card.boardStatusTone ?? "enabled",
+      boardStatusLabel: card.boardStatusLabel,
+      statusLabel: card.statusLabel,
+      statusTone: card.statusTone,
+      statusDotLabel: card.statusDotLabel,
+      topLabel: isTimedJob ? labels.topLabelTimedJob : labels.topLabelTask,
+      rowOneLabel: isTimedJob ? labels.rowOneTimedJobLabel : labels.rowOneTaskLabel,
+      rowTwoLabel: isTimedJob ? labels.rowTwoTimedJobLabel : labels.rowTwoTaskLabel,
+      typeLabel: isTimedJob ? labels.timedJobTypeLabel : labels.taskTypeLabel,
+      primaryBadgeTone: isTimedJob
+        ? "ok"
+        : card.statusTone === "issue"
+          ? "blocked"
+          : card.statusTone === "working"
+            ? "warn"
+            : card.statusTone === "done" || card.taskStatus === "done"
+              ? "done"
+              : "enabled",
+      primaryBadgeLabel: isTimedJob ? labels.timedJobTypeLabel : card.statusLabel,
+      secondaryBadgeTone: isTimedJob
+        ? card.boardStatusLabel === pickUiText(language, "Disabled", "\u5DF2\u505C\u7528")
+          ? "blocked"
+          : "ok"
+        : card.taskStatus === "done"
+          ? "done"
+          : card.taskStatus === "in_progress"
+            ? "in_progress"
+            : card.taskStatus === "blocked"
+              ? "blocked"
+              : "enabled",
+      secondaryBadgeLabel: card.boardStatusLabel,
+      tertiaryBadgeTone: isTimedJob ? "enabled" : "ok",
+      tertiaryBadgeLabel: isTimedJob ? pickUiText(language, "Auto", "\u81EA\u52A8") : card.priorityLabel,
+    };
+  }
+
+  function renderTaskBoardSelectionControl(item, labels, variant = "card") {
+    if (item.cardKind !== "task") {
+      return variant === "table"
+        ? `<span class="task-list-static">${escapeHtml(labels.timedJobTypeLabel)}</span>`
+        : "";
+    }
+    const sizeClass = variant === "table" ? "task-select-control table" : "task-select-control";
+    const label = variant === "table" ? labels.selectLabel : labels.selectShortLabel;
+    return `<label class="${sizeClass}">
+      <input type="checkbox" data-task-select data-task-id="${escapeHtml(item.taskId)}" data-task-project-id="${escapeHtml(item.projectId)}" data-task-select-key="${escapeHtml(item.selectionKey)}" aria-label="${escapeHtml(labels.selectLabel)}" />
+      <span>${escapeHtml(label)}</span>
+    </label>`;
+  }
+
+  function renderTaskBoardDeleteButton(item, labels, className = "task-delete-button") {
+    if (item.cardKind !== "task") return "";
+    return `<button class="btn ${escapeHtml(className)}" type="button" data-task-delete data-task-id="${escapeHtml(item.taskId)}" data-task-project-id="${escapeHtml(item.projectId)}">${escapeHtml(labels.deleteLabel)}</button>`;
+  }
+
+  function renderTaskBoardDetailButton(item, labels) {
+    if (item.cardKind !== "task") {
+      return `<a class="btn" href="${escapeHtml(item.detailHref)}">${escapeHtml(labels.openDetailLabel)}</a>`;
+    }
+    if (item.linkedRoomId) {
+      return `<button class="btn" type="button" data-task-open-room="${escapeHtml(item.linkedRoomId)}">${escapeHtml(labels.openDetailLabel)}</button>`;
+    }
+    return `<button class="btn" type="button" data-task-open-room-missing>${escapeHtml(labels.openDetailLabel)}</button>`;
+  }
+
+  function renderTaskBoardCardArticle(item, labels, index) {
+    const priorityPanelClass = item.cardKind === "timed_job" ? "task-priority-panel compact" : "task-priority-panel";
+    return `<article class="task-brief-card" draggable="true" data-task-card data-task-id="${escapeHtml(item.cardId)}" data-task-board-item-index="${index}">
+      <span class="task-status-dot ${escapeHtml(item.statusTone)}" title="${escapeHtml(item.statusDotLabel)}" aria-hidden="true"></span>
+      <div class="task-drag-handle" title="${escapeHtml(labels.dragHandleLabel)}" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="task-brief-head">
+        <div class="${priorityPanelClass}">
+          <span>${escapeHtml(item.topLabel)}</span>
+          <strong>${escapeHtml(item.scheduleLabel)}</strong>
+          <small>${escapeHtml(item.dueLabel)}</small>
+        </div>
+        <div class="task-brief-identity">
+          <h3 title="${escapeHtml(item.title)}">${escapeHtml(item.displayTitle)}</h3>
+          <div class="task-brief-pills">
+            ${badge(item.primaryBadgeTone, item.primaryBadgeLabel)}
+            ${badge(item.secondaryBadgeTone, item.secondaryBadgeLabel)}
+            ${badge(item.tertiaryBadgeTone, item.tertiaryBadgeLabel)}
+          </div>
+          <div class="task-role">${escapeHtml(item.projectTitle)} \xB7 ${escapeHtml(item.ownerLabel)}</div>
+        </div>
+      </div>
+      <dl class="task-brief-list">
+        <div class="task-brief-row"><dt>${escapeHtml(item.rowOneLabel)}</dt><dd class="task-brief-value clamp-2">${escapeHtml(item.summary)}</dd></div>
+        <div class="task-brief-row"><dt>${escapeHtml(item.rowTwoLabel)}</dt><dd class="task-brief-value clamp-2">${escapeHtml(item.recentSignal)}</dd></div>
+        <div class="task-brief-row"><dt>${escapeHtml(labels.nextStepLabel)}</dt><dd class="task-brief-value clamp-2">${escapeHtml(item.nextStep)}</dd></div>
+      </dl>
+      <div class="task-brief-actions">
+        <div class="task-brief-actions-meta">
+          ${renderTaskBoardSelectionControl(item, labels)}
+          <div class="meta"><code>${escapeHtml(item.taskId)}</code> \xB7 ${escapeHtml(item.updatedLabel)}</div>
+        </div>
+        <div class="task-brief-action-buttons">
+          ${renderTaskBoardDetailButton(item, labels)}
+          ${renderTaskBoardDeleteButton(item, labels)}
+        </div>
+      </div>
+    </article>`;
+  }
+
+  function renderTaskBoardDetailRow(item, labels, index) {
+    return `<tr class="task-detail-row" data-task-list-row data-task-kind="${escapeHtml(item.cardKind)}" data-task-id="${escapeHtml(item.cardId)}" data-task-project-id="${escapeHtml(item.projectId)}" data-task-board-item-index="${index}">
+      <td class="task-detail-cell task-detail-cell-select">${renderTaskBoardSelectionControl(item, labels, "table")}</td>
+      <td class="task-detail-cell task-detail-cell-type"><span class="task-list-kind ${escapeHtml(item.cardKind)}">${escapeHtml(item.typeLabel)}</span></td>
+      <td class="task-detail-cell task-detail-cell-title">
+        <div class="task-detail-title" title="${escapeHtml(item.title)}">${escapeHtml(item.displayTitle)}</div>
+        <div class="meta task-detail-submeta"><code>${escapeHtml(item.taskId)}</code></div>
+      </td>
+      <td class="task-detail-cell task-detail-cell-status">
+        <div class="task-detail-status">${badge(item.boardStatusTone, item.boardStatusLabel)}</div>
+        <div class="meta task-detail-submeta" title="${escapeHtml(item.statusLabel)}">${escapeHtml(item.statusLabel)}</div>
+      </td>
+      <td class="task-detail-cell task-detail-cell-focus">
+        <div class="task-detail-primary-line" title="${escapeHtml(item.focusValue)}">${escapeHtml(item.focusValue)}</div>
+        <div class="meta task-detail-submeta" title="${escapeHtml(item.dueLabel)}">${escapeHtml(item.dueLabel)}</div>
+      </td>
+      <td class="task-detail-cell task-detail-cell-recent"><div class="task-detail-recent" title="${escapeHtml(item.recentSignal)}">${escapeHtml(item.recentSignal)}</div></td>
+      <td class="task-detail-cell task-detail-cell-updated" title="${escapeHtml(item.updatedLabel)}">${escapeHtml(item.updatedLabel)}</td>
+      <td class="task-detail-cell task-detail-cell-actions">
+        <div class="task-detail-actions">
+          ${renderTaskBoardDetailButton(item, labels)}
+          ${renderTaskBoardDeleteButton(item, labels, "task-delete-button inline")}
+        </div>
+      </td>
+    </tr>`;
+  }
+
   function renderTaskBoardPagination(currentPage, totalPages, totalItems, paginationOptions, language) {
     if (totalPages <= 1) return "";
     const pageSize = Math.max(1, Number.parseInt(String(paginationOptions.pageSize ?? TASK_BOARD_PAGE_SIZE), 10) || TASK_BOARD_PAGE_SIZE);
@@ -132,150 +341,37 @@ function createTaskPageRenderers(deps) {
       </div>
     </div>`;
     }
+
     const normalizedViewMode = viewMode === "details" ? "details" : "cards";
-    const workingCount = cards.filter((item) => item.statusTone === "working").length;
-    const issueCount = cards.filter((item) => item.statusTone === "issue").length;
-    const completedCount = cards.filter((item) => item.statusTone === "done").length;
-    const queuedCount = cards.filter((item) => item.statusTone === "idle").length;
-    const scheduledCount = cards.filter((item) => item.statusTone === "scheduled").length;
-    const hasTaskCards = cards.some((item) => item.cardKind === "task");
+    const labels = buildTaskBoardLabels(language);
+    const clientItems = orderTaskBoardItems(cards.map((card) => createTaskBoardClientItem(card, language, labels)), storedOrder);
+    const workingCount = clientItems.filter((item) => item.statusTone === "working").length;
+    const issueCount = clientItems.filter((item) => item.statusTone === "issue").length;
+    const completedCount = clientItems.filter((item) => item.statusTone === "done").length;
+    const queuedCount = clientItems.filter((item) => item.statusTone === "idle").length;
+    const scheduledCount = clientItems.filter((item) => item.statusTone === "scheduled").length;
+    const hasTaskCards = clientItems.some((item) => item.cardKind === "task");
     const pageSize = Math.max(1, Number.parseInt(String(paginationOptions.pageSize ?? TASK_BOARD_PAGE_SIZE), 10) || TASK_BOARD_PAGE_SIZE);
-    const totalPages = Math.max(1, Math.ceil(cards.length / pageSize));
+    const totalPages = Math.max(1, Math.ceil(clientItems.length / pageSize));
     const currentPage = clampPaginationPage(paginationOptions.currentPage, totalPages);
-    const manualOrder = storedOrder.length > 0 ? storedOrder : cards.map((item) => item.cardId);
+    const pageStartIndex = (currentPage - 1) * pageSize;
+    const pageItems = clientItems.slice(pageStartIndex, pageStartIndex + pageSize);
+    const paginationHtml = renderTaskBoardPagination(currentPage, totalPages, clientItems.length, {
+      ...paginationOptions,
+      currentPage,
+      pageSize,
+    }, language);
     const boardOrderReadyText = pickUiText(language, "Task and schedule order is ready.", "\u4EFB\u52A1\u4E0E\u6392\u7A0B\u987A\u5E8F\u5DF2\u5C31\u7EEA\u3002");
     const boardHintText = pickUiText(language, "Drag cards to reorder your task and schedule focus. The order is saved in UI preferences.", "\u62D6\u52A8\u5361\u7247\u5373\u53EF\u91CD\u6392\u4EFB\u52A1\u4E0E\u6392\u7A0B\u7684\u5173\u6CE8\u987A\u5E8F\uFF0C\u6392\u5E8F\u4F1A\u4FDD\u5B58\u5230\u754C\u9762\u504F\u597D\u3002");
-    const dragHandleLabel = pickUiText(language, "Drag to reorder", "\u62D6\u62FD\u6392\u5E8F");
     const cardsModeLabel = pickUiText(language, "Card wall", "\u5361\u7247\u6A21\u5F0F");
     const detailsModeLabel = pickUiText(language, "Details list", "\u8BE6\u7EC6\u5217\u8868");
     const viewSwitchLabel = pickUiText(language, "Task board view", "\u4EFB\u52A1\u770B\u677F\u89C6\u56FE");
     const selectedCountLabel = pickUiText(language, "Selected 0 tasks.", "\u5DF2\u9009 0 \u4E2A\u4EFB\u52A1\u3002");
     const bulkDeleteLabel = pickUiText(language, "Delete selected", "\u6279\u91CF\u5220\u9664");
-    const selectLabel = pickUiText(language, "Select task", "\u9009\u62E9\u4EFB\u52A1");
-    const deleteLabel = pickUiText(language, "Delete", "\u5220\u9664");
-    const typeLabel = pickUiText(language, "Type", "\u7C7B\u578B");
-    const detailsTypeTask = pickUiText(language, "Task", "\u4EFB\u52A1");
-    const detailsTypeTimedJob = pickUiText(language, "Timed job", "\u5B9A\u65F6\u4EFB\u52A1");
-    const titleLabel = pickUiText(language, "Title", "\u6807\u9898");
-    const statusLabel = pickUiText(language, "Status", "\u72B6\u6001");
-    const focusLabel = pickUiText(language, "Focus", "\u5173\u6CE8\u70B9");
-    const recentLabel = pickUiText(language, "Recent signal", "\u6700\u8FD1\u4FE1\u53F7");
-    const updatedLabel = pickUiText(language, "Updated", "\u66F4\u65B0");
-    const actionsLabel = pickUiText(language, "Actions", "\u64CD\u4F5C");
-    const paginationHtml = renderTaskBoardPagination(currentPage, totalPages, cards.length, {
-      ...paginationOptions,
-      currentPage,
-      pageSize,
-    }, language);
-    const selectionKeyForCard = (card) => `${card.projectId || ""}::${card.taskId}`;
-    const renderSelectionControl = (card, variant = "card") => {
-      if (card.cardKind !== "task") {
-        return variant === "table"
-          ? `<span class="task-list-static">${escapeHtml(detailsTypeTimedJob)}</span>`
-          : "";
-      }
-      const sizeClass = variant === "table" ? "task-select-control table" : "task-select-control";
-      return `<label class="${sizeClass}">
-        <input type="checkbox" data-task-select data-task-id="${escapeHtml(card.taskId)}" data-task-project-id="${escapeHtml(card.projectId)}" data-task-select-key="${escapeHtml(selectionKeyForCard(card))}" aria-label="${escapeHtml(selectLabel)}" />
-        <span>${escapeHtml(variant === "table" ? selectLabel : pickUiText(language, "Select", "\u9009\u62E9"))}</span>
-      </label>`;
-    };
-    const renderDeleteButton = (card, className = "task-delete-button") => {
-      if (card.cardKind !== "task") return "";
-      return `<button class="btn ${escapeHtml(className)}" type="button" data-task-delete data-task-id="${escapeHtml(card.taskId)}" data-task-project-id="${escapeHtml(card.projectId)}">${escapeHtml(deleteLabel)}</button>`;
-    };
-    const renderDetailButton = (card) => {
-      if (card.cardKind !== "task") {
-        return `<a class="btn" href="${escapeHtml(card.detailHref)}">${escapeHtml(pickUiText(language, "Open detail", "\u67E5\u770B\u8BE6\u60C5"))}</a>`;
-      }
-      const linkedRoomId =
-        typeof card.linkedRoomId === "string"
-          ? card.linkedRoomId.trim()
-          : "";
-      if (linkedRoomId) {
-        return `<button class="btn" type="button" data-task-open-room="${escapeHtml(linkedRoomId)}">${escapeHtml(pickUiText(language, "Open detail", "\u67E5\u770B\u8BE6\u60C5"))}</button>`;
-      }
-      return `<button class="btn" type="button" data-task-open-room-missing>${escapeHtml(pickUiText(language, "Open detail", "\u67E5\u770B\u8BE6\u60C5"))}</button>`;
-    };
-    const renderCardArticle = (card, index) => {
-      const displayTitle = truncateTaskBoardTitle(card.title);
-      const priorityPanelClass = card.cardKind === "timed_job" ? "task-priority-panel compact" : "task-priority-panel";
-      const primaryBadge = card.cardKind === "timed_job" ? badge("ok", pickUiText(language, "Timed job", "\u5B9A\u65F6\u4EFB\u52A1")) : badge(card.statusTone === "issue" ? "blocked" : card.statusTone === "working" ? "warn" : card.statusTone === "done" || card.taskStatus === "done" ? "done" : "enabled", card.statusLabel);
-      const secondaryBadge = card.cardKind === "timed_job" ? badge(card.boardStatusLabel === pickUiText(language, "Disabled", "\u5DF2\u505C\u7528") ? "blocked" : "ok", card.boardStatusLabel) : badge(card.taskStatus === "done" ? "done" : card.taskStatus === "in_progress" ? "in_progress" : card.taskStatus === "blocked" ? "blocked" : "enabled", card.boardStatusLabel);
-      const tertiaryBadge = card.cardKind === "timed_job" ? badge("enabled", pickUiText(language, "Auto", "\u81EA\u52A8")) : badge("ok", card.priorityLabel);
-      const topLabel = card.cardKind === "timed_job" ? pickUiText(language, "Auto run", "\u81EA\u52A8\u6267\u884C") : pickUiText(language, "Time", "\u65F6\u95F4");
-      const rowOneLabel = card.cardKind === "timed_job" ? pickUiText(language, "Purpose", "\u7528\u9014") : pickUiText(language, "Current state", "\u5F53\u524D\u72B6\u6001");
-      const rowTwoLabel = card.cardKind === "timed_job" ? pickUiText(language, "Runtime", "\u8FD0\u884C\u72B6\u6001") : recentLabel;
-      return `<article class="task-brief-card" draggable="true" data-task-card data-task-kind="${escapeHtml(card.cardKind)}" data-task-id="${escapeHtml(card.cardId)}" data-task-project-id="${escapeHtml(card.projectId || "")}" data-task-board-item-index="${index}">
-          <span class="task-status-dot ${escapeHtml(card.statusTone)}" title="${escapeHtml(card.statusDotLabel)}" aria-hidden="true"></span>
-          <div class="task-drag-handle" title="${escapeHtml(dragHandleLabel)}" aria-hidden="true"><span></span><span></span><span></span></div>
-          <div class="task-brief-head">
-            <div class="${priorityPanelClass}">
-              <span>${escapeHtml(topLabel)}</span>
-               <strong>${escapeHtml(card.scheduleLabel)}</strong>
-               <small>${escapeHtml(card.dueLabel)}</small>
-             </div>
-             <div class="task-brief-identity">
-              <h3 title="${escapeHtml(card.title)}">${escapeHtml(displayTitle)}</h3>
-               <div class="task-brief-pills">
-                 ${primaryBadge}
-                 ${secondaryBadge}
-                 ${tertiaryBadge}
-              </div>
-              <div class="task-role">${escapeHtml(card.projectTitle)} \xB7 ${escapeHtml(card.ownerLabel)}</div>
-            </div>
-          </div>
-          <dl class="task-brief-list">
-            <div class="task-brief-row"><dt>${escapeHtml(rowOneLabel)}</dt><dd class="task-brief-value clamp-2">${escapeHtml(card.summary)}</dd></div>
-            <div class="task-brief-row"><dt>${escapeHtml(rowTwoLabel)}</dt><dd class="task-brief-value clamp-2">${escapeHtml(card.recentSignal)}</dd></div>
-            <div class="task-brief-row"><dt>${escapeHtml(pickUiText(language, "Next step", "\u4E0B\u4E00\u6B65"))}</dt><dd class="task-brief-value clamp-2">${escapeHtml(card.nextStep)}</dd></div>
-          </dl>
-          <div class="task-brief-actions">
-            <div class="task-brief-actions-meta">
-              ${renderSelectionControl(card)}
-              <div class="meta"><code>${escapeHtml(card.taskId)}</code> \xB7 ${escapeHtml(card.updatedLabel)}</div>
-            </div>
-            <div class="task-brief-action-buttons">
-              ${renderDetailButton(card)}
-              ${renderDeleteButton(card)}
-            </div>
-          </div>
-        </article>`;
-    };
-    const renderListRows = (items) =>
-      items
-        .map((card, index) => {
-          const displayTitle = truncateTaskBoardTitle(card.title);
-          const typeValue = card.cardKind === "timed_job" ? detailsTypeTimedJob : detailsTypeTask;
-          const focusValue = card.cardKind === "timed_job" ? card.scheduleLabel : card.priorityLabel;
-          return `<tr class="task-detail-row" data-task-list-row data-task-kind="${escapeHtml(card.cardKind)}" data-task-id="${escapeHtml(card.cardId)}" data-task-project-id="${escapeHtml(card.projectId || "")}" data-task-board-item-index="${index}">
-            <td class="task-detail-cell task-detail-cell-select">${renderSelectionControl(card, "table")}</td>
-            <td class="task-detail-cell task-detail-cell-type"><span class="task-list-kind ${escapeHtml(card.cardKind)}">${escapeHtml(typeValue)}</span></td>
-            <td class="task-detail-cell task-detail-cell-title">
-              <div class="task-detail-title" title="${escapeHtml(card.title)}">${escapeHtml(displayTitle)}</div>
-              <div class="meta task-detail-submeta"><code>${escapeHtml(card.taskId)}</code></div>
-            </td>
-            <td class="task-detail-cell task-detail-cell-status">
-              <div class="task-detail-status">${badge(card.cardKind === "timed_job" ? "ok" : card.boardStatusTone ?? "enabled", card.boardStatusLabel)}</div>
-              <div class="meta task-detail-submeta" title="${escapeHtml(card.statusLabel)}">${escapeHtml(card.statusLabel)}</div>
-            </td>
-            <td class="task-detail-cell task-detail-cell-focus">
-              <div class="task-detail-primary-line" title="${escapeHtml(focusValue)}">${escapeHtml(focusValue)}</div>
-              <div class="meta task-detail-submeta" title="${escapeHtml(card.dueLabel)}">${escapeHtml(card.dueLabel)}</div>
-            </td>
-            <td class="task-detail-cell task-detail-cell-recent"><div class="task-detail-recent" title="${escapeHtml(card.recentSignal)}">${escapeHtml(card.recentSignal)}</div></td>
-            <td class="task-detail-cell task-detail-cell-updated" title="${escapeHtml(card.updatedLabel)}">${escapeHtml(card.updatedLabel)}</td>
-            <td class="task-detail-cell task-detail-cell-actions">
-              <div class="task-detail-actions">
-                ${renderDetailButton(card)}
-                ${renderDeleteButton(card, "task-delete-button inline")}
-              </div>
-            </td>
-          </tr>`;
-        })
-        .join("");
+
     return `
-    <div class="task-brief-board" data-task-board-root data-language="${escapeHtml(language)}" data-token-required="0" data-task-order="${escapeHtml(JSON.stringify(manualOrder))}" data-task-view-mode="${escapeHtml(normalizedViewMode)}" data-task-board-page-size="${pageSize}" data-task-board-current-page="${currentPage}">
+    <div class="task-brief-board" data-task-board-root data-language="${escapeHtml(language)}" data-token-required="0" data-task-order="${escapeHtml(JSON.stringify(clientItems.map((item) => item.cardId)))}" data-task-view-mode="${escapeHtml(normalizedViewMode)}" data-task-board-page-size="${pageSize}" data-task-board-current-page="${currentPage}">
+      <script type="application/json" data-task-board-items>${serializeJsonForHtmlScript(clientItems)}</script>
       <div class="task-brief-toolbar">
         <div class="task-brief-copy">
           <div class="task-brief-legend">
@@ -302,7 +398,7 @@ function createTaskPageRenderers(deps) {
         </div>
       </div>
       <div class="task-board-view task-board-view-cards" data-task-board-view-panel="cards"${normalizedViewMode === "cards" ? "" : " hidden"}>
-        <div class="task-brief-grid" data-task-card-grid>${cards.map((card, index) => renderCardArticle(card, index)).join("")}</div>
+        <div class="task-brief-grid" data-task-card-grid>${pageItems.map((item, index) => renderTaskBoardCardArticle(item, labels, pageStartIndex + index)).join("")}</div>
       </div>
       <div class="task-board-view task-board-view-details" data-task-board-view-panel="details"${normalizedViewMode === "details" ? "" : " hidden"}>
         <div class="task-detail-table-shell">
@@ -319,17 +415,17 @@ function createTaskPageRenderers(deps) {
             </colgroup>
             <thead>
               <tr>
-                <th>${escapeHtml(selectLabel)}</th>
-                <th>${escapeHtml(typeLabel)}</th>
-                <th>${escapeHtml(titleLabel)}</th>
-                <th>${escapeHtml(statusLabel)}</th>
-                <th>${escapeHtml(focusLabel)}</th>
-                <th>${escapeHtml(recentLabel)}</th>
-                <th>${escapeHtml(updatedLabel)}</th>
-                <th>${escapeHtml(actionsLabel)}</th>
+                <th>${escapeHtml(labels.selectLabel)}</th>
+                <th>${escapeHtml(labels.typeLabel)}</th>
+                <th>${escapeHtml(labels.titleLabel)}</th>
+                <th>${escapeHtml(labels.statusLabel)}</th>
+                <th>${escapeHtml(labels.focusLabel)}</th>
+                <th>${escapeHtml(labels.recentLabel)}</th>
+                <th>${escapeHtml(labels.updatedLabel)}</th>
+                <th>${escapeHtml(labels.actionsLabel)}</th>
               </tr>
             </thead>
-            <tbody>${renderListRows(cards)}</tbody>
+            <tbody data-task-detail-table-body>${normalizedViewMode === "details" ? pageItems.map((item, index) => renderTaskBoardDetailRow(item, labels, pageStartIndex + index)).join("") : ""}</tbody>
           </table>
         </div>
       </div>

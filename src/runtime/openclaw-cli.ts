@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, delimiter, extname, join } from "node:path";
 import { promisify } from "node:util";
 
@@ -148,8 +149,8 @@ async function resolveOpenClawCliInvocationUncached(
     };
   }
 
-  const pathEntries = splitPathEnv(options.pathEnv);
-  for (const dirPath of pathEntries) {
+  const candidateDirs = collectWindowsCliCandidateDirs(options.pathEnv);
+  for (const dirPath of candidateDirs) {
     const executablePath = join(dirPath, "openclaw.exe");
     if (await fileExists(executablePath)) {
       return {
@@ -240,6 +241,32 @@ function splitPathEnv(pathEnv: string): string[] {
     .split(delimiter)
     .map((entry) => entry.trim())
     .filter((entry) => entry !== "");
+}
+
+function collectWindowsCliCandidateDirs(pathEnv: string): string[] {
+  const homeDir = normalizeNonEmpty(homedir());
+  const appDataDir = normalizeNonEmpty(process.env.APPDATA);
+  const userProfileDir = normalizeNonEmpty(process.env.USERPROFILE);
+  const npmPrefixDir = normalizeNonEmpty(process.env.npm_config_prefix);
+
+  const fallbackDirs = [
+    npmPrefixDir,
+    appDataDir ? join(appDataDir, "npm") : undefined,
+    userProfileDir ? join(userProfileDir, "AppData", "Roaming", "npm") : undefined,
+    homeDir ? join(homeDir, "AppData", "Roaming", "npm") : undefined,
+  ];
+
+  const seen = new Set<string>();
+  const uniqueDirs: string[] = [];
+  for (const dirPath of [...splitPathEnv(pathEnv), ...fallbackDirs]) {
+    const normalized = normalizeNonEmpty(dirPath);
+    if (!normalized) continue;
+    const key = process.platform === "win32" ? normalized.toLowerCase() : normalized;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniqueDirs.push(normalized);
+  }
+  return uniqueDirs;
 }
 
 function normalizeNonEmpty(value: string | undefined): string | undefined {

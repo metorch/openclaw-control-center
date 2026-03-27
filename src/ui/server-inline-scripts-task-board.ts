@@ -1,13 +1,17 @@
 // @ts-nocheck
 
+const { createTaskBoardCompactScriptSource } = require("./server-inline-scripts-task-board-compact");
+
 function renderTaskBoardScript() {
     return `<script>
 (() => {
+  ${createTaskBoardCompactScriptSource()}
   const roots = Array.from(document.querySelectorAll('[data-task-board-root]'));
 
   roots.forEach((root) => {
     const grid = root.querySelector('[data-task-card-grid]');
     if (!(grid instanceof HTMLElement)) return;
+    if (mountCompactTaskBoard(root, grid)) return;
 
     const language = (root.dataset.language || 'zh').trim().toLowerCase() === 'en' ? 'en' : 'zh';
     const statusNode = root.querySelector('[data-task-board-status]');
@@ -15,6 +19,7 @@ function renderTaskBoardScript() {
     const bulkDeleteButton = root.querySelector('[data-task-board-bulk-delete]');
     const cardsPanel = root.querySelector('[data-task-board-view-panel="cards"]');
     const detailsPanel = root.querySelector('[data-task-board-view-panel="details"]');
+    const detailsTableBody = root.querySelector('[data-task-detail-table-body]');
     const pageSummaryNode = root.querySelector('[data-task-board-page-summary]');
     const pageNav = root.querySelector('[data-task-board-pagination]');
     const viewButtons = Array.from(root.querySelectorAll('[data-task-view-mode-button]')).filter((button) => button instanceof HTMLButtonElement);
@@ -52,8 +57,20 @@ function renderTaskBoardScript() {
       pageSummary: language === 'en'
         ? 'Showing {start}-{end} of {total}'
         : '\u5F53\u524D\u663E\u793A {start}-{end} / {total}',
+      select: language === 'en' ? 'Select task' : '\u9009\u62E9\u4EFB\u52A1',
+      openDetail: language === 'en' ? 'Open detail' : '\u67E5\u770B\u8BE6\u60C5',
+      deleteTask: language === 'en' ? 'Delete' : '\u5220\u9664',
+      taskType: language === 'en' ? 'Task' : '\u4EFB\u52A1',
+      timedJobType: language === 'en' ? 'Timed job' : '\u5B9A\u65F6\u4EFB\u52A1',
     };
 
+    const escapeHtml = (value) =>
+      String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     const normalizeViewMode = (value) => String(value || '').trim().toLowerCase() === 'details' ? 'details' : 'cards';
     const getMutationState = () =>
       typeof window.__openclawGetMutationAuthState === 'function'
@@ -99,6 +116,56 @@ function renderTaskBoardScript() {
     };
     const listCards = () => Array.from(grid.querySelectorAll('[data-task-card]')).filter((card) => card instanceof HTMLElement);
     const listRows = () => Array.from(root.querySelectorAll('[data-task-list-row]')).filter((row) => row instanceof HTMLElement);
+    const ensureDetailRows = () => {
+      if (!(detailsTableBody instanceof HTMLElement) || detailsTableBody.dataset.rowsReady === '1') return;
+      const rowsHtml = listCards()
+        .map((card, index) => {
+          const kind = (card.dataset.taskKind || '').trim() === 'timed_job' ? 'timed_job' : 'task';
+          const taskRecordId = (card.dataset.taskRecordId || '').trim();
+          const projectId = (card.dataset.taskProjectId || '').trim();
+          const selectionKey = (card.dataset.taskSelectionKey || '').trim() || (projectId + '::' + taskRecordId);
+          const typeLabel = kind === 'timed_job' ? l.timedJobType : l.taskType;
+          const title = card.dataset.taskTitle || '';
+          const displayTitle = card.dataset.taskDisplayTitle || title;
+          const boardStatusTone = (card.dataset.taskBoardStatusTone || 'enabled').trim() || 'enabled';
+          const boardStatusLabel = card.dataset.taskBoardStatusLabel || '';
+          const statusLabel = card.dataset.taskStatusLabel || '';
+          const focusValue = card.dataset.taskFocusValue || '';
+          const dueLabel = card.dataset.taskDueLabel || '';
+          const recentSignal = card.dataset.taskRecentSignal || '';
+          const updatedLabel = card.dataset.taskUpdatedLabel || '';
+          const linkedRoomId = (card.dataset.taskLinkedRoomId || '').trim();
+          const detailHref = card.dataset.taskDetailHref || '';
+          const selectionCell = kind === 'task'
+            ? '<label class="task-select-control table"><input type="checkbox" data-task-select data-task-id="' + escapeHtml(taskRecordId) + '" data-task-project-id="' + escapeHtml(projectId) + '" data-task-select-key="' + escapeHtml(selectionKey) + '" aria-label="' + escapeHtml(l.select) + '" /><span>' + escapeHtml(l.select) + '</span></label>'
+            : '<span class="task-list-static">' + escapeHtml(l.timedJobType) + '</span>';
+          const detailButton = kind !== 'task'
+            ? '<a class="btn" href="' + escapeHtml(detailHref) + '">' + escapeHtml(l.openDetail) + '</a>'
+            : linkedRoomId
+              ? '<button class="btn" type="button" data-task-open-room="' + escapeHtml(linkedRoomId) + '">' + escapeHtml(l.openDetail) + '</button>'
+              : '<button class="btn" type="button" data-task-open-room-missing>' + escapeHtml(l.openDetail) + '</button>';
+          const deleteButton = kind === 'task'
+            ? '<button class="btn task-delete-button inline" type="button" data-task-delete data-task-id="' + escapeHtml(taskRecordId) + '" data-task-project-id="' + escapeHtml(projectId) + '">' + escapeHtml(l.deleteTask) + '</button>'
+            : '';
+          return [
+            '<tr class="task-detail-row" data-task-list-row data-task-kind="' + escapeHtml(kind) + '" data-task-id="' + escapeHtml((card.dataset.taskId || '').trim()) + '" data-task-project-id="' + escapeHtml(projectId) + '" data-task-board-item-index="' + index + '">',
+            '<td class="task-detail-cell task-detail-cell-select">' + selectionCell + '</td>',
+            '<td class="task-detail-cell task-detail-cell-type"><span class="task-list-kind ' + escapeHtml(kind) + '">' + escapeHtml(typeLabel) + '</span></td>',
+            '<td class="task-detail-cell task-detail-cell-title"><div class="task-detail-title" title="' + escapeHtml(title) + '">' + escapeHtml(displayTitle) + '</div><div class="meta task-detail-submeta"><code>' + escapeHtml(taskRecordId) + '</code></div></td>',
+            '<td class="task-detail-cell task-detail-cell-status"><div class="task-detail-status"><span class="badge ' + escapeHtml(boardStatusTone) + '">' + escapeHtml(boardStatusLabel) + '</span></div><div class="meta task-detail-submeta" title="' + escapeHtml(statusLabel) + '">' + escapeHtml(statusLabel) + '</div></td>',
+            '<td class="task-detail-cell task-detail-cell-focus"><div class="task-detail-primary-line" title="' + escapeHtml(focusValue) + '">' + escapeHtml(focusValue) + '</div><div class="meta task-detail-submeta" title="' + escapeHtml(dueLabel) + '">' + escapeHtml(dueLabel) + '</div></td>',
+            '<td class="task-detail-cell task-detail-cell-recent"><div class="task-detail-recent" title="' + escapeHtml(recentSignal) + '">' + escapeHtml(recentSignal) + '</div></td>',
+            '<td class="task-detail-cell task-detail-cell-updated" title="' + escapeHtml(updatedLabel) + '">' + escapeHtml(updatedLabel) + '</td>',
+            '<td class="task-detail-cell task-detail-cell-actions"><div class="task-detail-actions">' + detailButton + deleteButton + '</div></td>',
+            '</tr>',
+          ].join('');
+        })
+        .join('');
+      detailsTableBody.innerHTML = rowsHtml;
+      detailsTableBody.dataset.rowsReady = '1';
+      registerSelectableTasks();
+      syncSelectionUi();
+    };
     const taskBoardPageButtons = () =>
       Array.from(root.querySelectorAll('[data-task-board-page-button]')).filter((button) => button instanceof HTMLButtonElement);
     const parsePositiveInt = (value, fallbackValue) => {
@@ -113,6 +180,9 @@ function renderTaskBoardScript() {
       return Math.min(taskBoardTotalPages, Math.max(1, parsed));
     };
     const applyTaskBoardPage = (value) => {
+      if (currentViewMode === 'details') {
+        ensureDetailRows();
+      }
       currentTaskBoardPage = clampTaskBoardPage(value);
       root.dataset.taskBoardCurrentPage = String(currentTaskBoardPage);
       const startOffset = (currentTaskBoardPage - 1) * taskBoardPageSize;
@@ -220,6 +290,9 @@ function renderTaskBoardScript() {
       });
     };
     const syncViewModeUi = () => {
+      if (currentViewMode === 'details') {
+        ensureDetailRows();
+      }
       root.dataset.taskViewMode = currentViewMode;
       if (cardsPanel instanceof HTMLElement) {
         cardsPanel.hidden = currentViewMode !== 'cards';
