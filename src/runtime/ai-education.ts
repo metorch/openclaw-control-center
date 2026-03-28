@@ -22,6 +22,27 @@ export const AI_EDUCATION_LLM_PROVIDER_PRESETS = [
   "grok",
   "custom_openai_compatible",
 ] as const;
+export const AI_EDUCATION_TTS_PROVIDER_PRESETS = [
+  "openai-tts",
+  "azure-tts",
+  "glm-tts",
+  "qwen-tts",
+  "doubao-tts",
+  "elevenlabs-tts",
+] as const;
+export const AI_EDUCATION_IMAGE_PROVIDER_PRESETS = [
+  "seedream",
+  "qwen-image",
+  "nano-banana",
+  "grok-image",
+] as const;
+export const AI_EDUCATION_VIDEO_PROVIDER_PRESETS = [
+  "seedance",
+  "kling",
+  "veo",
+  "sora",
+  "grok-video",
+] as const;
 
 const EMPTY_CAPABILITIES = {
   webSearch: false,
@@ -29,16 +50,24 @@ const EMPTY_CAPABILITIES = {
   videoGeneration: false,
   tts: false,
 } as const;
+const AI_EDUCATION_LOCAL_MINERU_CANDIDATE_URLS = [
+  "http://127.0.0.1:8888",
+  "http://127.0.0.1:7860",
+  "http://127.0.0.1:8000",
+] as const;
 const AI_EDUCATION_BACKGROUND_REFRESH_INTERVAL_MS = 15_000;
 const AI_EDUCATION_BACKGROUND_HEALTH_MAX_AGE_MS = 60_000;
 
 export type AiEducationMode = "hosted" | "self_hosted";
 export type AiEducationHealthStatus = "unknown" | "ok" | "error";
 export type AiEducationJobStatus = "idle" | "queued" | "running" | "succeeded" | "failed";
-export type AiEducationPdfProvider = "unpdf" | "mineru";
+export type AiEducationPdfProvider = "unpdf" | "mineru" | "opendataloader";
 export type AiEducationPdfVerificationStatus = "unknown" | "ok" | "error" | "skipped";
 export type AiEducationConfigSyncStatus = "idle" | "pending_restart" | "synced" | "error";
 export type AiEducationLlmProviderPreset = (typeof AI_EDUCATION_LLM_PROVIDER_PRESETS)[number];
+export type AiEducationTtsProviderPreset = (typeof AI_EDUCATION_TTS_PROVIDER_PRESETS)[number];
+export type AiEducationImageProviderPreset = (typeof AI_EDUCATION_IMAGE_PROVIDER_PRESETS)[number];
+export type AiEducationVideoProviderPreset = (typeof AI_EDUCATION_VIDEO_PROVIDER_PRESETS)[number];
 
 export interface AiEducationCapabilities {
   webSearch: boolean;
@@ -106,6 +135,18 @@ interface AiEducationStoredConfig {
   llmModel: string;
   llmApiKey: string;
   llmBaseUrl: string;
+  ttsProviderPreset: AiEducationTtsProviderPreset;
+  ttsModel: string;
+  ttsApiKey: string;
+  ttsBaseUrl: string;
+  imageProviderPreset: AiEducationImageProviderPreset;
+  imageModel: string;
+  imageApiKey: string;
+  imageBaseUrl: string;
+  videoProviderPreset: AiEducationVideoProviderPreset;
+  videoModel: string;
+  videoApiKey: string;
+  videoBaseUrl: string;
   pdfProvider: AiEducationPdfProvider;
   pdfApiKey: string;
   pdfBaseUrl: string;
@@ -131,6 +172,18 @@ export interface AiEducationPublicConfig {
   llmModel: string;
   llmApiKeyConfigured: boolean;
   llmBaseUrl: string;
+  ttsProviderPreset: AiEducationTtsProviderPreset;
+  ttsModel: string;
+  ttsApiKeyConfigured: boolean;
+  ttsBaseUrl: string;
+  imageProviderPreset: AiEducationImageProviderPreset;
+  imageModel: string;
+  imageApiKeyConfigured: boolean;
+  imageBaseUrl: string;
+  videoProviderPreset: AiEducationVideoProviderPreset;
+  videoModel: string;
+  videoApiKeyConfigured: boolean;
+  videoBaseUrl: string;
   pdfProvider: AiEducationPdfProvider;
   pdfApiKeyConfigured: boolean;
   pdfBaseUrl: string;
@@ -172,6 +225,21 @@ export interface PatchAiEducationConfigInput {
   llmApiKey?: string;
   clearLlmApiKey?: boolean;
   llmBaseUrl?: string;
+  ttsProviderPreset?: AiEducationTtsProviderPreset;
+  ttsModel?: string;
+  ttsApiKey?: string;
+  clearTtsApiKey?: boolean;
+  ttsBaseUrl?: string;
+  imageProviderPreset?: AiEducationImageProviderPreset;
+  imageModel?: string;
+  imageApiKey?: string;
+  clearImageApiKey?: boolean;
+  imageBaseUrl?: string;
+  videoProviderPreset?: AiEducationVideoProviderPreset;
+  videoModel?: string;
+  videoApiKey?: string;
+  clearVideoApiKey?: boolean;
+  videoBaseUrl?: string;
   pdfProvider?: AiEducationPdfProvider;
   pdfApiKey?: string;
   clearPdfApiKey?: boolean;
@@ -248,6 +316,24 @@ export async function patchAiEducationConfig(input: PatchAiEducationConfigInput)
   } else if (typeof input.llmApiKey === "string" && input.llmApiKey.trim()) {
     nextLlmApiKey = input.llmApiKey.trim();
   }
+  let nextTtsApiKey = currentConfig.ttsApiKey;
+  if (input.clearTtsApiKey === true) {
+    nextTtsApiKey = "";
+  } else if (typeof input.ttsApiKey === "string" && input.ttsApiKey.trim()) {
+    nextTtsApiKey = input.ttsApiKey.trim();
+  }
+  let nextImageApiKey = currentConfig.imageApiKey;
+  if (input.clearImageApiKey === true) {
+    nextImageApiKey = "";
+  } else if (typeof input.imageApiKey === "string" && input.imageApiKey.trim()) {
+    nextImageApiKey = input.imageApiKey.trim();
+  }
+  let nextVideoApiKey = currentConfig.videoApiKey;
+  if (input.clearVideoApiKey === true) {
+    nextVideoApiKey = "";
+  } else if (typeof input.videoApiKey === "string" && input.videoApiKey.trim()) {
+    nextVideoApiKey = input.videoApiKey.trim();
+  }
   let nextPdfApiKey = currentConfig.pdfApiKey;
   if (input.clearPdfApiKey === true) {
     nextPdfApiKey = "";
@@ -264,6 +350,18 @@ export async function patchAiEducationConfig(input: PatchAiEducationConfigInput)
     llmModel: normalizeInlineValue(input.llmModel ?? currentConfig.llmModel),
     llmApiKey: nextLlmApiKey,
     llmBaseUrl: normalizeOptionalHttpUrl(input.llmBaseUrl ?? currentConfig.llmBaseUrl),
+    ttsProviderPreset: normalizeTtsProviderPreset(input.ttsProviderPreset ?? currentConfig.ttsProviderPreset),
+    ttsModel: normalizeInlineValue(input.ttsModel ?? currentConfig.ttsModel),
+    ttsApiKey: nextTtsApiKey,
+    ttsBaseUrl: normalizeOptionalHttpUrl(input.ttsBaseUrl ?? currentConfig.ttsBaseUrl),
+    imageProviderPreset: normalizeImageProviderPreset(input.imageProviderPreset ?? currentConfig.imageProviderPreset),
+    imageModel: normalizeInlineValue(input.imageModel ?? currentConfig.imageModel),
+    imageApiKey: nextImageApiKey,
+    imageBaseUrl: normalizeOptionalHttpUrl(input.imageBaseUrl ?? currentConfig.imageBaseUrl),
+    videoProviderPreset: normalizeVideoProviderPreset(input.videoProviderPreset ?? currentConfig.videoProviderPreset),
+    videoModel: normalizeInlineValue(input.videoModel ?? currentConfig.videoModel),
+    videoApiKey: nextVideoApiKey,
+    videoBaseUrl: normalizeOptionalHttpUrl(input.videoBaseUrl ?? currentConfig.videoBaseUrl),
     pdfProvider: normalizePdfProvider(input.pdfProvider ?? currentConfig.pdfProvider),
     pdfApiKey: nextPdfApiKey,
     pdfBaseUrl: normalizeOptionalHttpUrl(input.pdfBaseUrl ?? currentConfig.pdfBaseUrl),
@@ -279,6 +377,18 @@ export async function patchAiEducationConfig(input: PatchAiEducationConfigInput)
     nextConfig.llmModel !== currentConfig.llmModel ||
     nextConfig.llmApiKey !== currentConfig.llmApiKey ||
     nextConfig.llmBaseUrl !== currentConfig.llmBaseUrl ||
+    nextConfig.ttsProviderPreset !== currentConfig.ttsProviderPreset ||
+    nextConfig.ttsModel !== currentConfig.ttsModel ||
+    nextConfig.ttsApiKey !== currentConfig.ttsApiKey ||
+    nextConfig.ttsBaseUrl !== currentConfig.ttsBaseUrl ||
+    nextConfig.imageProviderPreset !== currentConfig.imageProviderPreset ||
+    nextConfig.imageModel !== currentConfig.imageModel ||
+    nextConfig.imageApiKey !== currentConfig.imageApiKey ||
+    nextConfig.imageBaseUrl !== currentConfig.imageBaseUrl ||
+    nextConfig.videoProviderPreset !== currentConfig.videoProviderPreset ||
+    nextConfig.videoModel !== currentConfig.videoModel ||
+    nextConfig.videoApiKey !== currentConfig.videoApiKey ||
+    nextConfig.videoBaseUrl !== currentConfig.videoBaseUrl ||
     nextConfig.pdfProvider !== currentConfig.pdfProvider ||
     nextConfig.pdfApiKey !== currentConfig.pdfApiKey ||
     nextConfig.pdfBaseUrl !== currentConfig.pdfBaseUrl;
@@ -374,7 +484,7 @@ export async function applyAiEducationOpenMaicConfig(): Promise<ApplyAiEducation
       throw error;
     });
     const existingRoot = normalizeYamlRoot(raw);
-    const nextRoot = mergeOpenMaicServerProvidersConfig(existingRoot, desired);
+    const nextRoot = mergeOpenMaicServerProvidersConfig(existingRoot, desired.desired);
     await mkdir(dirname(validation.configPath), { recursive: true });
     await writeFile(validation.configPath, `${YAML.stringify(nextRoot)}\n`, "utf8");
 
@@ -536,6 +646,18 @@ function defaultStoredAiEducationState(now = new Date().toISOString()): AiEducat
       llmModel: "",
       llmApiKey: "",
       llmBaseUrl: "",
+      ttsProviderPreset: "openai-tts",
+      ttsModel: "",
+      ttsApiKey: "",
+      ttsBaseUrl: "",
+      imageProviderPreset: "nano-banana",
+      imageModel: "",
+      imageApiKey: "",
+      imageBaseUrl: "",
+      videoProviderPreset: "veo",
+      videoModel: "",
+      videoApiKey: "",
+      videoBaseUrl: "",
       pdfProvider: "unpdf",
       pdfApiKey: "",
       pdfBaseUrl: "",
@@ -686,6 +808,28 @@ function normalizeStoredAiEducationState(input: unknown): { state: AiEducationSt
         llmModel: normalizeInlineValue(asString(configRoot?.llmModel) ?? defaults.config.llmModel),
         llmApiKey: asString(configRoot?.llmApiKey) ?? "",
         llmBaseUrl: normalizeOptionalHttpUrl(asString(configRoot?.llmBaseUrl) ?? defaults.config.llmBaseUrl),
+        ttsProviderPreset: normalizeTtsProviderPreset(
+          asString(configRoot?.ttsProviderPreset) ?? defaults.config.ttsProviderPreset,
+        ),
+        ttsModel: normalizeInlineValue(asString(configRoot?.ttsModel) ?? defaults.config.ttsModel),
+        ttsApiKey: asString(configRoot?.ttsApiKey) ?? "",
+        ttsBaseUrl: normalizeOptionalHttpUrl(asString(configRoot?.ttsBaseUrl) ?? defaults.config.ttsBaseUrl),
+        imageProviderPreset: normalizeImageProviderPreset(
+          asString(configRoot?.imageProviderPreset) ?? defaults.config.imageProviderPreset,
+        ),
+        imageModel: normalizeInlineValue(asString(configRoot?.imageModel) ?? defaults.config.imageModel),
+        imageApiKey: asString(configRoot?.imageApiKey) ?? "",
+        imageBaseUrl: normalizeOptionalHttpUrl(
+          asString(configRoot?.imageBaseUrl) ?? defaults.config.imageBaseUrl,
+        ),
+        videoProviderPreset: normalizeVideoProviderPreset(
+          asString(configRoot?.videoProviderPreset) ?? defaults.config.videoProviderPreset,
+        ),
+        videoModel: normalizeInlineValue(asString(configRoot?.videoModel) ?? defaults.config.videoModel),
+        videoApiKey: asString(configRoot?.videoApiKey) ?? "",
+        videoBaseUrl: normalizeOptionalHttpUrl(
+          asString(configRoot?.videoBaseUrl) ?? defaults.config.videoBaseUrl,
+        ),
         pdfProvider: normalizePdfProvider(asString(configRoot?.pdfProvider) ?? defaults.config.pdfProvider),
         pdfApiKey: asString(configRoot?.pdfApiKey) ?? "",
         pdfBaseUrl: normalizeOptionalHttpUrl(asString(configRoot?.pdfBaseUrl) ?? defaults.config.pdfBaseUrl),
@@ -729,6 +873,18 @@ function toPublicAiEducationState(input: AiEducationStoredState): AiEducationPub
       llmModel: input.config.llmModel,
       llmApiKeyConfigured: Boolean(input.config.llmApiKey),
       llmBaseUrl: input.config.llmBaseUrl,
+      ttsProviderPreset: input.config.ttsProviderPreset,
+      ttsModel: input.config.ttsModel,
+      ttsApiKeyConfigured: Boolean(input.config.ttsApiKey),
+      ttsBaseUrl: input.config.ttsBaseUrl,
+      imageProviderPreset: input.config.imageProviderPreset,
+      imageModel: input.config.imageModel,
+      imageApiKeyConfigured: Boolean(input.config.imageApiKey),
+      imageBaseUrl: input.config.imageBaseUrl,
+      videoProviderPreset: input.config.videoProviderPreset,
+      videoModel: input.config.videoModel,
+      videoApiKeyConfigured: Boolean(input.config.videoApiKey),
+      videoBaseUrl: input.config.videoBaseUrl,
       pdfProvider: input.config.pdfProvider,
       pdfApiKeyConfigured: Boolean(input.config.pdfApiKey),
       pdfBaseUrl: input.config.pdfBaseUrl,
@@ -777,10 +933,21 @@ async function updateAiEducationHealth(input: AiEducationStoredState): Promise<A
       defaultObservedServerProviders(now),
     );
     const pdfProviderVerification = await verifyPdfProvider(input, now);
-    const providerCount = Object.keys(observedServerProviders.providers).length;
+    const providerBreakdown = [
+      { label: "LLM", count: Object.keys(observedServerProviders.providers).length },
+      { label: "TTS", count: Object.keys(observedServerProviders.tts).length },
+      { label: "ASR", count: Object.keys(observedServerProviders.asr).length },
+      { label: "PDF", count: Object.keys(observedServerProviders.pdf).length },
+      { label: "Image", count: Object.keys(observedServerProviders.image).length },
+      { label: "Video", count: Object.keys(observedServerProviders.video).length },
+      { label: "Search", count: Object.keys(observedServerProviders.webSearch).length },
+    ].filter((entry) => entry.count > 0);
+    const providerCount = providerBreakdown.reduce((sum, entry) => sum + entry.count, 0);
     const providerMessage =
       providerCount > 0
-        ? `${providerCount} server-configured provider(s) observed.`
+        ? `${providerCount} server-configured provider(s) observed (${providerBreakdown
+            .map((entry) => `${entry.label}:${entry.count}`)
+            .join(", ")}).`
         : "No server-configured providers were returned by /api/server-providers.";
     const pdfMessage = pdfProviderVerification.message || "No PDF provider verification recorded.";
 
@@ -820,12 +987,14 @@ async function updateAiEducationHealth(input: AiEducationStoredState): Promise<A
           ...EMPTY_CAPABILITIES,
         },
         pdfProviderVerification: {
-          status: input.config.pdfProvider === "mineru" ? "error" : "skipped",
+          status: input.config.pdfProvider === "unpdf" ? "skipped" : "error",
           checkedAt: now,
           message:
             input.config.pdfProvider === "mineru"
               ? "MinerU verification was skipped because OpenMAIC is not reachable."
-              : "Using built-in unpdf parser.",
+              : input.config.pdfProvider === "opendataloader"
+                ? "OpenDataLoader verification was skipped because OpenMAIC is not reachable."
+                : "Using built-in unpdf parser.",
         },
       },
     };
@@ -900,18 +1069,21 @@ async function verifyPdfProvider(
   input: AiEducationStoredState,
   now: string,
 ): Promise<AiEducationPdfVerificationState> {
-  if (input.config.pdfProvider !== "mineru") {
+  if (input.config.pdfProvider === "unpdf") {
     return {
       status: "skipped",
       checkedAt: now,
       message: "Using built-in unpdf parser.",
     };
   }
-  if (!input.config.pdfBaseUrl) {
+  const providerId = input.config.pdfProvider;
+  const configuredBaseUrl =
+    providerId === "mineru" ? input.config.pdfBaseUrl || (await detectLocalMineruBaseUrl()) : input.config.pdfBaseUrl;
+  if (providerId === "mineru" && !configuredBaseUrl) {
     return {
       status: "error",
       checkedAt: now,
-      message: "MinerU base URL is required before verification can run.",
+      message: `No local MinerU service was detected on ${AI_EDUCATION_LOCAL_MINERU_CANDIDATE_URLS.join(", ")}. Add a MinerU Base URL or switch back to unpdf.`,
     };
   }
   try {
@@ -921,8 +1093,8 @@ async function verifyPdfProvider(
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        providerId: "mineru",
-        baseUrl: input.config.pdfBaseUrl,
+        providerId,
+        baseUrl: configuredBaseUrl || undefined,
         apiKey: input.config.pdfApiKey || undefined,
       }),
     });
@@ -931,15 +1103,40 @@ async function verifyPdfProvider(
     return {
       status: "ok",
       checkedAt: now,
-      message: asString(data?.message) ?? asString(root.message) ?? "MinerU verification succeeded.",
+      message:
+        asString(data?.message) ??
+        asString(root.message) ??
+        (providerId === "opendataloader"
+          ? "OpenDataLoader verification succeeded."
+          : "MinerU verification succeeded."),
     };
   } catch (error) {
     return {
       status: "error",
       checkedAt: now,
-      message: error instanceof Error ? error.message : "MinerU verification failed.",
+      message:
+        error instanceof Error
+          ? error.message
+          : providerId === "opendataloader"
+            ? "OpenDataLoader verification failed."
+            : "MinerU verification failed.",
     };
   }
+}
+
+async function detectLocalMineruBaseUrl(): Promise<string> {
+  for (const candidate of AI_EDUCATION_LOCAL_MINERU_CANDIDATE_URLS) {
+    try {
+      const response = await fetch(candidate, {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (response.ok || response.status === 404 || response.status === 405) {
+        return candidate;
+      }
+    } catch {}
+  }
+  return "";
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
@@ -1013,9 +1210,22 @@ function normalizeJobError(input: unknown): string | undefined {
   return asString(root?.message) ?? asString(root?.details) ?? asString(root?.error);
 }
 
+interface AiEducationDesiredSectionEntry {
+  providerId: string;
+  entry: Record<string, unknown>;
+}
+
+interface AiEducationDesiredOpenMaicConfig {
+  llm: AiEducationDesiredSectionEntry;
+  tts?: AiEducationDesiredSectionEntry;
+  image?: AiEducationDesiredSectionEntry;
+  video?: AiEducationDesiredSectionEntry;
+  pdf?: AiEducationDesiredSectionEntry;
+}
+
 function buildDesiredOpenMaicConfig(
   config: AiEducationStoredConfig,
-): { ok: true; providerId: string; providerEntry: Record<string, unknown>; pdfEntry?: Record<string, unknown> } | { ok: false; message: string } {
+): { ok: true; desired: AiEducationDesiredOpenMaicConfig } | { ok: false; message: string } {
   if (!config.llmModel) {
     return { ok: false, message: "LLM model is required before writing OpenMAIC provider config." };
   }
@@ -1029,24 +1239,64 @@ function buildDesiredOpenMaicConfig(
     return { ok: false, message: "MinerU mode requires a Base URL before it can be written to OpenMAIC." };
   }
 
-  const providerEntry: Record<string, unknown> = {
+  const llmEntry: Record<string, unknown> = {
     apiKey: config.llmApiKey,
     models: [config.llmModel],
   };
   if (config.llmBaseUrl) {
-    providerEntry.baseUrl = config.llmBaseUrl;
+    llmEntry.baseUrl = config.llmBaseUrl;
   }
+
+  const ttsEntry = buildOptionalProviderSectionEntry({
+    label: "TTS",
+    providerId: config.ttsProviderPreset,
+    model: config.ttsModel,
+    apiKey: config.ttsApiKey,
+    baseUrl: config.ttsBaseUrl,
+  });
+  if (!ttsEntry.ok) {
+    return ttsEntry;
+  }
+
+  const imageEntry = buildOptionalProviderSectionEntry({
+    label: "Image",
+    providerId: config.imageProviderPreset,
+    model: config.imageModel,
+    apiKey: config.imageApiKey,
+    baseUrl: config.imageBaseUrl,
+  });
+  if (!imageEntry.ok) {
+    return imageEntry;
+  }
+
+  const videoEntry = buildOptionalProviderSectionEntry({
+    label: "Video",
+    providerId: config.videoProviderPreset,
+    model: config.videoModel,
+    apiKey: config.videoApiKey,
+    baseUrl: config.videoBaseUrl,
+  });
+  if (!videoEntry.ok) {
+    return videoEntry;
+  }
+
+  const pdfEntry = buildOptionalPdfSectionEntry(config);
+  if (!pdfEntry.ok) {
+    return pdfEntry;
+  }
+
   return {
     ok: true,
-    providerId: resolveManagedProviderId(config.llmProviderPreset),
-    providerEntry,
-    pdfEntry:
-      config.pdfProvider === "mineru"
-        ? {
-            baseUrl: config.pdfBaseUrl,
-            ...(config.pdfApiKey ? { apiKey: config.pdfApiKey } : {}),
-          }
-        : undefined,
+    desired: {
+      llm: {
+        providerId: resolveManagedProviderId(config.llmProviderPreset),
+        entry: llmEntry,
+      },
+      tts: ttsEntry.entry,
+      image: imageEntry.entry,
+      video: videoEntry.entry,
+      pdf: pdfEntry.entry,
+    },
   };
 }
 
@@ -1099,9 +1349,94 @@ function normalizeYamlRoot(raw: string): Record<string, unknown> {
   return asObject(YAML.parse(raw)) ?? {};
 }
 
+function buildOptionalProviderSectionEntry(input: {
+  label: string;
+  providerId: string;
+  model: string;
+  apiKey: string;
+  baseUrl: string;
+}): { ok: true; entry?: AiEducationDesiredSectionEntry } | { ok: false; message: string } {
+  const hasAnyValue = Boolean(input.model || input.apiKey || input.baseUrl);
+  if (!hasAnyValue) {
+    return { ok: true, entry: undefined };
+  }
+  if (!input.model) {
+    return { ok: false, message: `${input.label} model is required before writing OpenMAIC provider config.` };
+  }
+  if (!input.apiKey) {
+    return { ok: false, message: `${input.label} API key is required before writing OpenMAIC provider config.` };
+  }
+  const entry: Record<string, unknown> = {
+    apiKey: input.apiKey,
+    models: [input.model],
+  };
+  if (input.baseUrl) {
+    entry.baseUrl = input.baseUrl;
+  }
+  return {
+    ok: true,
+    entry: {
+      providerId: input.providerId,
+      entry,
+    },
+  };
+}
+
+function buildOptionalPdfSectionEntry(
+  config: AiEducationStoredConfig,
+): { ok: true; entry?: AiEducationDesiredSectionEntry } | { ok: false; message: string } {
+  if (config.pdfProvider === "unpdf") {
+    return { ok: true, entry: undefined };
+  }
+  if (config.pdfProvider === "mineru") {
+    if (!config.pdfBaseUrl) {
+      return { ok: false, message: "MinerU mode requires a Base URL before writing OpenMAIC provider config." };
+    }
+    return {
+      ok: true,
+      entry: {
+        providerId: "mineru",
+        entry: {
+          baseUrl: config.pdfBaseUrl,
+          ...(config.pdfApiKey ? { apiKey: config.pdfApiKey } : {}),
+        },
+      },
+    };
+  }
+  return {
+    ok: true,
+    entry: {
+      providerId: "opendataloader",
+      entry: {
+        ...(config.pdfBaseUrl ? { baseUrl: config.pdfBaseUrl } : {}),
+        ...(config.pdfApiKey ? { apiKey: config.pdfApiKey } : {}),
+      },
+    },
+  };
+}
+
+function mergeOptionalProviderSection(
+  existingRoot: Record<string, unknown>,
+  nextRoot: Record<string, unknown>,
+  sectionKey: "tts" | "image" | "video",
+  desiredEntry?: AiEducationDesiredSectionEntry,
+): void {
+  if (!desiredEntry) {
+    return;
+  }
+  const currentSection = asObject(existingRoot[sectionKey]) ?? {};
+  nextRoot[sectionKey] = {
+    ...currentSection,
+    [desiredEntry.providerId]: {
+      ...(asObject(currentSection[desiredEntry.providerId]) ?? {}),
+      ...desiredEntry.entry,
+    },
+  };
+}
+
 function mergeOpenMaicServerProvidersConfig(
   existingRoot: Record<string, unknown>,
-  desired: { providerId: string; providerEntry: Record<string, unknown>; pdfEntry?: Record<string, unknown> },
+  desired: AiEducationDesiredOpenMaicConfig,
 ): Record<string, unknown> {
   const nextRoot: Record<string, unknown> = {
     ...existingRoot,
@@ -1109,34 +1444,55 @@ function mergeOpenMaicServerProvidersConfig(
   const existingProviders = asObject(existingRoot.providers) ?? {};
   nextRoot.providers = {
     ...existingProviders,
-    [desired.providerId]: {
-      ...(asObject(existingProviders[desired.providerId]) ?? {}),
-      ...desired.providerEntry,
+    [desired.llm.providerId]: {
+      ...(asObject(existingProviders[desired.llm.providerId]) ?? {}),
+      ...desired.llm.entry,
     },
   };
 
-  const currentPdf = asObject(existingRoot.pdf) ?? {};
-  const nextPdf = {
-    ...currentPdf,
-  };
-  if (desired.pdfEntry) {
-    nextPdf.mineru = {
-      ...(asObject(currentPdf.mineru) ?? {}),
-      ...desired.pdfEntry,
+  mergeOptionalProviderSection(existingRoot, nextRoot, "tts", desired.tts);
+  mergeOptionalProviderSection(existingRoot, nextRoot, "image", desired.image);
+  mergeOptionalProviderSection(existingRoot, nextRoot, "video", desired.video);
+
+  if (desired.pdf) {
+    const currentPdf = asObject(existingRoot.pdf) ?? {};
+    nextRoot.pdf = {
+      ...currentPdf,
+      [desired.pdf.providerId]: {
+        ...(asObject(currentPdf[desired.pdf.providerId]) ?? {}),
+        ...desired.pdf.entry,
+      },
     };
-  } else {
-    delete nextPdf.mineru;
-  }
-  if (Object.keys(nextPdf).length > 0) {
-    nextRoot.pdf = nextPdf;
-  } else {
-    delete nextRoot.pdf;
   }
   return nextRoot;
 }
 
 function resolveManagedProviderId(preset: AiEducationLlmProviderPreset): string {
   return preset === "custom_openai_compatible" ? "openai" : preset;
+}
+
+function matchesOptionalObservedProviderConfig(input: {
+  providerId: string;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+  observedBucket: Record<string, Record<string, unknown>>;
+}): boolean {
+  const expectsConfiguredProvider = Boolean(input.model || input.apiKey || input.baseUrl);
+  if (!expectsConfiguredProvider) {
+    return true;
+  }
+  const observedProvider = asObject(input.observedBucket[input.providerId]);
+  const observedModels = Array.isArray(observedProvider?.models)
+    ? observedProvider.models.filter((item): item is string => typeof item === "string")
+    : [];
+  const expectedBaseUrl = normalizeOptionalHttpUrl(input.baseUrl);
+  const observedBaseUrl = normalizeOptionalHttpUrl(asString(observedProvider?.baseUrl));
+  return (
+    Boolean(observedProvider) &&
+    (!input.model || observedModels.includes(input.model)) &&
+    (!expectedBaseUrl || expectedBaseUrl === observedBaseUrl)
+  );
 }
 
 function matchesDesiredOpenMaicConfig(
@@ -1158,14 +1514,49 @@ function matchesDesiredOpenMaicConfig(
     return false;
   }
 
-  if (config.pdfProvider === "mineru") {
-    const observedMineru = asObject(observed.pdf.mineru);
-    return (
-      Boolean(observedMineru) &&
-      normalizeOptionalHttpUrl(config.pdfBaseUrl) === normalizeOptionalHttpUrl(asString(observedMineru?.baseUrl))
-    );
+  if (
+    !matchesOptionalObservedProviderConfig({
+      providerId: config.ttsProviderPreset,
+      model: config.ttsModel,
+      baseUrl: config.ttsBaseUrl,
+      apiKey: config.ttsApiKey,
+      observedBucket: observed.tts,
+    })
+  ) {
+    return false;
   }
-  return !("mineru" in observed.pdf);
+  if (
+    !matchesOptionalObservedProviderConfig({
+      providerId: config.imageProviderPreset,
+      model: config.imageModel,
+      baseUrl: config.imageBaseUrl,
+      apiKey: config.imageApiKey,
+      observedBucket: observed.image,
+    })
+  ) {
+    return false;
+  }
+  if (
+    !matchesOptionalObservedProviderConfig({
+      providerId: config.videoProviderPreset,
+      model: config.videoModel,
+      baseUrl: config.videoBaseUrl,
+      apiKey: config.videoApiKey,
+      observedBucket: observed.video,
+    })
+  ) {
+    return false;
+  }
+  if (config.pdfProvider === "unpdf") {
+    return true;
+  }
+  const observedPdfProvider = asObject(observed.pdf[config.pdfProvider]);
+  if (!observedPdfProvider) {
+    return false;
+  }
+  const expectedPdfBaseUrl = normalizeOptionalHttpUrl(config.pdfBaseUrl);
+  const observedPdfBaseUrl = normalizeOptionalHttpUrl(asString(observedPdfProvider?.baseUrl));
+  return !expectedPdfBaseUrl || expectedPdfBaseUrl === observedPdfBaseUrl;
 }
 
 function reconcileConfigSyncAfterObservation(
@@ -1270,13 +1661,31 @@ function normalizeConfigSyncStatus(input: unknown): AiEducationConfigSyncStatus 
 }
 
 function normalizePdfProvider(input: unknown): AiEducationPdfProvider {
-  return input === "mineru" ? "mineru" : "unpdf";
+  return input === "mineru" || input === "opendataloader" ? input : "unpdf";
 }
 
 function normalizeLlmProviderPreset(input: unknown): AiEducationLlmProviderPreset {
   return AI_EDUCATION_LLM_PROVIDER_PRESETS.includes(input as AiEducationLlmProviderPreset)
     ? (input as AiEducationLlmProviderPreset)
     : "openai";
+}
+
+function normalizeTtsProviderPreset(input: unknown): AiEducationTtsProviderPreset {
+  return AI_EDUCATION_TTS_PROVIDER_PRESETS.includes(input as AiEducationTtsProviderPreset)
+    ? (input as AiEducationTtsProviderPreset)
+    : "openai-tts";
+}
+
+function normalizeImageProviderPreset(input: unknown): AiEducationImageProviderPreset {
+  return AI_EDUCATION_IMAGE_PROVIDER_PRESETS.includes(input as AiEducationImageProviderPreset)
+    ? (input as AiEducationImageProviderPreset)
+    : "nano-banana";
+}
+
+function normalizeVideoProviderPreset(input: unknown): AiEducationVideoProviderPreset {
+  return AI_EDUCATION_VIDEO_PROVIDER_PRESETS.includes(input as AiEducationVideoProviderPreset)
+    ? (input as AiEducationVideoProviderPreset)
+    : "veo";
 }
 
 function normalizeCapabilities(input: unknown): AiEducationCapabilities {

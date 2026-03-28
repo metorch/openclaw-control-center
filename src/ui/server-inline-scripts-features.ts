@@ -803,7 +803,8 @@ function renderFeaturesScript(language = "zh") {
     customGatewayPlaceholder: t('Required for OpenAI-compatible gateways', 'OpenAI-compatible gateway \\u5FC5\\u586B'),
     optionalGatewayPlaceholder: t('Optional compatible-provider override', '\\u53EF\\u9009\\u7684 compatible provider override'),
     mineruPlaceholder: t('http://127.0.0.1:8888', 'http://127.0.0.1:8888'),
-    mineruDisabledPlaceholder: t('Built-in unpdf is active.', '\\u5F53\\u524D\\u4F7F\\u7528 built-in unpdf\\u3002'),
+    opendataloaderPlaceholder: t('Optional, e.g. http://127.0.0.1:5002', '\\u53EF\\u9009\\uFF0C\\u4F8B\\u5982 http://127.0.0.1:5002'),
+    pdfDisabledPlaceholder: t('Built-in unpdf is active.', '\\u5F53\\u524D\\u4F7F\\u7528 built-in unpdf\\u3002'),
     openLatestClassroom: t('Open latest classroom', '\\u6253\\u5F00\\u6700\\u8FD1\\u8BFE\\u5802'),
     openLatestJob: t('Open latest job', '\\u6253\\u5F00\\u6700\\u8FD1 job'),
     openPoll: t('Open poll URL', '\\u6253\\u5F00 poll URL'),
@@ -823,6 +824,9 @@ function renderFeaturesScript(language = "zh") {
 
     const configForm = educationRoot.querySelector('[data-ai-education-config-form]');
     const llmForm = educationRoot.querySelector('[data-ai-education-llm-form]');
+    const ttsForm = educationRoot.querySelector('[data-ai-education-tts-form]');
+    const imageForm = educationRoot.querySelector('[data-ai-education-image-form]');
+    const videoForm = educationRoot.querySelector('[data-ai-education-video-form]');
     const pdfForm = educationRoot.querySelector('[data-ai-education-pdf-form]');
     const configStatusNode = educationRoot.querySelector('[data-ai-education-config-status]');
     const modeNode = educationRoot.querySelector('[data-ai-education-mode]');
@@ -860,6 +864,18 @@ function renderFeaturesScript(language = "zh") {
     const llmModelInput = llmForm instanceof HTMLFormElement ? llmForm.querySelector('[name="llmModel"]') : null;
     const llmApiKeyInput = llmForm instanceof HTMLFormElement ? llmForm.querySelector('[name="llmApiKey"]') : null;
     const llmBaseUrlInput = llmForm instanceof HTMLFormElement ? llmForm.querySelector('[name="llmBaseUrl"]') : null;
+    const ttsProviderInput = ttsForm instanceof HTMLFormElement ? ttsForm.querySelector('[name="ttsProviderPreset"]') : null;
+    const ttsModelInput = ttsForm instanceof HTMLFormElement ? ttsForm.querySelector('[name="ttsModel"]') : null;
+    const ttsApiKeyInput = ttsForm instanceof HTMLFormElement ? ttsForm.querySelector('[name="ttsApiKey"]') : null;
+    const ttsBaseUrlInput = ttsForm instanceof HTMLFormElement ? ttsForm.querySelector('[name="ttsBaseUrl"]') : null;
+    const imageProviderInput = imageForm instanceof HTMLFormElement ? imageForm.querySelector('[name="imageProviderPreset"]') : null;
+    const imageModelInput = imageForm instanceof HTMLFormElement ? imageForm.querySelector('[name="imageModel"]') : null;
+    const imageApiKeyInput = imageForm instanceof HTMLFormElement ? imageForm.querySelector('[name="imageApiKey"]') : null;
+    const imageBaseUrlInput = imageForm instanceof HTMLFormElement ? imageForm.querySelector('[name="imageBaseUrl"]') : null;
+    const videoProviderInput = videoForm instanceof HTMLFormElement ? videoForm.querySelector('[name="videoProviderPreset"]') : null;
+    const videoModelInput = videoForm instanceof HTMLFormElement ? videoForm.querySelector('[name="videoModel"]') : null;
+    const videoApiKeyInput = videoForm instanceof HTMLFormElement ? videoForm.querySelector('[name="videoApiKey"]') : null;
+    const videoBaseUrlInput = videoForm instanceof HTMLFormElement ? videoForm.querySelector('[name="videoBaseUrl"]') : null;
     const pdfProviderInput = pdfForm instanceof HTMLFormElement ? pdfForm.querySelector('[name="pdfProvider"]') : null;
     const pdfBaseUrlInput = pdfForm instanceof HTMLFormElement ? pdfForm.querySelector('[name="pdfBaseUrl"]') : null;
     const pdfApiKeyInput = pdfForm instanceof HTMLFormElement ? pdfForm.querySelector('[name="pdfApiKey"]') : null;
@@ -969,12 +985,17 @@ function renderFeaturesScript(language = "zh") {
     const syncPdfPresentation = () => {
       const provider = pdfProviderInput instanceof HTMLSelectElement ? pdfProviderInput.value : 'unpdf';
       const usingMineru = provider === 'mineru';
+      const usingOpenDataLoader = provider === 'opendataloader';
       if (pdfBaseUrlInput instanceof HTMLInputElement) {
-        pdfBaseUrlInput.disabled = !usingMineru;
-        pdfBaseUrlInput.placeholder = usingMineru ? l.mineruPlaceholder : l.mineruDisabledPlaceholder;
+        pdfBaseUrlInput.disabled = !(usingMineru || usingOpenDataLoader);
+        pdfBaseUrlInput.placeholder = usingMineru
+          ? l.mineruPlaceholder
+          : usingOpenDataLoader
+            ? l.opendataloaderPlaceholder
+            : l.pdfDisabledPlaceholder;
       }
       if (pdfApiKeyInput instanceof HTMLInputElement) {
-        pdfApiKeyInput.disabled = !usingMineru;
+        pdfApiKeyInput.disabled = !(usingMineru || usingOpenDataLoader);
       }
     };
     const clearIframeGuard = () => {
@@ -1094,6 +1115,18 @@ function renderFeaturesScript(language = "zh") {
       if (llmModelInput instanceof HTMLInputElement && document.activeElement !== llmModelInput) llmModelInput.value = toText(config.llmModel);
       if (llmBaseUrlInput instanceof HTMLInputElement && document.activeElement !== llmBaseUrlInput) llmBaseUrlInput.value = toText(config.llmBaseUrl);
       if (llmApiKeyInput instanceof HTMLInputElement) llmApiKeyInput.value = '';
+      if (ttsProviderInput instanceof HTMLSelectElement && document.activeElement !== ttsProviderInput) ttsProviderInput.value = toText(config.ttsProviderPreset, 'openai-tts');
+      if (ttsModelInput instanceof HTMLInputElement && document.activeElement !== ttsModelInput) ttsModelInput.value = toText(config.ttsModel);
+      if (ttsBaseUrlInput instanceof HTMLInputElement && document.activeElement !== ttsBaseUrlInput) ttsBaseUrlInput.value = toText(config.ttsBaseUrl);
+      if (ttsApiKeyInput instanceof HTMLInputElement) ttsApiKeyInput.value = '';
+      if (imageProviderInput instanceof HTMLSelectElement && document.activeElement !== imageProviderInput) imageProviderInput.value = toText(config.imageProviderPreset, 'nano-banana');
+      if (imageModelInput instanceof HTMLInputElement && document.activeElement !== imageModelInput) imageModelInput.value = toText(config.imageModel);
+      if (imageBaseUrlInput instanceof HTMLInputElement && document.activeElement !== imageBaseUrlInput) imageBaseUrlInput.value = toText(config.imageBaseUrl);
+      if (imageApiKeyInput instanceof HTMLInputElement) imageApiKeyInput.value = '';
+      if (videoProviderInput instanceof HTMLSelectElement && document.activeElement !== videoProviderInput) videoProviderInput.value = toText(config.videoProviderPreset, 'veo');
+      if (videoModelInput instanceof HTMLInputElement && document.activeElement !== videoModelInput) videoModelInput.value = toText(config.videoModel);
+      if (videoBaseUrlInput instanceof HTMLInputElement && document.activeElement !== videoBaseUrlInput) videoBaseUrlInput.value = toText(config.videoBaseUrl);
+      if (videoApiKeyInput instanceof HTMLInputElement) videoApiKeyInput.value = '';
       if (pdfProviderInput instanceof HTMLSelectElement && document.activeElement !== pdfProviderInput) pdfProviderInput.value = toText(config.pdfProvider, 'unpdf');
       if (pdfBaseUrlInput instanceof HTMLInputElement && document.activeElement !== pdfBaseUrlInput) pdfBaseUrlInput.value = toText(config.pdfBaseUrl);
       if (pdfApiKeyInput instanceof HTMLInputElement) pdfApiKeyInput.value = '';
@@ -1164,14 +1197,29 @@ function renderFeaturesScript(language = "zh") {
         llmProviderPreset: llmProviderInput instanceof HTMLSelectElement ? toText(llmProviderInput.value, 'openai') : 'openai',
         llmModel: llmModelInput instanceof HTMLInputElement ? toText(llmModelInput.value) : '',
         llmBaseUrl: llmBaseUrlInput instanceof HTMLInputElement ? toText(llmBaseUrlInput.value) : '',
+        ttsProviderPreset: ttsProviderInput instanceof HTMLSelectElement ? toText(ttsProviderInput.value, 'openai-tts') : 'openai-tts',
+        ttsModel: ttsModelInput instanceof HTMLInputElement ? toText(ttsModelInput.value) : '',
+        ttsBaseUrl: ttsBaseUrlInput instanceof HTMLInputElement ? toText(ttsBaseUrlInput.value) : '',
+        imageProviderPreset: imageProviderInput instanceof HTMLSelectElement ? toText(imageProviderInput.value, 'nano-banana') : 'nano-banana',
+        imageModel: imageModelInput instanceof HTMLInputElement ? toText(imageModelInput.value) : '',
+        imageBaseUrl: imageBaseUrlInput instanceof HTMLInputElement ? toText(imageBaseUrlInput.value) : '',
+        videoProviderPreset: videoProviderInput instanceof HTMLSelectElement ? toText(videoProviderInput.value, 'veo') : 'veo',
+        videoModel: videoModelInput instanceof HTMLInputElement ? toText(videoModelInput.value) : '',
+        videoBaseUrl: videoBaseUrlInput instanceof HTMLInputElement ? toText(videoBaseUrlInput.value) : '',
         pdfProvider: pdfProviderInput instanceof HTMLSelectElement ? toText(pdfProviderInput.value, 'unpdf') : 'unpdf',
         pdfBaseUrl: pdfBaseUrlInput instanceof HTMLInputElement ? toText(pdfBaseUrlInput.value) : '',
       };
       const accessCode = accessCodeInput instanceof HTMLInputElement ? toText(accessCodeInput.value) : '';
       const llmApiKey = llmApiKeyInput instanceof HTMLInputElement ? toText(llmApiKeyInput.value) : '';
+      const ttsApiKey = ttsApiKeyInput instanceof HTMLInputElement ? toText(ttsApiKeyInput.value) : '';
+      const imageApiKey = imageApiKeyInput instanceof HTMLInputElement ? toText(imageApiKeyInput.value) : '';
+      const videoApiKey = videoApiKeyInput instanceof HTMLInputElement ? toText(videoApiKeyInput.value) : '';
       const pdfApiKey = pdfApiKeyInput instanceof HTMLInputElement ? toText(pdfApiKeyInput.value) : '';
       if (accessCode) body.accessCode = accessCode;
       if (llmApiKey) body.llmApiKey = llmApiKey;
+      if (ttsApiKey) body.ttsApiKey = ttsApiKey;
+      if (imageApiKey) body.imageApiKey = imageApiKey;
+      if (videoApiKey) body.videoApiKey = videoApiKey;
       if (pdfApiKey) body.pdfApiKey = pdfApiKey;
       return body;
     };
@@ -1315,6 +1363,24 @@ function renderFeaturesScript(language = "zh") {
     }
     if (llmForm instanceof HTMLFormElement) {
       llmForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        void persistConfig(false);
+      });
+    }
+    if (ttsForm instanceof HTMLFormElement) {
+      ttsForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        void persistConfig(false);
+      });
+    }
+    if (imageForm instanceof HTMLFormElement) {
+      imageForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        void persistConfig(false);
+      });
+    }
+    if (videoForm instanceof HTMLFormElement) {
+      videoForm.addEventListener('submit', (event) => {
         event.preventDefault();
         void persistConfig(false);
       });

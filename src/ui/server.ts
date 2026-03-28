@@ -1174,9 +1174,60 @@ function startUiServer(port, toolClient) {
                         throw new RequestValidationError("llmBaseUrl must be a valid http or https URL.", 400);
                     }
                 }
+                const ttsProviderPreset = optionalBoundedString(payload.ttsProviderPreset, "ttsProviderPreset", 80)?.toLowerCase();
+                if (ttsProviderPreset && !import_ai_education.AI_EDUCATION_TTS_PROVIDER_PRESETS.includes(ttsProviderPreset)) {
+                    throw new RequestValidationError("ttsProviderPreset is not supported.", 400);
+                }
+                const ttsModel = optionalBoundedString(payload.ttsModel, "ttsModel", 240);
+                const ttsApiKey = optionalBoundedString(payload.ttsApiKey, "ttsApiKey", 8192);
+                const ttsBaseUrl = optionalBoundedString(payload.ttsBaseUrl, "ttsBaseUrl", 4096);
+                if (ttsBaseUrl) {
+                    try {
+                        const parsed = new URL(ttsBaseUrl);
+                        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                            throw new Error("invalid protocol");
+                        }
+                    } catch {
+                        throw new RequestValidationError("ttsBaseUrl must be a valid http or https URL.", 400);
+                    }
+                }
+                const imageProviderPreset = optionalBoundedString(payload.imageProviderPreset, "imageProviderPreset", 80)?.toLowerCase();
+                if (imageProviderPreset && !import_ai_education.AI_EDUCATION_IMAGE_PROVIDER_PRESETS.includes(imageProviderPreset)) {
+                    throw new RequestValidationError("imageProviderPreset is not supported.", 400);
+                }
+                const imageModel = optionalBoundedString(payload.imageModel, "imageModel", 240);
+                const imageApiKey = optionalBoundedString(payload.imageApiKey, "imageApiKey", 8192);
+                const imageBaseUrl = optionalBoundedString(payload.imageBaseUrl, "imageBaseUrl", 4096);
+                if (imageBaseUrl) {
+                    try {
+                        const parsed = new URL(imageBaseUrl);
+                        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                            throw new Error("invalid protocol");
+                        }
+                    } catch {
+                        throw new RequestValidationError("imageBaseUrl must be a valid http or https URL.", 400);
+                    }
+                }
+                const videoProviderPreset = optionalBoundedString(payload.videoProviderPreset, "videoProviderPreset", 80)?.toLowerCase();
+                if (videoProviderPreset && !import_ai_education.AI_EDUCATION_VIDEO_PROVIDER_PRESETS.includes(videoProviderPreset)) {
+                    throw new RequestValidationError("videoProviderPreset is not supported.", 400);
+                }
+                const videoModel = optionalBoundedString(payload.videoModel, "videoModel", 240);
+                const videoApiKey = optionalBoundedString(payload.videoApiKey, "videoApiKey", 8192);
+                const videoBaseUrl = optionalBoundedString(payload.videoBaseUrl, "videoBaseUrl", 4096);
+                if (videoBaseUrl) {
+                    try {
+                        const parsed = new URL(videoBaseUrl);
+                        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                            throw new Error("invalid protocol");
+                        }
+                    } catch {
+                        throw new RequestValidationError("videoBaseUrl must be a valid http or https URL.", 400);
+                    }
+                }
                 const pdfProvider = optionalBoundedString(payload.pdfProvider, "pdfProvider", 40)?.toLowerCase();
-                if (pdfProvider && pdfProvider !== "unpdf" && pdfProvider !== "mineru") {
-                    throw new RequestValidationError("pdfProvider must be unpdf or mineru.", 400);
+                if (pdfProvider && pdfProvider !== "unpdf" && pdfProvider !== "mineru" && pdfProvider !== "opendataloader") {
+                    throw new RequestValidationError("pdfProvider must be unpdf, mineru, or opendataloader.", 400);
                 }
                 const pdfApiKey = optionalBoundedString(payload.pdfApiKey, "pdfApiKey", 8192);
                 const pdfBaseUrl = optionalBoundedString(payload.pdfBaseUrl, "pdfBaseUrl", 4096);
@@ -1196,6 +1247,15 @@ function startUiServer(port, toolClient) {
                 if (payload.clearLlmApiKey !== undefined && typeof payload.clearLlmApiKey !== "boolean") {
                     throw new RequestValidationError("clearLlmApiKey must be a boolean when provided.", 400);
                 }
+                if (payload.clearTtsApiKey !== undefined && typeof payload.clearTtsApiKey !== "boolean") {
+                    throw new RequestValidationError("clearTtsApiKey must be a boolean when provided.", 400);
+                }
+                if (payload.clearImageApiKey !== undefined && typeof payload.clearImageApiKey !== "boolean") {
+                    throw new RequestValidationError("clearImageApiKey must be a boolean when provided.", 400);
+                }
+                if (payload.clearVideoApiKey !== undefined && typeof payload.clearVideoApiKey !== "boolean") {
+                    throw new RequestValidationError("clearVideoApiKey must be a boolean when provided.", 400);
+                }
                 if (payload.clearPdfApiKey !== undefined && typeof payload.clearPdfApiKey !== "boolean") {
                     throw new RequestValidationError("clearPdfApiKey must be a boolean when provided.", 400);
                 }
@@ -1210,6 +1270,21 @@ function startUiServer(port, toolClient) {
                     llmApiKey,
                     clearLlmApiKey: payload.clearLlmApiKey === true,
                     llmBaseUrl,
+                    ttsProviderPreset,
+                    ttsModel,
+                    ttsApiKey,
+                    clearTtsApiKey: payload.clearTtsApiKey === true,
+                    ttsBaseUrl,
+                    imageProviderPreset,
+                    imageModel,
+                    imageApiKey,
+                    clearImageApiKey: payload.clearImageApiKey === true,
+                    imageBaseUrl,
+                    videoProviderPreset,
+                    videoModel,
+                    videoApiKey,
+                    clearVideoApiKey: payload.clearVideoApiKey === true,
+                    videoBaseUrl,
                     pdfProvider,
                     pdfApiKey,
                     clearPdfApiKey: payload.clearPdfApiKey === true,

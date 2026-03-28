@@ -150,7 +150,22 @@ function createFeatureRenderers(deps) {
         llmModel: config.llmModel || "",
         llmApiKeyConfigured: config.llmApiKeyConfigured === true,
         llmBaseUrl: config.llmBaseUrl || "",
-        pdfProvider: config.pdfProvider === "mineru" ? "mineru" : "unpdf",
+        ttsProviderPreset: config.ttsProviderPreset || "openai-tts",
+        ttsModel: config.ttsModel || "",
+        ttsApiKeyConfigured: config.ttsApiKeyConfigured === true,
+        ttsBaseUrl: config.ttsBaseUrl || "",
+        imageProviderPreset: config.imageProviderPreset || "nano-banana",
+        imageModel: config.imageModel || "",
+        imageApiKeyConfigured: config.imageApiKeyConfigured === true,
+        imageBaseUrl: config.imageBaseUrl || "",
+        videoProviderPreset: config.videoProviderPreset || "veo",
+        videoModel: config.videoModel || "",
+        videoApiKeyConfigured: config.videoApiKeyConfigured === true,
+        videoBaseUrl: config.videoBaseUrl || "",
+        pdfProvider:
+          config.pdfProvider === "mineru" || config.pdfProvider === "opendataloader"
+            ? config.pdfProvider
+            : "unpdf",
         pdfApiKeyConfigured: config.pdfApiKeyConfigured === true,
         pdfBaseUrl: config.pdfBaseUrl || "",
       },
@@ -275,6 +290,54 @@ function createFeatureRenderers(deps) {
       ["doubao", "Doubao"],
       ["grok", "Grok"],
       ["custom_openai_compatible", "Custom OpenAI-compatible"],
+    ];
+    return options
+      .map(
+        ([value, label]) =>
+          `<option value="${escapeHtml(value)}"${selectedValue === value ? " selected" : ""}>${escapeHtml(label)}</option>`,
+      )
+      .join("");
+  }
+
+  function renderEducationTtsProviderOptions(selectedValue) {
+    const options = [
+      ["openai-tts", "OpenAI TTS"],
+      ["azure-tts", "Azure TTS"],
+      ["glm-tts", "GLM TTS"],
+      ["qwen-tts", "Qwen TTS"],
+      ["doubao-tts", "Doubao TTS"],
+      ["elevenlabs-tts", "ElevenLabs TTS"],
+    ];
+    return options
+      .map(
+        ([value, label]) =>
+          `<option value="${escapeHtml(value)}"${selectedValue === value ? " selected" : ""}>${escapeHtml(label)}</option>`,
+      )
+      .join("");
+  }
+
+  function renderEducationImageProviderOptions(selectedValue) {
+    const options = [
+      ["seedream", "Seedream"],
+      ["qwen-image", "Qwen Image"],
+      ["nano-banana", "Nano Banana"],
+      ["grok-image", "Grok Image"],
+    ];
+    return options
+      .map(
+        ([value, label]) =>
+          `<option value="${escapeHtml(value)}"${selectedValue === value ? " selected" : ""}>${escapeHtml(label)}</option>`,
+      )
+      .join("");
+  }
+
+  function renderEducationVideoProviderOptions(selectedValue) {
+    const options = [
+      ["seedance", "Seedance"],
+      ["kling", "Kling"],
+      ["veo", "Veo"],
+      ["sora", "Sora"],
+      ["grok-video", "Grok Video"],
     ];
     return options
       .map(
@@ -1160,7 +1223,7 @@ function createFeatureRenderers(deps) {
 
   function renderEducationSettingsCard(view) {
     const { input, aiTakeoverEnabled, mode, endpointValue, repoDirValue, config, canUseHostedRecovery } = view;
-    return `<section class="card geo-secondary-card">
+    return `<section class="card geo-secondary-card" id="ai-education-model-config">
       <details class="geo-collapsible" open>
         <summary>${escapeHtml(pickUiText(input.language, "Connection", "\u8FDE\u63A5"))}</summary>
         <div class="meta">${escapeHtml(
@@ -1276,7 +1339,163 @@ function createFeatureRenderers(deps) {
             pickUiText(input.language, "Save local config", "\u4FDD\u5B58\u672C\u5730\u914D\u7F6E"),
           )}</button>
           <button class="btn" type="button" data-ai-education-apply-openmaic-config>${escapeHtml(
-            pickUiText(input.language, "Write into OpenMAIC", "\u5199\u5165 OpenMAIC"),
+            pickUiText(input.language, "Write model config into OpenMAIC", "\u5199\u5165 OpenMAIC \u6A21\u578B\u914D\u7F6E"),
+          )}</button>
+        </div>
+      </form>
+    </section>`;
+  }
+
+  function renderEducationTtsCard(view) {
+    const { input, config } = view;
+    return `<section class="card geo-secondary-card">
+      <h3>${escapeHtml(pickUiText(input.language, "TTS", "TTS"))}</h3>
+      <div class="meta">${escapeHtml(
+        pickUiText(
+          input.language,
+          "Write a bounded server-side TTS provider into OpenMAIC so classroom narration can use your relay or custom model.",
+          "\u628A\u6709\u8FB9\u754C\u7684 TTS provider \u5199\u5165 OpenMAIC\uff0c\u8BA9\u8BFE\u5802\u89E3\u8BF4\u53EF\u4EE5\u4F7F\u7528\u4F60\u7684\u4E2D\u8F6C\u6216\u81EA\u5B9A\u4E49\u6A21\u578B\u3002",
+        ),
+      )}</div>
+      <form class="geo-run-form" data-ai-education-tts-form>
+        <div class="geo-form-grid">
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "Provider", "Provider"))}</span>
+            <select name="ttsProviderPreset">
+              ${renderEducationTtsProviderOptions(config.ttsProviderPreset)}
+            </select>
+          </label>
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "Model", "Model"))}</span>
+            <input type="text" name="ttsModel" value="${escapeHtml(config.ttsModel || "")}" placeholder="${escapeHtml(
+              pickUiText(input.language, "tts-1-1106 / custom-voice-model", "tts-1-1106 / custom-voice-model"),
+            )}" />
+          </label>
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "API key", "API key"))}</span>
+            <input type="password" name="ttsApiKey" value="" placeholder="${escapeHtml(
+              config.ttsApiKeyConfigured
+                ? pickUiText(input.language, "Saved already. Fill only to replace it.", "\u5DF2\u4FDD\u5B58\u3002\u53EA\u5728\u66FF\u6362\u65F6\u518D\u586B\u5199\u3002")
+                : pickUiText(input.language, "Paste provider API key", "\u586B\u5165 provider API key"),
+            )}" />
+          </label>
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "Base URL", "Base URL"))}</span>
+            <input type="url" name="ttsBaseUrl" value="${escapeHtml(config.ttsBaseUrl || "")}" placeholder="${escapeHtml(
+              pickUiText(input.language, "Optional compatible-provider override", "\u53EF\u9009\u7684 compatible provider override"),
+            )}" />
+          </label>
+        </div>
+        <div class="feature-card-actions">
+          <button class="btn" type="button" data-ai-education-save>${escapeHtml(
+            pickUiText(input.language, "Save local config", "\u4FDD\u5B58\u672C\u5730\u914D\u7F6E"),
+          )}</button>
+          <button class="btn" type="button" data-ai-education-apply-openmaic-config>${escapeHtml(
+            pickUiText(input.language, "Write provider config into OpenMAIC", "\u5199\u5165 OpenMAIC provider \u914D\u7F6E"),
+          )}</button>
+        </div>
+      </form>
+    </section>`;
+  }
+
+  function renderEducationImageCard(view) {
+    const { input, config } = view;
+    return `<section class="card geo-secondary-card">
+      <h3>${escapeHtml(pickUiText(input.language, "Image generation", "\u56FE\u50CF\u751F\u6210"))}</h3>
+      <div class="meta">${escapeHtml(
+        pickUiText(
+          input.language,
+          "Keep image generation inside OpenMAIC's native media workflow, but let this shell write the provider/model relay settings.",
+          "\u56FE\u50CF\u751F\u6210\u4ECD\u7136\u8D70 OpenMAIC \u539F\u751F\u5A92\u4F53\u6D41\u7A0B\uff0c\u4F46\u7531\u8FD9\u4E2A\u58F3\u5C42\u5199\u5165 provider / model \u4E2D\u8F6C\u8BBE\u7F6E\u3002",
+        ),
+      )}</div>
+      <form class="geo-run-form" data-ai-education-image-form>
+        <div class="geo-form-grid">
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "Provider", "Provider"))}</span>
+            <select name="imageProviderPreset">
+              ${renderEducationImageProviderOptions(config.imageProviderPreset)}
+            </select>
+          </label>
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "Model", "Model"))}</span>
+            <input type="text" name="imageModel" value="${escapeHtml(config.imageModel || "")}" placeholder="${escapeHtml(
+              pickUiText(input.language, "gemini-2.5-flash-image / qwen-image-max", "gemini-2.5-flash-image / qwen-image-max"),
+            )}" />
+          </label>
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "API key", "API key"))}</span>
+            <input type="password" name="imageApiKey" value="" placeholder="${escapeHtml(
+              config.imageApiKeyConfigured
+                ? pickUiText(input.language, "Saved already. Fill only to replace it.", "\u5DF2\u4FDD\u5B58\u3002\u53EA\u5728\u66FF\u6362\u65F6\u518D\u586B\u5199\u3002")
+                : pickUiText(input.language, "Paste provider API key", "\u586B\u5165 provider API key"),
+            )}" />
+          </label>
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "Base URL", "Base URL"))}</span>
+            <input type="url" name="imageBaseUrl" value="${escapeHtml(config.imageBaseUrl || "")}" placeholder="${escapeHtml(
+              pickUiText(input.language, "Optional compatible-provider override", "\u53EF\u9009\u7684 compatible provider override"),
+            )}" />
+          </label>
+        </div>
+        <div class="feature-card-actions">
+          <button class="btn" type="button" data-ai-education-save>${escapeHtml(
+            pickUiText(input.language, "Save local config", "\u4FDD\u5B58\u672C\u5730\u914D\u7F6E"),
+          )}</button>
+          <button class="btn" type="button" data-ai-education-apply-openmaic-config>${escapeHtml(
+            pickUiText(input.language, "Write provider config into OpenMAIC", "\u5199\u5165 OpenMAIC provider \u914D\u7F6E"),
+          )}</button>
+        </div>
+      </form>
+    </section>`;
+  }
+
+  function renderEducationVideoCard(view) {
+    const { input, config } = view;
+    return `<section class="card geo-secondary-card">
+      <h3>${escapeHtml(pickUiText(input.language, "Video generation", "\u89C6\u9891\u751F\u6210"))}</h3>
+      <div class="meta">${escapeHtml(
+        pickUiText(
+          input.language,
+          "Video generation also stays native to OpenMAIC. This card only manages the bounded relay/provider config we write on disk.",
+          "\u89C6\u9891\u751F\u6210\u4E5F\u4FDD\u6301\u5728 OpenMAIC \u539F\u751F\u6D41\u7A0B\u91CC\uff0c\u8FD9\u5F20\u5361\u53EA\u7BA1\u7406\u6211\u4EEC\u843D\u76D8\u7684\u6709\u8FB9\u754C provider \u914D\u7F6E\u3002",
+        ),
+      )}</div>
+      <form class="geo-run-form" data-ai-education-video-form>
+        <div class="geo-form-grid">
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "Provider", "Provider"))}</span>
+            <select name="videoProviderPreset">
+              ${renderEducationVideoProviderOptions(config.videoProviderPreset)}
+            </select>
+          </label>
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "Model", "Model"))}</span>
+            <input type="text" name="videoModel" value="${escapeHtml(config.videoModel || "")}" placeholder="${escapeHtml(
+              pickUiText(input.language, "veo3.1-fast / kling-v2-6", "veo3.1-fast / kling-v2-6"),
+            )}" />
+          </label>
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "API key", "API key"))}</span>
+            <input type="password" name="videoApiKey" value="" placeholder="${escapeHtml(
+              config.videoApiKeyConfigured
+                ? pickUiText(input.language, "Saved already. Fill only to replace it.", "\u5DF2\u4FDD\u5B58\u3002\u53EA\u5728\u66FF\u6362\u65F6\u518D\u586B\u5199\u3002")
+                : pickUiText(input.language, "Paste provider API key", "\u586B\u5165 provider API key"),
+            )}" />
+          </label>
+          <label class="geo-field">
+            <span>${escapeHtml(pickUiText(input.language, "Base URL", "Base URL"))}</span>
+            <input type="url" name="videoBaseUrl" value="${escapeHtml(config.videoBaseUrl || "")}" placeholder="${escapeHtml(
+              pickUiText(input.language, "Optional compatible-provider override", "\u53EF\u9009\u7684 compatible provider override"),
+            )}" />
+          </label>
+        </div>
+        <div class="feature-card-actions">
+          <button class="btn" type="button" data-ai-education-save>${escapeHtml(
+            pickUiText(input.language, "Save local config", "\u4FDD\u5B58\u672C\u5730\u914D\u7F6E"),
+          )}</button>
+          <button class="btn" type="button" data-ai-education-apply-openmaic-config>${escapeHtml(
+            pickUiText(input.language, "Write provider config into OpenMAIC", "\u5199\u5165 OpenMAIC provider \u914D\u7F6E"),
           )}</button>
         </div>
       </form>
@@ -1285,15 +1504,43 @@ function createFeatureRenderers(deps) {
 
   function renderEducationPdfCard(view) {
     const { input, config, pdfVerificationLabel } = view;
+    const parserDescription =
+      config.pdfProvider === "opendataloader"
+        ? pickUiText(
+            input.language,
+            "OpenDataLoader runs locally inside OpenMAIC and can optionally use a hybrid backend URL for OCR, formulas, and richer tables. It is not embedded as a separate child app UI.",
+            "OpenDataLoader \u9ED8\u8BA4\u5728 OpenMAIC \u5185\u672C\u5730\u8FD0\u884C\uff0c\u4E5F\u53EF\u9009\u914D\u7F6E hybrid backend URL \u6765\u589E\u5F3A OCR\u3001\u516C\u5F0F\u548C\u8868\u683C\u89E3\u6790\u3002\u5B83\u4E0D\u4F1A\u88AB\u5185\u5D4C\u6210\u72EC\u7ACB\u5B50\u5E94\u7528 UI\u3002",
+          )
+        : pickUiText(
+            input.language,
+            "MinerU is treated as an optional local parsing backend for OpenMAIC. It is not embedded as a separate child app UI.",
+            "MinerU \u5728\u8FD9\u91CC\u53EA\u88AB\u5F53\u6210 OpenMAIC \u7684\u53EF\u9009\u672C\u5730\u89E3\u6790\u540E\u7AEF\uff0c\u4E0D\u4F1A\u88AB\u5185\u5D4C\u6210\u72EC\u7ACB\u5B50\u5E94\u7528 UI\u3002",
+          );
+    const baseUrlLabel =
+      config.pdfProvider === "opendataloader"
+        ? pickUiText(input.language, "Hybrid Base URL", "Hybrid Base URL")
+        : pickUiText(input.language, "MinerU Base URL", "MinerU Base URL");
+    const apiKeyLabel =
+      config.pdfProvider === "opendataloader"
+        ? pickUiText(input.language, "Hybrid API key", "Hybrid API key")
+        : pickUiText(input.language, "MinerU API key", "MinerU API key");
+    const baseUrlPlaceholder =
+      config.pdfProvider === "opendataloader"
+        ? pickUiText(input.language, "Optional, e.g. http://127.0.0.1:5002", "\u53EF\u9009\uff0c\u4F8B\u5982 http://127.0.0.1:5002")
+        : pickUiText(input.language, "http://127.0.0.1:8888", "http://127.0.0.1:8888");
+    const apiKeyPlaceholder =
+      config.pdfApiKeyConfigured
+        ? pickUiText(input.language, "Saved already. Fill only to replace it.", "\u5DF2\u4FDD\u5B58\u3002\u53EA\u5728\u66FF\u6362\u65F6\u518D\u586B\u5199\u3002")
+        : config.pdfProvider === "opendataloader"
+          ? pickUiText(input.language, "Optional for local mode and many hybrid setups", "\u672C\u5730\u6A21\u5F0F\u548C\u5F88\u591A hybrid \u90E8\u7F72\u90FD\u53EF\u4EE5\u4E0D\u586B")
+          : pickUiText(input.language, "Optional for local MinerU", "\u672C\u5730 MinerU \u53EF\u4EE5\u4E0D\u586B");
+    const verifyLabel =
+      config.pdfProvider === "opendataloader"
+        ? pickUiText(input.language, "Verify OpenDataLoader", "\u9A8C\u8BC1 OpenDataLoader")
+        : pickUiText(input.language, "Verify MinerU", "\u9A8C\u8BC1 MinerU");
     return `<section class="card geo-secondary-card">
       <h3>${escapeHtml(pickUiText(input.language, "Document parsing", "\u6587\u6863\u89E3\u6790"))}</h3>
-      <div class="meta">${escapeHtml(
-        pickUiText(
-          input.language,
-          "MinerU is treated as an optional local parsing backend for OpenMAIC. It is not embedded as a separate child app UI.",
-          "MinerU \u5728\u8FD9\u91CC\u53EA\u88AB\u5F53\u6210 OpenMAIC \u7684\u53EF\u9009\u672C\u5730\u89E3\u6790\u540E\u7AEF\uFF0C\u4E0D\u4F1A\u88AB\u5185\u5D4C\u6210\u72EC\u7ACB\u5B50\u5E94\u7528 UI\u3002",
-        ),
-      )}</div>
+      <div class="meta">${escapeHtml(parserDescription)}</div>
       <form class="geo-run-form" data-ai-education-pdf-form>
         <div class="geo-form-grid">
           <label class="geo-field">
@@ -1301,21 +1548,16 @@ function createFeatureRenderers(deps) {
             <select name="pdfProvider">
               <option value="unpdf"${config.pdfProvider === "unpdf" ? " selected" : ""}>unpdf</option>
               <option value="mineru"${config.pdfProvider === "mineru" ? " selected" : ""}>MinerU</option>
+              <option value="opendataloader"${config.pdfProvider === "opendataloader" ? " selected" : ""}>OpenDataLoader PDF</option>
             </select>
           </label>
           <label class="geo-field">
-            <span>${escapeHtml(pickUiText(input.language, "MinerU Base URL", "MinerU Base URL"))}</span>
-            <input type="url" name="pdfBaseUrl" value="${escapeHtml(config.pdfBaseUrl || "")}" placeholder="${escapeHtml(
-              pickUiText(input.language, "http://127.0.0.1:8888", "http://127.0.0.1:8888"),
-            )}" />
+            <span>${escapeHtml(baseUrlLabel)}</span>
+            <input type="url" name="pdfBaseUrl" value="${escapeHtml(config.pdfBaseUrl || "")}" placeholder="${escapeHtml(baseUrlPlaceholder)}" />
           </label>
           <label class="geo-field">
-            <span>${escapeHtml(pickUiText(input.language, "MinerU API key", "MinerU API key"))}</span>
-            <input type="password" name="pdfApiKey" value="" placeholder="${escapeHtml(
-              config.pdfApiKeyConfigured
-                ? pickUiText(input.language, "Saved already. Fill only to replace it.", "\u5DF2\u4FDD\u5B58\u3002\u53EA\u5728\u66FF\u6362\u65F6\u518D\u586B\u5199\u3002")
-                : pickUiText(input.language, "Optional for local MinerU", "\u672C\u5730 MinerU \u53EF\u4EE5\u4E0D\u586B"),
-            )}" />
+            <span>${escapeHtml(apiKeyLabel)}</span>
+            <input type="password" name="pdfApiKey" value="" placeholder="${escapeHtml(apiKeyPlaceholder)}" />
           </label>
           <div class="status-chip">
             <span>${escapeHtml(pickUiText(input.language, "Verification", "\u9A8C\u8BC1"))}</span>
@@ -1327,7 +1569,7 @@ function createFeatureRenderers(deps) {
             pickUiText(input.language, "Save local config", "\u4FDD\u5B58\u672C\u5730\u914D\u7F6E"),
           )}</button>
           <button class="btn" type="button" data-ai-education-health>${escapeHtml(
-            pickUiText(input.language, "Verify MinerU", "\u9A8C\u8BC1 MinerU"),
+            verifyLabel,
           )}</button>
         </div>
       </form>
@@ -1548,6 +1790,9 @@ function createFeatureRenderers(deps) {
           </div>
         </div>
         <div class="feature-card-actions ai-education-shell-actions">
+          <a class="btn" href="#ai-education-model-config">${escapeHtml(
+            pickUiText(input.language, "Model config", "\u6A21\u578B\u914D\u7F6E"),
+          )}</a>
           <button class="btn" type="button" data-ai-education-health>${escapeHtml(
             pickUiText(input.language, "Check connection", "\u68C0\u67E5\u8FDE\u63A5"),
           )}</button>
@@ -1570,6 +1815,9 @@ function createFeatureRenderers(deps) {
       <section class="geo-layout ai-education-layout ai-education-controls-grid">
         ${renderEducationSettingsCard(view)}
         ${renderEducationLlmCard(view)}
+        ${renderEducationTtsCard(view)}
+        ${renderEducationImageCard(view)}
+        ${renderEducationVideoCard(view)}
         ${renderEducationPdfCard(view)}
         ${renderEducationRuntimeCard(view)}
       </section>
