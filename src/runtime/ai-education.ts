@@ -658,7 +658,7 @@ function defaultStoredAiEducationState(now = new Date().toISOString()): AiEducat
       videoModel: "",
       videoApiKey: "",
       videoBaseUrl: "",
-      pdfProvider: "unpdf",
+      pdfProvider: "opendataloader",
       pdfApiKey: "",
       pdfBaseUrl: "",
     },
@@ -1083,7 +1083,7 @@ async function verifyPdfProvider(
     return {
       status: "error",
       checkedAt: now,
-      message: `No local MinerU service was detected on ${AI_EDUCATION_LOCAL_MINERU_CANDIDATE_URLS.join(", ")}. Add a MinerU Base URL or switch back to unpdf.`,
+        message: `No local MinerU service was detected on ${AI_EDUCATION_LOCAL_MINERU_CANDIDATE_URLS.join(", ")}. Add a MinerU Base URL or switch back to OpenDataLoader.`,
     };
   }
   try {
@@ -1661,7 +1661,7 @@ function normalizeConfigSyncStatus(input: unknown): AiEducationConfigSyncStatus 
 }
 
 function normalizePdfProvider(input: unknown): AiEducationPdfProvider {
-  return input === "mineru" || input === "opendataloader" ? input : "unpdf";
+  return input === "mineru" || input === "unpdf" ? input : "opendataloader";
 }
 
 function normalizeLlmProviderPreset(input: unknown): AiEducationLlmProviderPreset {

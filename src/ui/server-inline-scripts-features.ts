@@ -1127,7 +1127,7 @@ function renderFeaturesScript(language = "zh") {
       if (videoModelInput instanceof HTMLInputElement && document.activeElement !== videoModelInput) videoModelInput.value = toText(config.videoModel);
       if (videoBaseUrlInput instanceof HTMLInputElement && document.activeElement !== videoBaseUrlInput) videoBaseUrlInput.value = toText(config.videoBaseUrl);
       if (videoApiKeyInput instanceof HTMLInputElement) videoApiKeyInput.value = '';
-      if (pdfProviderInput instanceof HTMLSelectElement && document.activeElement !== pdfProviderInput) pdfProviderInput.value = toText(config.pdfProvider, 'unpdf');
+      if (pdfProviderInput instanceof HTMLSelectElement && document.activeElement !== pdfProviderInput) pdfProviderInput.value = toText(config.pdfProvider, 'opendataloader');
       if (pdfBaseUrlInput instanceof HTMLInputElement && document.activeElement !== pdfBaseUrlInput) pdfBaseUrlInput.value = toText(config.pdfBaseUrl);
       if (pdfApiKeyInput instanceof HTMLInputElement) pdfApiKeyInput.value = '';
       syncModePresentation(mode, educationState);
@@ -1206,7 +1206,7 @@ function renderFeaturesScript(language = "zh") {
         videoProviderPreset: videoProviderInput instanceof HTMLSelectElement ? toText(videoProviderInput.value, 'veo') : 'veo',
         videoModel: videoModelInput instanceof HTMLInputElement ? toText(videoModelInput.value) : '',
         videoBaseUrl: videoBaseUrlInput instanceof HTMLInputElement ? toText(videoBaseUrlInput.value) : '',
-        pdfProvider: pdfProviderInput instanceof HTMLSelectElement ? toText(pdfProviderInput.value, 'unpdf') : 'unpdf',
+        pdfProvider: pdfProviderInput instanceof HTMLSelectElement ? toText(pdfProviderInput.value, 'opendataloader') : 'opendataloader',
         pdfBaseUrl: pdfBaseUrlInput instanceof HTMLInputElement ? toText(pdfBaseUrlInput.value) : '',
       };
       const accessCode = accessCodeInput instanceof HTMLInputElement ? toText(accessCodeInput.value) : '';

@@ -1508,13 +1508,13 @@ function createFeatureRenderers(deps) {
       config.pdfProvider === "opendataloader"
         ? pickUiText(
             input.language,
-            "OpenDataLoader runs locally inside OpenMAIC and can optionally use a hybrid backend URL for OCR, formulas, and richer tables. It is not embedded as a separate child app UI.",
-            "OpenDataLoader \u9ED8\u8BA4\u5728 OpenMAIC \u5185\u672C\u5730\u8FD0\u884C\uff0c\u4E5F\u53EF\u9009\u914D\u7F6E hybrid backend URL \u6765\u589E\u5F3A OCR\u3001\u516C\u5F0F\u548C\u8868\u683C\u89E3\u6790\u3002\u5B83\u4E0D\u4F1A\u88AB\u5185\u5D4C\u6210\u72EC\u7ACB\u5B50\u5E94\u7528 UI\u3002",
+            "OpenDataLoader is the default local parser for AI Education. It runs inside OpenMAIC and can optionally use a hybrid backend URL for OCR, formulas, and richer tables. It is not embedded as a separate child app UI.",
+            "OpenDataLoader \u662F AI\u6559\u80B2\u9ED8\u8BA4\u7684\u672C\u5730\u89E3\u6790\u5668\u3002\u5B83\u5728 OpenMAIC \u5185\u8FD0\u884C\uff0c\u4E5F\u53EF\u9009\u914D\u7F6E hybrid backend URL \u6765\u589E\u5F3A OCR\u3001\u516C\u5F0F\u548C\u8868\u683C\u89E3\u6790\u3002\u5B83\u4E0D\u4F1A\u88AB\u5185\u5D4C\u6210\u72EC\u7ACB\u5B50\u5E94\u7528 UI\u3002",
           )
         : pickUiText(
             input.language,
-            "MinerU is treated as an optional local parsing backend for OpenMAIC. It is not embedded as a separate child app UI.",
-            "MinerU \u5728\u8FD9\u91CC\u53EA\u88AB\u5F53\u6210 OpenMAIC \u7684\u53EF\u9009\u672C\u5730\u89E3\u6790\u540E\u7AEF\uff0c\u4E0D\u4F1A\u88AB\u5185\u5D4C\u6210\u72EC\u7ACB\u5B50\u5E94\u7528 UI\u3002",
+            "MinerU is kept as an advanced parsing backend for OpenMAIC when you need a separate remote service. It is not embedded as a separate child app UI.",
+            "MinerU \u5728\u8FD9\u91CC\u88AB\u6536\u53E3\u6210 OpenMAIC \u7684\u9AD8\u7EA7\u89E3\u6790\u540E\u7AEF\u9009\u9879\uff0C\u9002\u5408\u4F60\u5DF2\u7ECF\u5355\u72EC\u90E8\u7F72\u8FDC\u7A0B\u670D\u52A1\u65F6\u4F7F\u7528\uff0C\u4E0D\u4F1A\u88AB\u5185\u5D4C\u6210\u72EC\u7ACB\u5B50\u5E94\u7528 UI\u3002",
           );
     const baseUrlLabel =
       config.pdfProvider === "opendataloader"
@@ -1546,9 +1546,9 @@ function createFeatureRenderers(deps) {
           <label class="geo-field">
             <span>${escapeHtml(pickUiText(input.language, "Parser", "\u89E3\u6790\u5668"))}</span>
             <select name="pdfProvider">
-              <option value="unpdf"${config.pdfProvider === "unpdf" ? " selected" : ""}>unpdf</option>
-              <option value="mineru"${config.pdfProvider === "mineru" ? " selected" : ""}>MinerU</option>
-              <option value="opendataloader"${config.pdfProvider === "opendataloader" ? " selected" : ""}>OpenDataLoader PDF</option>
+              <option value="opendataloader"${config.pdfProvider === "opendataloader" ? " selected" : ""}>OpenDataLoader PDF (Default)</option>
+              <option value="unpdf"${config.pdfProvider === "unpdf" ? " selected" : ""}>unpdf (Lightweight fallback)</option>
+              <option value="mineru"${config.pdfProvider === "mineru" ? " selected" : ""}>MinerU (Advanced)</option>
             </select>
           </label>
           <label class="geo-field">
