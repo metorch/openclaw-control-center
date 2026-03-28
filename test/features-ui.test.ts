@@ -162,8 +162,39 @@ test("feature hub keeps GEO as the first controlled card without mounting the wo
         mode: "operator_only",
         updatedAt: "2026-03-25T01:00:00.000Z",
       },
+      education: {
+        aiTakeoverEnabled: false,
+        mode: "operator_only",
+        updatedAt: "2026-03-25T01:00:00.000Z",
+      },
     },
     filters: { quick: "all" },
+    aiEducationState: {
+      config: {
+        mode: "self_hosted",
+        baseUrl: "http://127.0.0.1:3000",
+        repoDir: "",
+        accessCodeConfigured: false,
+      },
+      health: {
+        status: "unknown",
+        baseUrl: "http://127.0.0.1:3000",
+        capabilities: {
+          webSearch: false,
+          imageGeneration: false,
+          videoGeneration: false,
+          tts: false,
+        },
+      },
+      latestJob: {
+        status: "idle",
+      },
+      launchUrl: "http://127.0.0.1:3000",
+      embedUrl: "http://127.0.0.1:3000",
+      ready: true,
+      updatedAt: "2026-03-25T01:00:00.000Z",
+      version: 1,
+    },
     geoProjectRoot: "C:\\geo-root",
     geoState: {
       status: "idle",
@@ -181,10 +212,177 @@ test("feature hub keeps GEO as the first controlled card without mounting the wo
   assert(html.includes("GEO Suite"));
   assert(html.includes("Open GEO"));
   assert(html.includes("feature=geo"));
+  assert(html.includes("AI Education"));
+  assert(html.includes("Open AI Education"));
+  assert(html.includes("feature=education"));
   assert(html.includes("data-features-root"));
   assert(!html.includes('data-feature-toggle="geo"'));
-  assert(html.includes("one-click full-suite flow"));
+  assert(html.includes("Run the full GEO suite with one click"));
   assert(!html.includes("data-geo-workbench-root"));
+  assert(html.indexOf("feature=geo") < html.indexOf("feature=education"));
+});
+
+test("AI Education workbench renders the embedded shell instead of the old classroom job form", () => {
+  const html = featureRenderers.renderFeaturesSection({
+    compactStatusStrip: false,
+    feature: "education",
+    featureControl: {
+      education: {
+        aiTakeoverEnabled: true,
+        mode: "openclaw_ai_scoped",
+        updatedAt: "2026-03-27T08:00:00.000Z",
+      },
+    },
+    filters: { quick: "all" },
+    aiEducationState: {
+      config: {
+        mode: "self_hosted",
+        baseUrl: "http://127.0.0.1:3000",
+        repoDir: "C:\\openmaic",
+        accessCodeConfigured: false,
+        llmProviderPreset: "openai",
+        llmModel: "gpt-4.1-mini",
+        llmApiKeyConfigured: true,
+        llmBaseUrl: "https://api.openai.com/v1",
+        pdfProvider: "mineru",
+        pdfApiKeyConfigured: true,
+        pdfBaseUrl: "http://127.0.0.1:8888",
+      },
+      health: {
+        status: "ok",
+        checkedAt: "2026-03-27T08:10:00.000Z",
+        baseUrl: "http://127.0.0.1:3000",
+        message: "OpenMAIC is reachable.",
+        version: "1.0.0",
+        capabilities: {
+          webSearch: true,
+          imageGeneration: true,
+          videoGeneration: false,
+          tts: true,
+        },
+        pdfProviderVerification: {
+          status: "ok",
+          checkedAt: "2026-03-27T08:10:00.000Z",
+          message: "MinerU verification succeeded.",
+        },
+      },
+      latestJob: {
+        status: "succeeded",
+        jobId: "job-123",
+        step: "classroom_ready",
+        classroomUrl: "http://127.0.0.1:3000/classroom/abc",
+      },
+      openmaicConfigSync: {
+        status: "pending_restart",
+        updatedAt: "2026-03-27T08:10:00.000Z",
+        message: "Restart OpenMAIC to reload server providers.",
+      },
+      observedServerProviders: {
+        checkedAt: "2026-03-27T08:10:00.000Z",
+        providers: {
+          openai: {
+            models: ["gpt-4.1-mini"],
+          },
+        },
+        pdf: {
+          mineru: {
+            baseUrl: "http://127.0.0.1:8888",
+          },
+        },
+        tts: {},
+        asr: {},
+        image: {},
+        video: {},
+        webSearch: {},
+      },
+      launchUrl: "http://127.0.0.1:3000",
+      embedUrl: "http://127.0.0.1:3000",
+      ready: true,
+      updatedAt: "2026-03-27T08:10:00.000Z",
+      version: 1,
+    },
+    language: "en",
+    usageView: "cumulative",
+  });
+
+  assert(html.includes('data-ai-education-root'));
+  assert(html.includes('data-ai-education-iframe'));
+  assert(html.includes('data-ai-education-fullscreen-target'));
+  assert(html.includes('data-ai-education-fullscreen'));
+  assert(html.includes('data-ai-education-fullscreen-state'));
+  assert(html.includes('data-ai-education-embed-status'));
+  assert(html.includes('data-ai-education-reload-embed'));
+  assert(html.includes("Workspace controls"));
+  assert(html.includes("Fullscreen workspace"));
+  assert(html.includes("Open in new tab"));
+  assert(html.includes("Connection"));
+  assert(html.includes("LLM API"));
+  assert(html.includes("Document parsing"));
+  assert(html.includes("Runtime / sync status"));
+  assert(html.includes('data-ai-education-llm-form'));
+  assert(html.includes('data-ai-education-pdf-form'));
+  assert(html.includes('data-ai-education-apply-openmaic-config'));
+  assert(html.includes('data-ai-education-sync-status'));
+  assert(html.includes('data-ai-education-observed-providers'));
+  assert(html.includes("Write into OpenMAIC"));
+  assert(html.includes('data-feature-toggle="education"'));
+  assert(html.includes("AI takeover enabled"));
+  assert(html.indexOf('data-ai-education-fullscreen-target') < html.indexOf("Connection"));
+  assert(!html.includes('data-ai-education-job-form'));
+  assert(!html.includes("Generate classroom"));
+});
+
+test("AI Education workbench renders a fallback card and hosted recovery when local OpenMAIC is offline", () => {
+  const html = featureRenderers.renderFeaturesSection({
+    compactStatusStrip: false,
+    feature: "education",
+    featureControl: {
+      education: {
+        aiTakeoverEnabled: false,
+        mode: "operator_only",
+        updatedAt: "2026-03-27T08:00:00.000Z",
+      },
+    },
+    filters: { quick: "all" },
+    aiEducationState: {
+      config: {
+        mode: "self_hosted",
+        baseUrl: "http://127.0.0.1:3000",
+        repoDir: "",
+        accessCodeConfigured: false,
+      },
+      health: {
+        status: "error",
+        baseUrl: "http://127.0.0.1:3000",
+        message: "Local OpenMAIC is not reachable at http://127.0.0.1:3000. Start the local OpenMAIC service or switch to hosted OpenMAIC.",
+        capabilities: {
+          webSearch: false,
+          imageGeneration: false,
+          videoGeneration: false,
+          tts: false,
+        },
+      },
+      latestJob: {
+        status: "idle",
+      },
+      launchUrl: "http://127.0.0.1:3000",
+      embedUrl: "http://127.0.0.1:3000",
+      ready: false,
+      embedBlockedReason: "Local OpenMAIC is not reachable at http://127.0.0.1:3000. Start the local OpenMAIC service or switch to hosted OpenMAIC.",
+      updatedAt: "2026-03-27T08:10:00.000Z",
+      version: 1,
+    },
+    language: "en",
+    usageView: "cumulative",
+  });
+
+  assert(html.includes('data-ai-education-fallback'));
+  assert(html.includes("Embedded workspace unavailable"));
+  assert(html.includes("Local OpenMAIC is not reachable at http://127.0.0.1:3000."));
+  assert(html.includes("Use hosted now"));
+  assert(html.includes("Open hosted directly"));
+  assert(html.includes('src="about:blank"'));
+  assert(!html.includes('data-ai-education-job-form'));
 });
 
 test("GEO workbench renders the controlled run form, suite modules, artifacts, and preview affordances", () => {
@@ -289,6 +487,31 @@ test("GEO feature script stays scoped to the workbench APIs, suite modules, and 
   assert(script.includes("/api/features/geo/module/artifact?module="));
   assert(script.includes("/api/features/geo/run"));
   assert(script.includes("/api/features/geo/artifact?artifact="));
+  assert(script.includes("/api/features/education/state"));
+  assert(script.includes("/api/features/education/config"));
+  assert(script.includes("/api/features/education/health"));
+  assert(script.includes("/api/features/education/apply-openmaic-config"));
+  assert(script.includes("[data-ai-education-root]"));
+  assert(script.includes("data-ai-education-iframe"));
+  assert(script.includes("data-ai-education-reload-embed"));
+  assert(script.includes("data-ai-education-use-hosted"));
+  assert(script.includes("data-ai-education-fullscreen-target"));
+  assert(script.includes("data-ai-education-fullscreen"));
+  assert(script.includes("data-ai-education-fullscreen-state"));
+  assert(script.includes("data-ai-education-apply-openmaic-config"));
+  assert(script.includes("data-ai-education-sync-status"));
+  assert(script.includes("data-ai-education-observed-providers"));
+  assert(script.includes("const collectConfigBody = () => {"));
+  assert(script.includes("const applyOpenMaicConfig = async () => {"));
+  assert(script.includes("about:blank"));
+  assert(script.includes("contentWindow?.location?.href === 'about:blank'"));
+  assert(script.includes("const normalizeEmbedUrl = (value) => {"));
+  assert(script.includes("const syncIframeNavigation = (embedUrl, forceReload = false) => {"));
+  assert(script.includes("const canFullscreen = () => fullscreenTarget instanceof HTMLElement && typeof fullscreenTarget.requestFullscreen === 'function';"));
+  assert(script.includes("const toggleFullscreenWorkspace = async () => {"));
+  assert(script.includes("document.addEventListener('fullscreenchange', updateFullscreenUi);"));
+  assert(script.includes("applyState(saved, toText(saved.embedBlockedReason || saved.health?.message, l.reloadEmbed), true);"));
+  assert(!script.includes("if (iframeNode.src !== embedUrl) {"));
   assert(script.includes("window.__openclawGetMutationAuthState"));
   assert(script.includes("data-geo-advanced-tools"));
   assert(script.includes("openclaw:geo-suite:pending-refresh"));

@@ -185,7 +185,8 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
 
   const renderRooms = () => {
     const uploadsBusy = hasUploadingFiles();
-    if (!Array.isArray(state.rooms) || state.rooms.length === 0) {
+    const visibleRooms = sortRoomsForDisplay(state.rooms);
+    if (visibleRooms.length === 0) {
       roomTrigger.disabled = true;
       roomTriggerTitle.textContent = labels.noRooms;
       roomTriggerMeta.textContent = '';
@@ -195,7 +196,10 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
       return;
     }
     roomTrigger.disabled = uploadsBusy;
-    const activeRoom = state.rooms.find((room) => String(room.roomId || '') === state.activeRoomId) || state.rooms[0] || null;
+    const activeRoom =
+      visibleRooms.find((room) => String(room.roomId || '') === state.activeRoomId) ||
+      visibleRooms[0] ||
+      null;
     if (activeRoom && String(activeRoom.roomId || '') !== state.activeRoomId) {
       state.activeRoomId = String(activeRoom.roomId || '');
     }
@@ -203,7 +207,7 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     roomTriggerTitle.textContent = activeRoom && activeRoom.title ? activeRoom.title : labels.title;
     roomTriggerMeta.textContent = activeMeta.join(' | ');
     roomTriggerMeta.hidden = roomTriggerMeta.textContent.trim() === '';
-    roomList.innerHTML = state.rooms.map((room) => {
+    roomList.innerHTML = visibleRooms.map((room) => {
       const active = String(room.roomId || '') === state.activeRoomId;
       const metaParts = [formatRoomDate(room.updatedAt), formatRoomClock(room.updatedAt)].filter(Boolean);
       const switchDisabled = uploadsBusy;

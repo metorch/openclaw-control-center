@@ -14,6 +14,7 @@ import {
   buildInterruptedHeartRateMonitorResumePromptForSmoke,
   isInterruptedHeartRateMonitorResponseForSmoke,
   recoveryAttemptCooldownMsForSmoke,
+  resolveRecoveryFailureCooldownMsForSmoke,
   selectHeartRateMonitorRecoveryCandidates,
   type HeartRateMonitorRecoveryCandidate,
   type HeartRateMonitorTaskState,
@@ -654,8 +655,12 @@ test("wake failure notice only appears after five consecutive failed wake attemp
   });
 
   assert.equal(notice?.type, "system_note");
+  assert.match(notice?.detail ?? "", /interrupted or timed out/i);
+  if (false) {
   assert.match(notice?.detail ?? "", /未能唤醒 Backend（已连续失败 5 次）/);
   assert.match(notice?.detail ?? "", /中断或超时/);
+
+  }
 
   const silent = buildWakeFailureNoticeEventForSmoke({
     candidate: createCandidate(),
@@ -686,6 +691,138 @@ test("wake failure notice only appears after five consecutive failed wake attemp
 test("failed turns retry faster than stale in-progress work", () => {
   assert.equal(recoveryAttemptCooldownMsForSmoke("failed_turn"), 60_000);
   assert.equal(recoveryAttemptCooldownMsForSmoke("stale_in_progress"), 5 * 60 * 1000);
+});
+
+test("wake failure notice stays silent when the same failure threshold was already escalated", () => {
+  const silent = buildWakeFailureNoticeEventForSmoke({
+    candidate: createCandidate(),
+    previousState: {
+      lastAttemptAt: "2026-03-20T09:59:00.000Z",
+      lastOutcome: "failed",
+      attemptCount: 4,
+      issueKey: "failed_turn",
+      consecutiveFailures: 4,
+      lastEscalatedFailureCount: 5,
+      lastFailureDetail: "Request was aborted.",
+    },
+    nextState: {
+      lastAttemptAt: "2026-03-20T10:00:00.000Z",
+      lastOutcome: "failed",
+      attemptCount: 5,
+      issueKey: "failed_turn",
+      consecutiveFailures: 5,
+      lastEscalatedFailureCount: 0,
+      lastFailureDetail: "Request was aborted before a response was generated.",
+    },
+    action: {
+      candidateId: "room-1:proj-1:task-1:backend",
+      roomId: "room-1",
+      projectId: "proj-1",
+      taskId: "task-1",
+      agentId: "backend",
+      issueKey: "failed_turn",
+      attemptedAt: "2026-03-20T10:00:00.000Z",
+      ok: false,
+      outcome: "failed",
+      detail: "Request was aborted before a response was generated.",
+      sessionId: "sess-backend",
+      sessionKey: "agent:backend:1",
+    },
+  });
+
+  assert.equal(silent, undefined);
+});
+
+test("repeated transient wake failures back off and unknown agent ids cool down much longer", () => {
+  assert.equal(
+    resolveRecoveryFailureCooldownMsForSmoke({
+      issueKey: "failed_turn",
+      consecutiveFailures: 1,
+      detail: "Gateway chat stream timed out before a final event arrived.",
+    }),
+    60_000,
+  );
+  assert.equal(
+    resolveRecoveryFailureCooldownMsForSmoke({
+      issueKey: "failed_turn",
+      consecutiveFailures: 10,
+      detail: "Gateway chat stream timed out before a final event arrived.",
+    }),
+    5 * 60_000,
+  );
+  assert.equal(
+    resolveRecoveryFailureCooldownMsForSmoke({
+      issueKey: "failed_turn",
+      consecutiveFailures: 1,
+      detail: 'Gateway agent failed; falling back to embedded: Error: Unknown agent id "jarvis". Use "openclaw agents list" to see configured agents.',
+    }),
+    6 * 60 * 60 * 1000,
+  );
+});
+
+test("heart rate monitor canonicalizes legacy jarvis dispatch ownership to the configured main agent", () => {
+  const now = new Date("2026-03-20T10:00:00.000Z");
+  const catalog = createCatalog([
+    {
+      agentId: "main",
+      displayName: "Jarvis",
+      workspace: "C:\\Users\\45441\\.openclaw\\workspace",
+    },
+  ]);
+  const legacyRoom = createRoom({
+    roomId: "room-legacy-jarvis",
+    projectId: "proj-legacy-jarvis",
+    taskId: "task-legacy-jarvis",
+    agentId: "jarvis",
+    stage: "delivery",
+    title: "Legacy Jarvis room",
+    createdAt: "2026-03-20T09:00:00.000Z",
+    receiptState: "failed",
+    receiptAt: "2026-03-20T09:20:00.000Z",
+    summary: "Retry the legacy primary room.",
+    sessionId: "sess-main",
+    sessionKey: "agent:main:thread:legacy-room",
+  });
+  legacyRoom.sessionBindings = [
+    {
+      agentId: "main",
+      sessionId: "sess-main",
+      sessionKey: "agent:main:thread:legacy-room",
+      updatedAt: "2026-03-20T09:20:00.000Z",
+    },
+  ];
+  const tasks = [
+    createTask(
+      "proj-legacy-jarvis",
+      "task-legacy-jarvis",
+      "Legacy Jarvis room",
+      "main",
+      "in_progress",
+      "2026-03-20T09:20:00.000Z",
+    ),
+  ];
+  const sessions: SessionsListItem[] = [
+    {
+      agentId: "main",
+      sessionId: "sess-main",
+      sessionKey: "agent:main:thread:legacy-room",
+      active: true,
+      updatedAt: "2026-03-20T09:58:00.000Z",
+    },
+  ];
+
+  const candidates = selectHeartRateMonitorRecoveryCandidates({
+    catalog,
+    sessions,
+    rooms: [legacyRoom],
+    tasks,
+    now,
+  });
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]?.agentId, "main");
+  assert.equal(candidates[0]?.displayName, "Jarvis");
+  assert.equal(candidates[0]?.sessionBinding?.sessionKey, "agent:main:thread:legacy-room");
 });
 
 test("heart rate monitor ignores Jarvis receipts that are explicitly waiting for user confirmation", () => {

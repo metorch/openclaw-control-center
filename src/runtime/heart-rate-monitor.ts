@@ -27,6 +27,7 @@ import {
   type CurrentAgentCatalog,
   type CurrentAgentCatalogEntry,
 } from "./current-agent-catalog";
+import { isPrimaryOperatorAgentId } from "./operator-display";
 import { isInternalMonitorAgentId } from "./system-agent-ids";
 import { updateTaskStatus } from "./task-store";
 import type { ProjectTask } from "../types";
@@ -85,6 +86,7 @@ export interface HeartRateMonitorTaskState {
   consecutiveFailures?: number;
   lastEscalatedFailureCount?: number;
   lastFailureDetail?: string;
+  nextAttemptNotBeforeAt?: string;
 }
 
 export interface HeartRateMonitorPersistentState {
@@ -364,8 +366,9 @@ export function selectHeartRateMonitorRecoveryCandidates(input: {
   const catalogByAgent = new Map(
     input.catalog.entries.map((entry) => [normalizeAgentId(entry.agentId), entry] as const),
   );
+  const primaryAgentId = input.catalog.primaryAgentId ?? "main";
   const latestPrimaryTaskIdsByRoom = new Map(
-    input.rooms.map((room) => [room.roomId, resolveLatestPrimaryDispatchTaskId(room, input.catalog.primaryAgentId ?? "main")] as const),
+    input.rooms.map((room) => [room.roomId, resolveLatestPrimaryDispatchTaskId(room, primaryAgentId)] as const),
   );
   const sessionsByAgent = new Map<string, SessionsListItem[]>();
   for (const session of input.sessions) {
@@ -379,12 +382,19 @@ export function selectHeartRateMonitorRecoveryCandidates(input: {
   const strongestByAgent = new Map<string, HeartRateMonitorRecoveryCandidate>();
   for (const room of input.rooms) {
     for (const dispatch of room.dispatchRecords) {
-      const normalizedAgentId = normalizeAgentId(dispatch.ownerAgentId);
+      const resolvedEntry = resolveRecoveryCatalogEntry({
+        catalogByAgent,
+        catalogEntries: input.catalog.entries,
+        dispatchAgentId: dispatch.ownerAgentId,
+        primaryAgentId,
+      });
+      const canonicalAgentId = resolvedEntry?.agentId ?? dispatch.ownerAgentId;
+      const normalizedAgentId = normalizeAgentId(canonicalAgentId);
       if (!normalizedAgentId || isMonitorAgentId(normalizedAgentId)) continue;
       if (
         shouldIgnoreHistoricalPrimaryDispatch({
           dispatch,
-          primaryAgentId: input.catalog.primaryAgentId ?? "main",
+          primaryAgentId,
           latestPrimaryTaskId: latestPrimaryTaskIdsByRoom.get(room.roomId),
         })
       ) {
@@ -402,30 +412,29 @@ export function selectHeartRateMonitorRecoveryCandidates(input: {
         room,
         dispatch,
         receipt,
-        primaryAgentId: input.catalog.primaryAgentId ?? "main",
+        primaryAgentId,
       });
       const stablePrimaryReplyWithoutFollowUp = hasStablePrimaryReplyWithoutFollowUp({
         room,
         dispatch,
         receipt,
         task,
-        primaryAgentId: input.catalog.primaryAgentId ?? "main",
+        primaryAgentId,
       });
       const issueKey = resolveRecoveryIssueKey(receipt, task, heartbeatAgeMs, {
         waitingForUserConfirmation,
         stablePrimaryReplyWithoutFollowUp,
       });
       if (!issueKey) continue;
-      const entry = catalogByAgent.get(normalizedAgentId);
-      const workspaceRoot = resolveAgentWorkspaceRoot(entry, dispatch.ownerAgentId);
+      const workspaceRoot = resolveAgentWorkspaceRoot(resolvedEntry, canonicalAgentId);
       const candidate: HeartRateMonitorRecoveryCandidate = {
-        candidateId: `${room.roomId}:${dispatch.projectId}:${dispatch.taskId}:${normalizedAgentId}`,
+        candidateId: `${room.roomId}:${dispatch.projectId}:${dispatch.taskId}:${normalizeRecoveryAgentKey(canonicalAgentId)}`,
         issueKey,
         roomId: room.roomId,
         projectId: dispatch.projectId,
         taskId: dispatch.taskId,
-        agentId: dispatch.ownerAgentId,
-        displayName: entry?.displayName ?? dispatch.ownerAgentId,
+        agentId: canonicalAgentId,
+        displayName: resolvedEntry?.displayName ?? dispatch.ownerAgentId,
         workspaceRoot,
         stage: dispatch.stage,
         title: dispatch.title,
@@ -439,9 +448,12 @@ export function selectHeartRateMonitorRecoveryCandidates(input: {
         heartbeatAgeMs,
         lastResultState: receipt?.lastResultState,
         reviewState: receipt?.reviewState,
-        sessionBinding:
-          room.sessionBindings.find((binding) => normalizeAgentId(binding.agentId) === normalizedAgentId) ??
-          guessBestSessionBinding(sessionsByAgent.get(normalizedAgentId) ?? []),
+        sessionBinding: resolveRecoverySessionBinding({
+          room,
+          agentId: canonicalAgentId,
+          fallbackAgentId: dispatch.ownerAgentId,
+          sessionsByAgent,
+        }),
       };
       const previous = strongestByAgent.get(normalizedAgentId);
       if (!previous || compareRecoveryCandidates(candidate, previous) < 0) {
@@ -526,6 +538,105 @@ function isInterruptedHeartRateMonitorResponse(
 
 function recoveryAttemptCooldownMs(issueKey: HeartRateMonitorRecoveryCandidate["issueKey"]): number {
   return issueKey === "failed_turn" ? FAILED_TURN_RETRY_COOLDOWN_MS : STALE_IN_PROGRESS_RETRY_COOLDOWN_MS;
+}
+
+function resolveRecoveryFailureCooldownMs(input: {
+  issueKey: HeartRateMonitorRecoveryCandidate["issueKey"];
+  consecutiveFailures: number;
+  detail?: string;
+}): number {
+  const baseCooldownMs = recoveryAttemptCooldownMs(input.issueKey);
+  const consecutiveFailures = Math.max(1, Math.trunc(input.consecutiveFailures || 1));
+  const normalizedDetail = String(input.detail || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+  if (
+    /unknown agent id|use "openclaw agents list"|does not support --session-key|not support --session-key/i.test(
+      normalizedDetail,
+    )
+  ) {
+    return 6 * 60 * 60 * 1000;
+  }
+
+  const transientUpstreamFailure = /gateway|bad gateway|temporarily overloaded|temporarily unavailable|upstream|timed out|timeout|econnrefused|connection refused|not connected|was aborted|interrupted/i.test(
+    normalizedDetail,
+  );
+  if (!transientUpstreamFailure) {
+    return baseCooldownMs;
+  }
+
+  if (consecutiveFailures >= 50) {
+    return Math.min(60 * 60 * 1000, baseCooldownMs * 60);
+  }
+  if (consecutiveFailures >= 20) {
+    return Math.min(30 * 60 * 1000, baseCooldownMs * 15);
+  }
+  if (consecutiveFailures >= 10) {
+    return Math.min(15 * 60 * 1000, baseCooldownMs * 5);
+  }
+  if (consecutiveFailures >= 5) {
+    return Math.min(5 * 60 * 1000, baseCooldownMs * 3);
+  }
+  return baseCooldownMs;
+}
+
+function normalizeRecoveryAgentKey(value: string | undefined): string {
+  return normalizeAgentId(value);
+}
+
+function sameRecoveryAgentIdentity(left: string | undefined, right: string | undefined): boolean {
+  const leftKey = normalizeRecoveryAgentKey(left);
+  const rightKey = normalizeRecoveryAgentKey(right);
+  if (!leftKey || !rightKey) {
+    return false;
+  }
+  return leftKey === rightKey || (isPrimaryOperatorAgentId(leftKey) && isPrimaryOperatorAgentId(rightKey));
+}
+
+function resolveRecoveryCatalogEntry(input: {
+  catalogByAgent: Map<string, CurrentAgentCatalogEntry>;
+  catalogEntries: CurrentAgentCatalogEntry[];
+  dispatchAgentId: string;
+  primaryAgentId: string;
+}): CurrentAgentCatalogEntry | undefined {
+  const dispatchKey = normalizeRecoveryAgentKey(input.dispatchAgentId);
+  if (!dispatchKey) {
+    return undefined;
+  }
+  const exact = input.catalogByAgent.get(dispatchKey);
+  if (exact) {
+    return exact;
+  }
+  if (isPrimaryOperatorAgentId(dispatchKey)) {
+    const primary = input.catalogByAgent.get(normalizeRecoveryAgentKey(input.primaryAgentId));
+    if (primary) {
+      return primary;
+    }
+    return input.catalogEntries.find((entry) => isPrimaryOperatorAgentId(entry.agentId));
+  }
+  return undefined;
+}
+
+function resolveRecoverySessionBinding(input: {
+  room: CollaborationRoomState;
+  agentId: string;
+  fallbackAgentId: string;
+  sessionsByAgent: Map<string, SessionsListItem[]>;
+}): CollaborationSessionBinding | undefined {
+  const roomBinding = input.room.sessionBindings.find((binding) =>
+    sameRecoveryAgentIdentity(binding.agentId, input.agentId) ||
+    sameRecoveryAgentIdentity(binding.agentId, input.fallbackAgentId),
+  );
+  if (roomBinding) {
+    return roomBinding;
+  }
+
+  const matchingSessions = [...input.sessionsByAgent.entries()]
+    .filter(([agentKey]) =>
+      sameRecoveryAgentIdentity(agentKey, input.agentId) ||
+      sameRecoveryAgentIdentity(agentKey, input.fallbackAgentId),
+    )
+    .flatMap(([, sessions]) => sessions);
+  return guessBestSessionBinding(matchingSessions);
 }
 
 async function recoverHeartRateCandidate(input: {
@@ -937,6 +1048,18 @@ function buildNextMonitorTaskState(
       ? Math.max(0, Math.trunc(previous.consecutiveFailures ?? 1))
       : 0;
   const consecutiveFailures = action.outcome === "failed" ? previousFailures + 1 : 0;
+  const attemptedAtMs = Date.parse(action.attemptedAt);
+  const nextAttemptNotBeforeAt =
+    action.outcome === "failed"
+      ? new Date(
+          (Number.isFinite(attemptedAtMs) ? attemptedAtMs : Date.now()) +
+            resolveRecoveryFailureCooldownMs({
+              issueKey,
+              consecutiveFailures,
+              detail: action.detail,
+            }),
+        ).toISOString()
+      : undefined;
   return {
     lastAttemptAt: action.attemptedAt,
     lastOutcome: action.outcome,
@@ -947,6 +1070,7 @@ function buildNextMonitorTaskState(
       ? Math.max(0, Math.trunc(previous?.lastEscalatedFailureCount ?? 0))
       : 0,
     lastFailureDetail: action.outcome === "failed" ? action.detail : undefined,
+    nextAttemptNotBeforeAt,
   };
 }
 
@@ -981,6 +1105,7 @@ function buildWakeFailureNoticeEvent(input: {
   });
 }
 
+/* legacy-encoded failure mapping kept commented out to avoid parser issues.
 function humanizeWakeFailureReason(detail: string | undefined): string {
   const normalized = String(detail || "").replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -988,6 +1113,9 @@ function humanizeWakeFailureReason(detail: string | undefined): string {
   }
   if (/unknown option '--session-key'/i.test(normalized)) {
     return "当前 OpenClaw CLI 不支持会话续接参数。";
+  }
+  if (/unknown agent id/i.test(normalized)) {
+    return "褰撳墠鎴块棿缁戝畾鐨勫憳宸?ID 宸茶繃鏃讹紝闇€瑕佹槧灏勫埌褰撳墠 OpenClaw 閰嶇疆銆?;
   }
   if (/spawn openclaw .*enoent/i.test(normalized) || /not found/i.test(normalized)) {
     return "本机没有成功调用 OpenClaw CLI。";
@@ -1000,6 +1128,33 @@ function humanizeWakeFailureReason(detail: string | undefined): string {
   }
   if (/aborted|timed out|timeout|interrupted/i.test(normalized)) {
     return "上游请求反复中断或超时。";
+  }
+  return normalized.slice(0, 180);
+}
+
+*/
+function humanizeWakeFailureReason(detail: string | undefined): string {
+  const normalized = String(detail || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "No clear failure reason was captured.";
+  }
+  if (/unknown option '--session-key'/i.test(normalized)) {
+    return "This OpenClaw CLI build does not support session-key resume.";
+  }
+  if (/unknown agent id/i.test(normalized)) {
+    return "The room still points at an outdated employee id and needs remapping to the current OpenClaw config.";
+  }
+  if (/spawn openclaw .*enoent/i.test(normalized) || /not found/i.test(normalized)) {
+    return "The local OpenClaw CLI executable could not be started.";
+  }
+  if (/502|bad gateway|gateway/i.test(normalized)) {
+    return "The upstream model service is temporarily unavailable.";
+  }
+  if (/session lock|stale lock|lock owner|lock conflict/i.test(normalized)) {
+    return "The session is still locked and cannot be resumed safely yet.";
+  }
+  if (/aborted|timed out|timeout|interrupted/i.test(normalized)) {
+    return "The upstream request was interrupted or timed out repeatedly.";
   }
   return normalized.slice(0, 180);
 }
@@ -1121,6 +1276,14 @@ export function recoveryAttemptCooldownMsForSmoke(
   return recoveryAttemptCooldownMs(issueKey);
 }
 
+export function resolveRecoveryFailureCooldownMsForSmoke(input: {
+  issueKey: HeartRateMonitorRecoveryCandidate["issueKey"];
+  consecutiveFailures: number;
+  detail?: string;
+}): number {
+  return resolveRecoveryFailureCooldownMs(input);
+}
+
 export function buildFailedRecoveryReceiptForSmoke(input: {
   candidate: Pick<HeartRateMonitorRecoveryCandidate, "agentId" | "projectId" | "stage" | "taskId" | "title">;
   existingReceipt?: CollaborationTaskReceipt;
@@ -1153,7 +1316,11 @@ function buildCollaborationStatusByAgent(
 
   for (const room of rooms) {
     for (const dispatch of room.dispatchRecords) {
-      const agentId = normalizeAgentId(dispatch.ownerAgentId);
+      const rawAgentId = normalizeRecoveryAgentKey(dispatch.ownerAgentId);
+      const agentId =
+        rawAgentId && isPrimaryOperatorAgentId(rawAgentId)
+          ? normalizeRecoveryAgentKey(primaryAgentId) || rawAgentId
+          : rawAgentId;
       if (!agentId) continue;
       if (
         shouldIgnoreHistoricalPrimaryDispatch({
@@ -1380,6 +1547,10 @@ function isCandidateCoolingDown(
   const previous = state.tasks[candidate.candidateId];
   if (!previous) return false;
   if (previous.issueKey !== candidate.issueKey) return false;
+  const nextAttemptNotBeforeAtMs = Date.parse(String(previous.nextAttemptNotBeforeAt || ""));
+  if (Number.isFinite(nextAttemptNotBeforeAtMs)) {
+    return now.getTime() < nextAttemptNotBeforeAtMs;
+  }
   const lastAttemptAtMs = Date.parse(previous.lastAttemptAt);
   if (!Number.isFinite(lastAttemptAtMs)) return false;
   return now.getTime() - lastAttemptAtMs < recoveryAttemptCooldownMs(candidate.issueKey);

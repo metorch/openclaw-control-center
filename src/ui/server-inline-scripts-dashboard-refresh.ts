@@ -24,6 +24,8 @@ function renderDashboardRefreshScript(language, options) {
   }
 
   const generatedAtRaw = (document.body?.dataset.refreshGeneratedAt || '').trim();
+  const dashboardSection = (document.body?.dataset.dashboardSection || '').trim();
+  const autoRefreshDisabledForPage = dashboardSection === 'features';
   const settingsKey = 'openclaw:dashboard-refresh:v1';
   const scrollKey = 'openclaw:dashboard-refresh-scroll:v1';
   const refreshEndpoint = '/api/dashboard/refresh';
@@ -58,6 +60,7 @@ function renderDashboardRefreshScript(language, options) {
     mutationUpdating: ${JSON.stringify(pickUiText(language, "Updating write access...", "\u6B63\u5728\u66F4\u65B0\u5199\u5165\u89E3\u9501..."))},
     mutationFailed: ${JSON.stringify(pickUiText(language, "Failed to update write access.", "\u66F4\u65B0\u5199\u5165\u89E3\u9501\u5931\u8D25\u3002"))},
     waitingForTab: ${JSON.stringify(pickUiText(language, "Auto refresh is waiting for this tab to become active.", "\u81EA\u52A8\u5237\u65B0\u7B49\u5F85\u5F53\u524D\u6807\u7B7E\u9875\u6062\u590D\u6D3B\u52A8\u3002"))},
+    featurePageDisabled: ${JSON.stringify(pickUiText(language, "Feature pages do not participate in dashboard auto refresh.", "\u529F\u80FD\u9875\u4E0D\u53C2\u4E0E\u770B\u677F\u81EA\u52A8\u5237\u65B0\u3002"))},
     pausedByDraft: ${JSON.stringify(pickUiText(language, "Auto refresh paused because there are unsaved edits.", "\u6709\u672A\u4FDD\u5B58\u6539\u52A8\uFF0C\u81EA\u52A8\u5237\u65B0\u5DF2\u6682\u505C\u3002"))},
     nextIn: ${JSON.stringify(pickUiText(language, "Next refresh in", "\u4E0B\u6B21\u5237\u65B0\u8FD8\u6709"))},
     lastUpdated: ${JSON.stringify(pickUiText(language, "Last updated", "\u6700\u8FD1\u66F4\u65B0\u65F6\u95F4"))},
@@ -164,8 +167,9 @@ function renderDashboardRefreshScript(language, options) {
     return mutationState.unlocked ? l.writeButtonOn : l.writeButtonOff;
   };
   const syncControls = () => {
-    autoToggle.textContent = enabled ? l.autoButtonOn : l.autoButtonOff;
-    autoToggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    const autoEnabled = autoRefreshDisabledForPage ? false : enabled;
+    autoToggle.textContent = autoEnabled ? l.autoButtonOn : l.autoButtonOff;
+    autoToggle.setAttribute('aria-pressed', autoEnabled ? 'true' : 'false');
     mutationToggle.textContent = mutationButtonLabel();
     mutationToggle.setAttribute(
       'aria-pressed',
@@ -173,9 +177,9 @@ function renderDashboardRefreshScript(language, options) {
     );
     intervalSelect.value = String(intervalSeconds);
     refreshButton.disabled = refreshing || mutationUpdating;
-    autoToggle.disabled = refreshing || mutationUpdating;
+    autoToggle.disabled = autoRefreshDisabledForPage || refreshing || mutationUpdating;
     mutationToggle.disabled = refreshing || mutationUpdating || (mutationState.gateRequired && !mutationState.tokenConfigured);
-    intervalSelect.disabled = refreshing || mutationUpdating;
+    intervalSelect.disabled = autoRefreshDisabledForPage || refreshing || mutationUpdating;
   };
   const parseRefreshError = async (response) => {
     try {
@@ -250,6 +254,10 @@ function renderDashboardRefreshScript(language, options) {
       return;
     }
     const updatedLabel = formatGeneratedAt(generatedAtRaw);
+    if (autoRefreshDisabledForPage) {
+      setStatus(l.featurePageDisabled + ' \xB7 ' + l.lastUpdated + ' ' + updatedLabel);
+      return;
+    }
     if (!enabled) {
       setStatus(l.autoOff + ' \xB7 ' + l.lastUpdated + ' ' + updatedLabel);
       return;
@@ -367,6 +375,11 @@ function renderDashboardRefreshScript(language, options) {
     void triggerRefresh('manual');
   });
   autoToggle.addEventListener('click', () => {
+    if (autoRefreshDisabledForPage) {
+      enabled = false;
+      updateStatus();
+      return;
+    }
     enabled = !enabled;
     persistSettings();
     startTicker();
@@ -375,6 +388,11 @@ function renderDashboardRefreshScript(language, options) {
     void toggleMutationUnlock();
   });
   intervalSelect.addEventListener('change', () => {
+    if (autoRefreshDisabledForPage) {
+      intervalSelect.value = String(intervalSeconds);
+      updateStatus();
+      return;
+    }
     const nextInterval = Number(intervalSelect.value);
     intervalSeconds = allowedIntervals.includes(nextInterval) ? nextInterval : 30;
     persistSettings();
@@ -388,6 +406,9 @@ function renderDashboardRefreshScript(language, options) {
   });
 
   loadSettings();
+  if (autoRefreshDisabledForPage) {
+    enabled = false;
+  }
   restoreScrollPosition();
   syncControls();
   if (enabled) {

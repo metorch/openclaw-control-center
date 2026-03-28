@@ -1745,6 +1745,7 @@ test("collaboration source includes primary dispatcher filter and floating room 
   assert(widgetHtml.includes('window.__openclawSetRefreshGuard'));
   assert(widgetHtml.includes('@media (max-width: 480px)'));
   assert(widgetHtml.includes('grid-template-columns: minmax(0, 1fr);'));
+  assert(widgetHtml.includes('grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto;'));
   assert(widgetHtml.includes('data-collab-room-trigger'));
   assert(widgetHtml.includes('data-room-delete'));
   assert(widgetHtml.includes('data-collab-chat-delete-dialog'));
@@ -1769,6 +1770,9 @@ test("collaboration source includes primary dispatcher filter and floating room 
   assert(widgetPreludeSource.includes("autoRefresh: state.autoRefresh,"));
   assert(widgetPreludeSource.includes("if (includeRoomViewState && isPersistableRoomId(state.activeRoomId)) {"));
   assert(widgetPreludeSource.includes("/^[a-z0-9._-]{1,120}$/i"));
+  assert(widgetPreludeSource.includes("const sortRoomsForDisplay = (rooms, pinnedRoomId = state.activeRoomId) => {"));
+  assert(widgetActionsSource.includes("state.rooms = sortRoomsForDisplay(Array.isArray(room.rooms) ? room.rooms : [], payloadRoomId || state.activeRoomId);"));
+  assert(widgetActionsSource.includes("state.rooms = sortRoomsForDisplay(payload.rooms);"));
   assert(widgetRenderingSource.includes('data-upload-retry'));
   assert(widgetRenderingSource.includes('collab-chat-upload-error'));
   assert(widgetRenderingSource.includes('collab-chat-rich-preview'));
@@ -1778,6 +1782,7 @@ test("collaboration source includes primary dispatcher filter and floating room 
   assert(widgetRenderingSource.includes("const stoppedPending = pendingEvent && event.pendingState === 'stopped';"));
   assert(widgetRenderingSource.includes("if (stoppedPending) {"));
   assert(widgetRenderingSource.includes("if (persist && shouldPersistRoomViewState()) schedulePreferenceSave({ includeRoomViewState: true });"));
+  assert(widgetRenderingSource.includes("const visibleRooms = sortRoomsForDisplay(state.rooms);"));
   assert(widgetBootSource.includes("inputNode.addEventListener('paste'"));
   assert(widgetBootSource.includes("panel.addEventListener('drop'"));
   assert(widgetBootSource.includes("document.addEventListener('dragover'"));

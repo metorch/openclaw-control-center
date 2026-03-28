@@ -42,8 +42,10 @@ const import_chat_markdown = require("../runtime/chat-markdown");
 const import_audit_timeline = require("../runtime/audit-timeline");
 const import_digest_renderer = require("../runtime/digest-renderer");
 const import_export_bundle = require("../runtime/export-bundle");
+const import_ai_education = require("../runtime/ai-education");
 const import_feature_control = require("../runtime/feature-control");
 const import_geo_audit = require("../runtime/geo-audit");
+const import_geo_feature_snapshot = require("../runtime/geo-feature-snapshot");
 const import_geo_suite = require("../runtime/geo-suite");
 const import_healthz = require("../runtime/healthz");
 const import_import_live = require("../runtime/import-live");
@@ -248,6 +250,8 @@ const DASHBOARD_SECTIONS = ["overview", "calendar", "team", "collaboration", "me
 const CONTROL_CENTER_MAPPING_TASK_IDS = new Set(["due-fast", "todo-second", "already-running", "unassigned"]);
 const LEGACY_DASHBOARD_ROUTE_SECTION = { "/calendar": "projects-tasks", "/heartbeat": "overview", "/tools": "settings" };
 const LEGACY_DASHBOARD_ROUTE_ANCHOR = { "/calendar": "calendar-board", "/heartbeat": "heartbeat-health", "/tools": "tool-connectors" };
+(0, import_ai_education.ensureAiEducationBackgroundRefreshLoop)();
+(0, import_geo_feature_snapshot.ensureGeoFeatureSnapshotLoop)();
 function resolveOpenClawWorkspaceRootForSmoke(input) {
     return resolveOpenClawWorkspaceRootForSmokeImpl(input);
 }
@@ -1126,10 +1130,150 @@ function startUiServer(port, toolClient) {
                 }
                 return writeJson(res, 200, { ok: true, scope, entry: saved.entry, content: saved.content });
             }
+            if (method === "GET" && path === "/api/features/education/state") {
+                assertAllowedQueryParams(url.searchParams, [], true);
+                const state = await (0, import_ai_education.loadAiEducationState)();
+                return writeJson(res, 200, { ok: true, path: state.path, state: state.state, issues: state.issues });
+            }
+            if (method === "PATCH" && path === "/api/features/education/config") {
+                assertMutationAuthorized(req, "/api/features/education/config");
+                assertJsonContentType(req);
+                const payload = expectObject(await readJsonBody(req), "ai education config payload");
+                const modeValue = optionalBoundedString(payload.mode, "mode", 40)?.toLowerCase();
+                const mode = modeValue === "hosted" || modeValue === "self_hosted" ? modeValue : void 0;
+                if (modeValue && !mode) {
+                    throw new RequestValidationError("mode must be hosted or self_hosted.", 400);
+                }
+                const baseUrl = optionalBoundedString(payload.baseUrl, "baseUrl", 4096);
+                if (baseUrl && mode !== "hosted") {
+                    try {
+                        const parsed = new URL(baseUrl);
+                        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                            throw new Error("invalid protocol");
+                        }
+                    } catch {
+                        throw new RequestValidationError("baseUrl must be a valid http or https URL.", 400);
+                    }
+                }
+                const repoDir = optionalBoundedString(payload.repoDir, "repoDir", 4096);
+                const accessCode = optionalBoundedString(payload.accessCode, "accessCode", 4096);
+                const llmProviderPreset = optionalBoundedString(payload.llmProviderPreset, "llmProviderPreset", 80)?.toLowerCase();
+                if (llmProviderPreset && !import_ai_education.AI_EDUCATION_LLM_PROVIDER_PRESETS.includes(llmProviderPreset)) {
+                    throw new RequestValidationError("llmProviderPreset is not supported.", 400);
+                }
+                const llmModel = optionalBoundedString(payload.llmModel, "llmModel", 240);
+                const llmApiKey = optionalBoundedString(payload.llmApiKey, "llmApiKey", 8192);
+                const llmBaseUrl = optionalBoundedString(payload.llmBaseUrl, "llmBaseUrl", 4096);
+                if (llmBaseUrl) {
+                    try {
+                        const parsed = new URL(llmBaseUrl);
+                        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                            throw new Error("invalid protocol");
+                        }
+                    } catch {
+                        throw new RequestValidationError("llmBaseUrl must be a valid http or https URL.", 400);
+                    }
+                }
+                const pdfProvider = optionalBoundedString(payload.pdfProvider, "pdfProvider", 40)?.toLowerCase();
+                if (pdfProvider && pdfProvider !== "unpdf" && pdfProvider !== "mineru") {
+                    throw new RequestValidationError("pdfProvider must be unpdf or mineru.", 400);
+                }
+                const pdfApiKey = optionalBoundedString(payload.pdfApiKey, "pdfApiKey", 8192);
+                const pdfBaseUrl = optionalBoundedString(payload.pdfBaseUrl, "pdfBaseUrl", 4096);
+                if (pdfBaseUrl) {
+                    try {
+                        const parsed = new URL(pdfBaseUrl);
+                        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                            throw new Error("invalid protocol");
+                        }
+                    } catch {
+                        throw new RequestValidationError("pdfBaseUrl must be a valid http or https URL.", 400);
+                    }
+                }
+                if (payload.clearAccessCode !== undefined && typeof payload.clearAccessCode !== "boolean") {
+                    throw new RequestValidationError("clearAccessCode must be a boolean when provided.", 400);
+                }
+                if (payload.clearLlmApiKey !== undefined && typeof payload.clearLlmApiKey !== "boolean") {
+                    throw new RequestValidationError("clearLlmApiKey must be a boolean when provided.", 400);
+                }
+                if (payload.clearPdfApiKey !== undefined && typeof payload.clearPdfApiKey !== "boolean") {
+                    throw new RequestValidationError("clearPdfApiKey must be a boolean when provided.", 400);
+                }
+                const saved = await (0, import_ai_education.patchAiEducationConfig)({
+                    mode,
+                    baseUrl,
+                    repoDir,
+                    accessCode,
+                    clearAccessCode: payload.clearAccessCode === true,
+                    llmProviderPreset,
+                    llmModel,
+                    llmApiKey,
+                    clearLlmApiKey: payload.clearLlmApiKey === true,
+                    llmBaseUrl,
+                    pdfProvider,
+                    pdfApiKey,
+                    clearPdfApiKey: payload.clearPdfApiKey === true,
+                    pdfBaseUrl
+                });
+                return writeJson(res, 200, { ok: true, path: saved.path, state: saved.state, issues: saved.issues });
+            }
+            if (method === "POST" && path === "/api/features/education/health") {
+                assertAllowedQueryParams(url.searchParams, [], true);
+                const state = await (0, import_ai_education.checkAiEducationHealth)();
+                return writeJson(res, 200, { ok: true, path: state.path, state: state.state, issues: state.issues });
+            }
+            if (method === "POST" && path === "/api/features/education/apply-openmaic-config") {
+                assertMutationAuthorized(req, "/api/features/education/apply-openmaic-config");
+                assertAllowedQueryParams(url.searchParams, [], true);
+                const saved = await (0, import_ai_education.applyAiEducationOpenMaicConfig)();
+                return writeJson(res, 200, { ok: true, path: saved.path, state: saved.state, issues: saved.issues, syncStatus: saved.syncStatus, configPath: saved.configPath });
+            }
+            if (method === "POST" && path === "/api/features/education/job") {
+                assertMutationAuthorized(req, "/api/features/education/job");
+                assertJsonContentType(req);
+                const payload = expectObject(await readJsonBody(req), "ai education job payload");
+                const requirement = requiredBoundedString(payload.requirement, "requirement", 24000);
+                const language = optionalBoundedString(payload.language, "language", 16);
+                if (language && language !== "zh-CN" && language !== "en-US") {
+                    throw new RequestValidationError("language must be zh-CN or en-US when provided.", 400);
+                }
+                const agentMode = optionalBoundedString(payload.agentMode, "agentMode", 40);
+                if (agentMode && agentMode !== "default" && agentMode !== "generate") {
+                    throw new RequestValidationError("agentMode must be default or generate when provided.", 400);
+                }
+                const booleanFields = ["enableWebSearch", "enableImageGeneration", "enableVideoGeneration", "enableTTS"];
+                for (const field of booleanFields) {
+                    if (payload[field] !== undefined && typeof payload[field] !== "boolean") {
+                        throw new RequestValidationError(`${field} must be a boolean when provided.`, 400);
+                    }
+                }
+                const state = await (0, import_ai_education.startAiEducationJob)({
+                    requirement,
+                    language,
+                    enableWebSearch: payload.enableWebSearch === true,
+                    enableImageGeneration: payload.enableImageGeneration === true,
+                    enableVideoGeneration: payload.enableVideoGeneration === true,
+                    enableTTS: payload.enableTTS === true,
+                    agentMode
+                });
+                return writeJson(res, 202, { ok: true, path: state.path, state: state.state, issues: state.issues });
+            }
+            if (method === "GET" && path === "/api/features/education/job") {
+                assertAllowedQueryParams(url.searchParams, ["jobId"], true);
+                const jobId = normalizeQueryString(url.searchParams.get("jobId"), "jobId", 120, false);
+                const state = jobId ? await (0, import_ai_education.refreshAiEducationJob)(jobId) : await (0, import_ai_education.loadAiEducationState)();
+                return writeJson(res, 200, { ok: true, path: state.path, state: state.state, issues: state.issues });
+            }
             if (method === "GET" && path === "/api/features/geo/state") {
                 assertAllowedQueryParams(url.searchParams, [], true);
-                const state = await (0, import_geo_audit.getGeoAuditState)();
-                return writeJson(res, 200, { ok: true, state });
+                const snapshot = await (0, import_geo_feature_snapshot.loadGeoFeatureSnapshot)();
+                return writeJson(res, 200, {
+                    ok: true,
+                    updatedAt: snapshot.updatedAt,
+                    state: snapshot.state,
+                    summary: snapshot.summary,
+                    modules: snapshot.modules
+                });
             }
             if (method === "GET" && path === "/api/features/geo/summary") {
                 assertAllowedQueryParams(url.searchParams, [], true);
@@ -1376,7 +1520,7 @@ function startUiServer(port, toolClient) {
                 const payload = expectObject(await readJsonBody(req), "feature control payload");
                 const feature = requiredBoundedString(payload.feature, "feature", 40).toLowerCase();
                 if (!(0, import_feature_control.isFeatureControlKey)(feature)) {
-                    throw new RequestValidationError("feature must be one of: geo", 400);
+                    throw new RequestValidationError("feature must be one of: geo, education", 400);
                 }
                 if (typeof payload.aiTakeoverEnabled !== "boolean") {
                     throw new RequestValidationError("aiTakeoverEnabled must be a boolean.", 400);
@@ -2371,7 +2515,7 @@ async function renderHtml(filters, toolClient, options) {
     const needsProjectsTemplates = showProjectsSection || taskDiagnosticsPartial;
     const usageCostMode = resolveUsageCostModeForSection(activeSection);
     const sectionMeta = sectionLinks.find(item => item.key === activeSection) ?? sectionLinks[0];
-    const sectionTitle = activeSection === "features" && options.feature === "geo" ? t("GEO Suite", "GEO \u5957\u4EF6") : resolveDashboardSectionTitle(sectionMeta, options.language);
+    const sectionTitle = activeSection === "features" && options.feature === "geo" ? t("GEO Suite", "GEO \u5957\u4EF6") : activeSection === "features" && options.feature === "education" ? t("AI Education", "AI\u6559\u80B2") : resolveDashboardSectionTitle(sectionMeta, options.language);
     const sectionLeadText = activeSection === "overview" ? t("Decide from one screen: system health, items needing your intervention, who is active, and AI burn.", "\u4E00\u4E2A\u9996\u9875\u53EA\u56DE\u7B54\u56DB\u4EF6\u4E8B\uFF1A\u7CFB\u7EDF\u662F\u5426\u6B63\u5E38\u3001\u54EA\u91CC\u9700\u8981\u4F60\u4ECB\u5165\u3001\u8C01\u5728\u5FD9\u3001AI \u7528\u91CF\u662F\u5426\u5F02\u5E38\u3002") : activeSection === "collaboration" ? t("Follow how work moves between agents: who accepted it, who received the handoff, and where collaboration is currently waiting.", "\u76F4\u63A5\u770B\u4EFB\u52A1\u662F\u600E\u4E48\u5728\u667A\u80FD\u4F53\u4E4B\u95F4\u6D41\u8F6C\u7684\uFF1A\u8C01\u5148\u63A5\u5355\u3001\u540E\u6765\u4EA4\u7ED9\u4E86\u8C01\u3001\u5F53\u524D\u5361\u5728\u54EA\u4E00\u6BB5\u534F\u4F5C\u91CC\u3002") : activeSection === "projects-tasks" ? t("Start with the task and schedule card wall. It now merges tracked tasks, due times, and timed jobs into one place before you drill into execution detail.", "\u5148\u770B\u4EFB\u52A1\u4E0E\u6392\u7A0B\u5361\u7247\u5899\u3002\u73B0\u5728\u4F1A\u5148\u628A\u8DDF\u8E2A\u4EFB\u52A1\u3001\u622A\u6B62\u65F6\u95F4\u548C\u5B9A\u65F6\u4EFB\u52A1\u5408\u5230\u4E00\u8D77\uFF0C\u518D\u5F80\u4E0B\u94BB\u6267\u884C\u7EC6\u8282\u3002") : activeSection === "features" ? t("Open focused capability pages inside the AI employee system shell. GEO is the first suite entry and now defaults to one-click full-suite execution, while advanced tools stay folded until needed.", "\u5728 AI \u5458\u5DE5\u7CFB\u7EDF\u58F3\u5185\u6253\u5F00\u805A\u7126\u80FD\u529B\u9875\u3002GEO \u662F\u7B2C\u4E00\u4E2A\u5957\u4EF6\u5165\u53E3\uFF0C\u9ED8\u8BA4\u8D70\u4E00\u952E\u5B8C\u6574\u5957\u4EF6\u6D41\u7A0B\uFF0C\u53EA\u6709\u5728\u9700\u8981\u65F6\u624D\u5C55\u5F00\u9AD8\u7EA7\u5DE5\u5177\u3002") : sectionMeta.blurb;
     const needsSessionPreview = activeSection === "projects-tasks" || activeSection === "overview";
     const needsTaskEvidence = activeSection === "projects-tasks";
@@ -2390,6 +2534,7 @@ async function renderHtml(filters, toolClient, options) {
     const needsDocsHub = needsWorkspaceFiles;
     const needsSettingsInsights = activeSection === "settings";
     const needsGeoAuditState = activeSection === "features";
+    const needsAiEducationState = activeSection === "features";
     const needsGeoAuditSummary = activeSection === "features" && options.feature === "geo";
     markRenderPhase("snapshot");
     const exceptions = (0, import_commander.commanderExceptions)(snapshot);
@@ -2413,7 +2558,7 @@ async function renderHtml(filters, toolClient, options) {
     markRenderPhase("session-preview");
     const [cronOverview, openclawCronJobs, replayPreview, usageCost, officeRoster, officePresence, agentTeamEmbed] = await Promise.all([(0, import_cron_overview.buildCronOverview)(snapshot, import_config.POLLING_INTERVALS_MS.cron), loadOpenclawCronCatalog(options.language), loadCachedReplayPreview(), loadCachedUsageCost(snapshot, usageCostMode), (0, import_agent_roster.loadBestEffortAgentRoster)(), loadCachedOfficeSessionPresence(), (0, import_agent_team_embed.loadAgentTeamEmbedSnapshot)()]);
     markRenderPhase("shared-data");
-    const [teamSnapshot, memoryFiles, memoryFacetOptions, workspaceFiles, settingsBudgetPolicy, workspaceFacetOptions, workspaceAgentScopes, docHubSnapshot, taskEvidenceItems, connectionHealthSummary, securitySummary, updateSummary, employeeContractSummary, memoryStateSummary, geoAuditState, geoAuditSummary, featureControlState] = await Promise.all([needsTeamSnapshot ? loadTeamSnapshot(officeRoster) : Promise.resolve({ missionStatement: t("No shared mission loaded.", "\u5C1A\u672A\u52A0\u8F7D\u5171\u540C\u76EE\u6807\u3002"), members: [], sourcePath: OPENCLAW_CONFIG_PATH, detail: t("Loaded on the staff page only.", "\u4EC5\u5728\u5458\u5DE5\u9875\u52A0\u8F7D\u3002"), modelOptions: [], modelEditable: false }), needsMemorySection ? listEditableFiles("memory") : Promise.resolve([]), needsMemorySection ? listMemoryFacetOptions() : Promise.resolve([]), needsDocsHub ? listEditableFiles("workspace") : Promise.resolve([]), (0, import_budget_policy.loadBudgetPolicy)(), needsDocsHub ? listWorkspaceFacetOptions() : Promise.resolve([]), needsDocsHub ? loadEditableAgentScopes() : Promise.resolve([]), needsDocsHub ? (0, import_docs_hub.loadStructuredDocHubSnapshot)(snapshot, toolClient) : Promise.resolve({ generatedAt: snapshot.generatedAt, sourcePath: (0, import_node_path.join)(process.cwd(), "runtime", "doc-hub-chat.json"), detail: t("Loaded on the docs page only.", "\u4EC5\u5728\u6587\u6863\u9875\u52A0\u8F7D\u3002"), items: [] }), needsTaskEvidence ? loadCachedTaskEvidenceSessions(snapshot, toolClient, taskEvidenceSessionKeys, TASK_EVIDENCE_HISTORY_LIMIT) : Promise.resolve([]), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawConnectionSummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawSecuritySummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawUpdateSummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_employee_contract.loadCachedOpenClawEmployeeContractSummary)()) : Promise.resolve(void 0), needsMemorySection ? (0, import_openclaw_cli_insights.loadCachedOpenClawMemorySummary)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_geo_audit.getGeoAuditState)() : Promise.resolve(void 0), needsGeoAuditSummary ? (0, import_geo_audit.getGeoAuditSummary)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_feature_control.loadFeatureControlState)() : Promise.resolve(void 0)]);
+    const [teamSnapshot, memoryFiles, memoryFacetOptions, workspaceFiles, settingsBudgetPolicy, workspaceFacetOptions, workspaceAgentScopes, docHubSnapshot, taskEvidenceItems, connectionHealthSummary, securitySummary, updateSummary, employeeContractSummary, memoryStateSummary, geoAuditState, geoAuditSummary, aiEducationState, featureControlState] = await Promise.all([needsTeamSnapshot ? loadTeamSnapshot(officeRoster) : Promise.resolve({ missionStatement: t("No shared mission loaded.", "\u5C1A\u672A\u52A0\u8F7D\u5171\u540C\u76EE\u6807\u3002"), members: [], sourcePath: OPENCLAW_CONFIG_PATH, detail: t("Loaded on the staff page only.", "\u4EC5\u5728\u5458\u5DE5\u9875\u52A0\u8F7D\u3002"), modelOptions: [], modelEditable: false }), needsMemorySection ? listEditableFiles("memory") : Promise.resolve([]), needsMemorySection ? listMemoryFacetOptions() : Promise.resolve([]), needsDocsHub ? listEditableFiles("workspace") : Promise.resolve([]), (0, import_budget_policy.loadBudgetPolicy)(), needsDocsHub ? listWorkspaceFacetOptions() : Promise.resolve([]), needsDocsHub ? loadEditableAgentScopes() : Promise.resolve([]), needsDocsHub ? (0, import_docs_hub.loadStructuredDocHubSnapshot)(snapshot, toolClient) : Promise.resolve({ generatedAt: snapshot.generatedAt, sourcePath: (0, import_node_path.join)(process.cwd(), "runtime", "doc-hub-chat.json"), detail: t("Loaded on the docs page only.", "\u4EC5\u5728\u6587\u6863\u9875\u52A0\u8F7D\u3002"), items: [] }), needsTaskEvidence ? loadCachedTaskEvidenceSessions(snapshot, toolClient, taskEvidenceSessionKeys, TASK_EVIDENCE_HISTORY_LIMIT) : Promise.resolve([]), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawConnectionSummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawSecuritySummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawUpdateSummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_employee_contract.loadCachedOpenClawEmployeeContractSummary)()) : Promise.resolve(void 0), needsMemorySection ? (0, import_openclaw_cli_insights.loadCachedOpenClawMemorySummary)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_geo_audit.getGeoAuditState)() : Promise.resolve(void 0), needsGeoAuditSummary ? (0, import_geo_audit.getGeoAuditSummary)() : Promise.resolve(void 0), needsAiEducationState ? (0, import_ai_education.loadAiEducationState)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_feature_control.loadFeatureControlState)() : Promise.resolve(void 0)]);
     markRenderPhase("section-assets");
     const collaborationDirectory = await loadCollaborationParticipantDirectory();
     const dashboardRefreshGeneratedAt = pickLatestSessionActivityTimestamp(snapshot.generatedAt, sessionPreview.generatedAt, collaborationPreview.generatedAt, docHubSnapshot.generatedAt, agentTeamEmbed.runtime.updatedAt) ?? snapshot.generatedAt;
@@ -2622,7 +2767,7 @@ async function renderHtml(filters, toolClient, options) {
         ...options,
         extraQuery: activeSection === "features" && options.feature ? { feature: options.feature } : void 0
     });
-    const dashboardRefreshControls = renderDashboardRefreshControls(options.language, { localMutationUnlock: options.localMutationUnlock, localTokenAuthRequired: import_config.LOCAL_TOKEN_AUTH_REQUIRED, localTokenConfigured: import_config.LOCAL_API_TOKEN !== "" });
+    const dashboardRefreshControls = renderDashboardRefreshControls(options.language, { section: activeSection, localMutationUnlock: options.localMutationUnlock, localTokenAuthRequired: import_config.LOCAL_TOKEN_AUTH_REQUIRED, localTokenConfigured: import_config.LOCAL_API_TOKEN !== "" });
     const agentTeamLinks = agentTeamSidebarLinks(filters, options);
     const agentTeamOverviewBlock = showOverviewSection ? renderAgentTeamOverviewBlock(agentTeamEmbed, options.language, agentTeamLinks) : "";
     const agentTeamMemoryBlock = showMemorySection ? renderAgentTeamMemoryBlock(agentTeamEmbed, options.language) : "";
@@ -3389,6 +3534,7 @@ async function renderHtml(filters, toolClient, options) {
   ` : "";
     const docsSection = showDocsSection ? await (0, import_docs_hub.renderDocsSection)({ language: options.language, workspaceFiles, workspaceFacetOptions, projectSummaries: snapshot.projectSummaries, agentScopes: workspaceAgentScopes, docHubSnapshot, agentTeamDocsBlockHtml: agentTeamDocsBlock }) : "";
     const featuresSection = showFeaturesSection ? renderFeaturesSection({
+        aiEducationState: aiEducationState?.state ?? (0, import_ai_education.defaultAiEducationPublicState)(),
         compactStatusStrip: options.compactStatusStrip,
         feature: options.feature,
         featureControl: featureControlState?.state?.features ?? (0, import_feature_control.defaultFeatureControlState)().features,
@@ -7946,6 +8092,105 @@ async function renderHtml(filters, toolClient, options) {
       display: grid;
       gap: 10px;
     }
+    .ai-education-shell-card {
+      gap: 14px;
+    }
+    .ai-education-shell-actions {
+      align-items: center;
+    }
+    .ai-education-workspace-row {
+      display: grid;
+      gap: 12px;
+      min-height: 80vh;
+    }
+    .ai-education-layout {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: start;
+    }
+    .ai-education-controls-grid {
+      align-items: stretch;
+    }
+    .ai-education-side-stack {
+      min-width: 0;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+    .ai-education-embed-card {
+      min-height: 0;
+      gap: 16px;
+      min-block-size: 80vh;
+    }
+    .ai-education-workspace-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+    .ai-education-fullscreen-state {
+      white-space: nowrap;
+    }
+    .ai-education-iframe-shell {
+      position: relative;
+      min-height: 80vh;
+      border: 1px solid rgba(17, 24, 39, 0.08);
+      border-radius: 22px;
+      overflow: hidden;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(246, 248, 252, 0.97)),
+        radial-gradient(circle at 0% 0%, rgba(0, 113, 227, 0.08), transparent 42%);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.84),
+        0 18px 34px rgba(17, 24, 39, 0.06);
+    }
+    .ai-education-iframe {
+      display: block;
+      width: 100%;
+      min-height: 80vh;
+      border: 0;
+      background: #ffffff;
+    }
+    .ai-education-iframe.is-hidden {
+      display: none;
+    }
+    .ai-education-fallback {
+      display: none;
+      min-height: 80vh;
+      padding: 28px;
+      align-content: center;
+      gap: 12px;
+      background:
+        linear-gradient(180deg, rgba(250, 251, 253, 0.99), rgba(255, 255, 255, 0.97)),
+        radial-gradient(circle at 100% 0%, rgba(255, 166, 0, 0.1), transparent 36%);
+    }
+    .ai-education-fallback.is-visible {
+      display: grid;
+    }
+    .ai-education-embed-card:fullscreen {
+      width: 100vw;
+      height: 100vh;
+      max-width: none;
+      margin: 0;
+      padding: 20px;
+      border-radius: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 14px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(248, 250, 252, 0.98)),
+        radial-gradient(circle at 0% 0%, rgba(0, 113, 227, 0.08), transparent 40%);
+    }
+    .ai-education-embed-card:fullscreen .ai-education-iframe-shell {
+      min-height: 0;
+      height: 100%;
+      border-radius: 20px;
+    }
+    .ai-education-embed-card:fullscreen .ai-education-iframe,
+    .ai-education-embed-card:fullscreen .ai-education-fallback {
+      min-height: 100%;
+      height: 100%;
+    }
     .geo-artifact-list {
       display: grid;
       gap: 10px;
@@ -7969,6 +8214,27 @@ async function renderHtml(filters, toolClient, options) {
     }
     .geo-artifact-actions {
       justify-content: flex-end;
+    }
+    @media (max-width: 1100px) {
+      .ai-education-layout {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+    @media (max-width: 720px) {
+      .ai-education-workspace-row {
+        min-height: 72vh;
+      }
+      .ai-education-workspace-actions {
+        justify-content: flex-start;
+      }
+      .ai-education-embed-card {
+        min-block-size: 72vh;
+      }
+      .ai-education-iframe-shell,
+      .ai-education-iframe,
+      .ai-education-fallback {
+        min-height: 72vh;
+      }
     }
     .geo-preview-card,
     .geo-log-output {
@@ -9430,7 +9696,7 @@ async function renderHtml(filters, toolClient, options) {
     }
   </style>
 </head>
-<body class="ui-preload" data-ui-polish="apple-native-v3" data-apple-window-controls="true" data-ui-language="${escapeHtml(options.language)}" data-refresh-generated-at="${escapeHtml(dashboardRefreshGeneratedAt ?? "")}" data-shell-nav-state="collapsed" data-shell-nav-pinned="0" data-shell-nav-mode="desktop" style="--fold-open-label:${options.language === "en" ? "'Expand'" : "'\u5C55\u5F00'"}; --fold-close-label:${options.language === "en" ? "'Collapse'" : "'\u6536\u8D77'"};">
+<body class="ui-preload" data-ui-polish="apple-native-v3" data-apple-window-controls="true" data-ui-language="${escapeHtml(options.language)}" data-refresh-generated-at="${escapeHtml(dashboardRefreshGeneratedAt ?? "")}" data-dashboard-section="${escapeHtml(activeSection)}" data-dashboard-feature="${escapeHtml(options.feature || "")}" data-shell-nav-state="collapsed" data-shell-nav-pinned="0" data-shell-nav-mode="desktop" style="--fold-open-label:${options.language === "en" ? "'Expand'" : "'\u5C55\u5F00'"}; --fold-close-label:${options.language === "en" ? "'Collapse'" : "'\u6536\u8D77'"};">
   <div class="shell-nav-hover-zone" data-shell-nav-hover-zone aria-hidden="true"></div>
   <div class="app-shell">
     <aside class="sidebar sidebar-primary" data-shell-nav data-shell-nav-state="collapsed">

@@ -930,6 +930,84 @@ test("room query ignores legacy shared local active room state and keeps room ac
   }
 });
 
+test("collaboration room list pins the requested active room first even when another room is newer", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "collab-room-active-first-"));
+
+  try {
+    const output = await runCollaborationRoomModuleForTest(
+      tempRoot,
+      `
+        const unwrap = (mod) => mod.default ?? mod["module.exports"] ?? mod;
+        const roomHelpersMod = unwrap(await import(${JSON.stringify(serverCollaborationRoomModuleHref)}));
+        const collaborationRoom = unwrap(await import(${JSON.stringify(collaborationRoomModuleHref)}));
+        const { join } = await import("node:path");
+
+        const helpers = roomHelpersMod.createCollaborationRoomHelpers({
+          buildCollaborationRoomApiEvent: () => ({}),
+          buildSessionDetailHref: () => "",
+          createRequestValidationError: (message) => new Error(message),
+          deriveAgentAnimalIdentity: () => ({ accent: "#0f766e", imageHref: "" }),
+          getOpenClawHomeDir: () => process.cwd(),
+          getSearchLimitMax: () => 20,
+          getOpenClawWorkspaceRoot: () => join(process.cwd(), "workspace"),
+          humanizeOperatorLabel: (value) => value,
+          loadCachedStaffRecentActivity: async () => new Map(),
+          normalizeAgentIdCandidate: (value) => {
+            const trimmed = String(value ?? "").trim().toLowerCase();
+            return trimmed ? trimmed : undefined;
+          },
+          normalizeSessionHistoryMessages: () => [],
+          normalizeLookupKey: (value) => String(value ?? "").trim().toLowerCase(),
+          pickLatestSessionActivityTimestamp: (...values) => values.find(Boolean),
+          pickUiText: (_language, english) => english,
+          resolveConfiguredWorkspaceRoot: () => "",
+          resolveStaffStatusDotTone: () => "idle",
+          safeTruncate: (value, max = Number.MAX_SAFE_INTEGER) => String(value ?? "").slice(0, max),
+          staffCurrentWorkLabel: () => ({ label: "Current task", value: "Idle" }),
+          staffStatusDotLabel: () => "Idle",
+          toSortableMs: (value) => {
+            const parsed = Date.parse(value ?? "");
+            return Number.isNaN(parsed) ? 0 : parsed;
+          },
+        });
+
+        const olderRoomId = "11111111-1111-4111-8111-111111111111";
+        const newerRoomId = "22222222-2222-4222-8222-222222222222";
+        await collaborationRoom.createCollaborationRoom({
+          roomId: olderRoomId,
+          title: "Older room",
+          titleMode: "manual",
+          projectId: "proj-older",
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        await collaborationRoom.createCollaborationRoom({
+          roomId: newerRoomId,
+          title: "Newer room",
+          titleMode: "manual",
+          projectId: "proj-newer",
+        });
+
+        const directory = {
+          primaryAgentId: "main",
+          primaryDisplayName: "Jarvis",
+          entries: [{ agentId: "main", displayName: "Jarvis", aliases: ["main", "jarvis"], primary: true }],
+        };
+        const rooms = await helpers.listCollaborationTranscriptRooms(directory, { activeRoomId: olderRoomId });
+        process.stdout.write(JSON.stringify(rooms.map((room) => ({ roomId: room.roomId, active: room.active }))));
+      `,
+    );
+
+    const parsed = JSON.parse(output) as Array<{ roomId: string; active: boolean }>;
+    assert.deepEqual(
+      parsed.slice(0, 2).map((room) => room.roomId),
+      ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"],
+    );
+    assert.equal(parsed[0]?.active, true);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("collaboration room unread counts follow the caller read cursor instead of persisting shared read state", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "collab-room-read-cursor-"));
 

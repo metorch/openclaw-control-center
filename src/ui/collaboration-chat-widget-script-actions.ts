@@ -164,7 +164,7 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
     }
     state.room = room;
     state.roomStreamLastSnapshotAt = Date.now();
-    state.rooms = Array.isArray(room.rooms) ? room.rooms : [];
+    state.rooms = sortRoomsForDisplay(Array.isArray(room.rooms) ? room.rooms : [], payloadRoomId || state.activeRoomId);
     state.participants = Array.isArray(room.participants) && room.participants.length > 0
       ? room.participants
       : state.participants;
@@ -308,7 +308,7 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
       if (!response.ok || payload?.ok !== true || !Array.isArray(payload.rooms) || payload.rooms.length === 0) {
         return false;
       }
-      state.rooms = payload.rooms;
+      state.rooms = sortRoomsForDisplay(payload.rooms);
       const activeExists = state.rooms.some((room) => String(room.roomId || '') === state.activeRoomId);
       const fallbackRoomId = activeExists
         ? state.activeRoomId
@@ -381,7 +381,7 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || payload?.ok !== true || !Array.isArray(payload.rooms)) return;
-      state.rooms = payload.rooms;
+      state.rooms = sortRoomsForDisplay(payload.rooms);
       const preferredRoomId = preferredRoomIdFromList(state.rooms, state.activeRoomId);
       if (preferredRoomId && preferredRoomId !== state.activeRoomId) {
         state.activeRoomId = preferredRoomId;
@@ -444,6 +444,7 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
     setRoomMenuOpen(false);
     state.activeRoomId = normalized;
     state.pendingScrollToLatestRoomId = normalized;
+    state.rooms = sortRoomsForDisplay(state.rooms, normalized);
     state.lastReadSequence = roomCursor(normalized);
     if (!(normalized in state.roomReadCursors)) state.roomReadCursors[normalized] = 0;
     if (shouldPersistRoomViewState()) schedulePreferenceSave({ includeRoomViewState: true });
@@ -483,6 +484,7 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
       }
       state.activeRoomId = String(payload.room.roomId);
       state.pendingScrollToLatestRoomId = state.activeRoomId;
+      state.rooms = sortRoomsForDisplay(state.rooms, state.activeRoomId);
       state.roomReadCursors[state.activeRoomId] = 0;
       if (shouldPersistRoomViewState()) schedulePreferenceSave({ includeRoomViewState: true });
       await refreshRoom('manual');
@@ -548,6 +550,7 @@ function renderCollaborationChatScriptActions(_input: CollaborationChatScriptRen
       if (normalizedRoomId === state.activeRoomId) {
         state.activeRoomId = String(payload.deleted.fallbackRoomId);
         state.pendingScrollToLatestRoomId = state.activeRoomId;
+        state.rooms = sortRoomsForDisplay(state.rooms, state.activeRoomId);
         if (!(state.activeRoomId in state.roomReadCursors)) state.roomReadCursors[state.activeRoomId] = 0;
         if (shouldPersistRoomViewState()) schedulePreferenceSave({ includeRoomViewState: true });
       }

@@ -181,6 +181,20 @@ function createNavigationHelpers(deps) {
           : pickUiText(language, "Write access: off", "\u5199\u5165\u89E3\u9501\uFF1A\u5173");
     const writeAccessPressed = options.localMutationUnlock && options.localTokenConfigured ? "true" : "false";
     const writeAccessDisabled = options.localTokenAuthRequired && !options.localTokenConfigured ? " disabled" : "";
+    if (options.section === "features") {
+      return `<div class="refresh-toolbar refresh-toolbar-features" data-dashboard-refresh-root>
+    <button class="panel-toggle" type="button" data-dashboard-refresh-now hidden aria-hidden="true" tabindex="-1">${escapeHtml(pickUiText(language, "Refresh now", "\u7ACB\u5373\u5237\u65B0"))}</button>
+    <button class="panel-toggle" type="button" data-dashboard-auto-refresh-toggle aria-pressed="false" hidden aria-hidden="true" tabindex="-1">${escapeHtml(pickUiText(language, "Auto refresh: off", "\u81EA\u52A8\u5237\u65B0\uFF1A\u5173"))}</button>
+    <button class="panel-toggle" type="button" data-dashboard-mutation-toggle aria-pressed="${writeAccessPressed}"${writeAccessDisabled}>${escapeHtml(writeAccessLabel)}</button>
+    <label class="refresh-interval" hidden aria-hidden="true">
+      <span>${escapeHtml(pickUiText(language, "Auto every", "\u81EA\u52A8\u95F4\u9694"))}</span>
+      <select data-dashboard-auto-refresh-interval aria-label="${escapeHtml(pickUiText(language, "Auto refresh interval", "\u81EA\u52A8\u5237\u65B0\u95F4\u9694"))}">
+        ${intervalOptions}
+      </select>
+    </label>
+    <div class="refresh-status" data-dashboard-refresh-status role="status" aria-live="polite">${escapeHtml(pickUiText(language, "Feature data sync is handled in the background. This page will not auto-refresh or reload.", "\u529F\u80FD\u9875\u6570\u636E\u7531\u540E\u7AEF\u540E\u53F0\u540C\u6B65\u3002\u8FD9\u4E2A\u9875\u9762\u4E0D\u4F1A\u81EA\u52A8\u5237\u65B0\u6216\u6574\u9875\u91CD\u8F7D\u3002"))}</div>
+  </div>`;
+    }
     return `<div class="refresh-toolbar" data-dashboard-refresh-root>
     <button class="panel-toggle" type="button" data-dashboard-refresh-now>${escapeHtml(pickUiText(language, "Refresh now", "\u7ACB\u5373\u5237\u65B0"))}</button>
     <button class="panel-toggle" type="button" data-dashboard-auto-refresh-toggle aria-pressed="false">${escapeHtml(pickUiText(language, "Auto refresh: off", "\u81EA\u52A8\u5237\u65B0\uFF1A\u5173"))}</button>

@@ -251,6 +251,40 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
     return roomClockFormatter.format(new Date(timestamp));
   };
 
+  const roomSortTimestamp = (value) => {
+    const timestamp = Date.parse(String(value || ''));
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  };
+
+  const sortRoomsForDisplay = (rooms, pinnedRoomId = state.activeRoomId) => {
+    const normalizedPinnedRoomId = String(pinnedRoomId || '').trim();
+    return (Array.isArray(rooms) ? rooms : [])
+      .filter((room) => room && typeof room === 'object')
+      .slice()
+      .sort((left, right) => {
+        const leftRoomId = String(left.roomId || '').trim();
+        const rightRoomId = String(right.roomId || '').trim();
+        if (normalizedPinnedRoomId) {
+          const leftPinned = leftRoomId === normalizedPinnedRoomId;
+          const rightPinned = rightRoomId === normalizedPinnedRoomId;
+          if (leftPinned !== rightPinned) {
+            return leftPinned ? -1 : 1;
+          }
+        } else {
+          const leftActive = Boolean(left.active);
+          const rightActive = Boolean(right.active);
+          if (leftActive !== rightActive) {
+            return leftActive ? -1 : 1;
+          }
+        }
+        const updatedDiff = roomSortTimestamp(right.updatedAt) - roomSortTimestamp(left.updatedAt);
+        if (updatedDiff !== 0) return updatedDiff;
+        const createdDiff = roomSortTimestamp(right.createdAt) - roomSortTimestamp(left.createdAt);
+        if (createdDiff !== 0) return createdDiff;
+        return String(left.title || '').localeCompare(String(right.title || ''));
+      });
+  };
+
   const hasFileTransfer = (dataTransfer) => {
     if (!dataTransfer) return false;
     const files = Array.from(dataTransfer.files || []).filter(Boolean);
@@ -441,10 +475,38 @@ function renderCollaborationChatScriptPrelude(input: CollaborationChatScriptRend
 
   const syncRefreshGuard = () => {
     if (typeof window.__openclawSetRefreshGuard !== 'function') return;
+    const projectedActivity =
+      typeof hasProjectedRoomActivity === 'function' ? hasProjectedRoomActivity() : false;
+    const activeGuard = Boolean(
+      state.expanded &&
+      (state.sending ||
+        state.loading ||
+        state.roomMutationPending ||
+        state.uploads.length > 0 ||
+        projectedActivity ||
+        state.autoRefresh),
+    );
+    const guardMessage = !state.expanded
+      ? ''
+      : state.sending
+        ? labels.sending
+        : state.loading || state.roomMutationPending
+          ? labels.loading
+          : state.uploads.length > 0
+            ? (embeddedLanguage === 'zh'
+                ? '协作房间里还有待处理附件。'
+                : 'The collaboration room still has pending attachments.')
+            : projectedActivity
+              ? (embeddedLanguage === 'zh'
+                  ? '当前 room 仍在协作中。'
+                  : 'The current room is still active.')
+              : (embeddedLanguage === 'zh'
+                  ? '当前正在查看协作房间。'
+                  : 'The collaboration room is currently open.');
     window.__openclawSetRefreshGuard(
       'collaboration-chat',
-      Boolean(state.expanded && (state.sending || state.loading || state.uploads.length > 0)),
-      state.sending ? labels.sending : state.loading ? labels.loading : '',
+      activeGuard,
+      guardMessage,
     );
   };
 

@@ -334,6 +334,20 @@ function createCollaborationRoomHelpers(deps) {
     return String(left?.title || "").localeCompare(String(right?.title || ""));
   }
 
+  function sortCollaborationRoomList(rooms, preferredRoomId) {
+    const normalizedPreferredRoomId = normalizeCollaborationRoomIdCandidate(preferredRoomId);
+    return [...rooms].sort((left, right) => {
+      if (normalizedPreferredRoomId) {
+        const leftPinned = String(left?.roomId || "") === normalizedPreferredRoomId;
+        const rightPinned = String(right?.roomId || "") === normalizedPreferredRoomId;
+        if (leftPinned !== rightPinned) {
+          return leftPinned ? -1 : 1;
+        }
+      }
+      return compareCollaborationRoomListRecency(left, right);
+    });
+  }
+
   function buildCollaborationRoomListEntry(input) {
     const createdAt =
       input.localRoom?.createdAt ??
@@ -380,8 +394,7 @@ function createCollaborationRoomHelpers(deps) {
           transcriptRoom: transcriptById.get(room.roomId),
           activeRoomId,
         }),
-      )
-      .sort(compareCollaborationRoomListRecency);
+      );
     const seenRoomIds = new Set(localEntries.map((room) => room.roomId));
     const transcriptOnlyEntries = openclawRooms
       .filter((room) => !seenRoomIds.has(room.roomId))
@@ -391,9 +404,9 @@ function createCollaborationRoomHelpers(deps) {
           transcriptRoom: room,
           activeRoomId,
         }),
-      )
-      .sort(compareCollaborationRoomListRecency);
-    return [...localEntries, ...transcriptOnlyEntries];
+      );
+    const combinedEntries = [...localEntries, ...transcriptOnlyEntries];
+    return activeRoomId ? sortCollaborationRoomList(combinedEntries, activeRoomId) : combinedEntries;
   }
 
   function normalizeProjectIdCandidate(value) {

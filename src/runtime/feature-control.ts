@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export const FEATURE_CONTROL_PATH = join(process.cwd(), "runtime", "feature-control.json");
-export const FEATURE_CONTROL_KEYS = ["geo"] as const;
+export const FEATURE_CONTROL_KEYS = ["geo", "education"] as const;
 
 export type FeatureControlKey = (typeof FEATURE_CONTROL_KEYS)[number];
 
@@ -30,6 +30,11 @@ export function defaultFeatureControlState(now = new Date().toISOString()): Feat
     updatedAt: now,
     features: {
       geo: {
+        aiTakeoverEnabled: false,
+        mode: "operator_only",
+        updatedAt: now,
+      },
+      education: {
         aiTakeoverEnabled: false,
         mode: "operator_only",
         updatedAt: now,

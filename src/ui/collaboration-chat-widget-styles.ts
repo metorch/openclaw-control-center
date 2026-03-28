@@ -155,7 +155,7 @@ function renderCollaborationChatStyles(): string {
 
 .collab-chat-main {
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto;
   gap: 0.56rem;
   min-height: 0;
   padding: 0.76rem 0.82rem 0.82rem;
