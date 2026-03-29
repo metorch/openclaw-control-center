@@ -302,6 +302,7 @@ function createFeatureRenderers(deps) {
   function renderEducationTtsProviderOptions(selectedValue) {
     const options = [
       ["openai-tts", "OpenAI TTS"],
+      ["minimax-tts", "MiniMax Speech"],
       ["azure-tts", "Azure TTS"],
       ["glm-tts", "GLM TTS"],
       ["qwen-tts", "Qwen TTS"],

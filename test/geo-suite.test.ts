@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 const geoSuiteModuleHref = pathToFileURL(join(process.cwd(), "src", "runtime", "geo-suite.ts")).href;
 
 interface GeoSuiteModule {
+  getGeoSuiteModuleState(module: string): Promise<{
+    module: string;
+    projectRoot: string;
+    outputDir?: string;
+    stdoutTail: string;
+    command: { file: string; args: string[] };
+  }>;
   startGeoSuiteModuleRun(input: {
     module: string;
     action?: string;
@@ -213,6 +220,75 @@ test("GEO module artifacts stay bounded to controlled outputs", async () => {
       () => mod.readGeoSuiteModuleArtifact("technical", "outside.txt"),
       /not available/i,
     );
+  } finally {
+    await mod.resetGeoSuiteRuntimeForTest();
+  }
+});
+
+test("GEO suite state rebases a migrated project root and persists the normalized command paths", async () => {
+  const harness = assertDefined(sharedHarness);
+  const mod = assertDefined(sharedModule);
+  await mod.resetGeoSuiteRuntimeForTest();
+
+  try {
+    const previousProjectRoot = join(dirname(harness.projectRoot), "legacy-geo-project");
+    const moduleRuntimeDir = join(harness.runtimeDir, "technical");
+    const statePath = join(moduleRuntimeDir, "state.json");
+    await mkdir(moduleRuntimeDir, { recursive: true });
+    await writeFile(
+      statePath,
+      `${JSON.stringify(
+        {
+          module: "technical",
+          action: "run",
+          runId: "legacy-technical-run",
+          status: "completed",
+          warnings: [],
+          params: {
+            url: "https://example.com/rebased-technical",
+          },
+          projectRoot: previousProjectRoot,
+          runtimeDir: moduleRuntimeDir,
+          statePath,
+          outputDir: join(moduleRuntimeDir, "outputs", "latest"),
+          command: {
+            file: join(previousProjectRoot, ".venv", "Scripts", "python.exe"),
+            args: [
+              join(previousProjectRoot, "scripts", "fetch_page.py"),
+              "https://example.com/rebased-technical",
+              "page",
+            ],
+          },
+          stdoutTail: join(previousProjectRoot, "scripts", "fetch_page.py"),
+          stderrTail: "",
+          artifacts: [],
+          lastUpdatedAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const state = await mod.getGeoSuiteModuleState("technical");
+    const nextPythonPath = join(harness.projectRoot, ".venv", "Scripts", "python.exe");
+    const nextScriptPath = join(harness.projectRoot, "scripts", "fetch_page.py");
+
+    assert.equal(state.projectRoot, harness.projectRoot);
+    assert.equal(state.command.file, nextPythonPath);
+    assert.equal(state.command.args[0], nextScriptPath);
+    assert.equal(state.command.args[1], "https://example.com/rebased-technical");
+    assert.equal(state.command.args[2], "page");
+    assert.match(state.stdoutTail, /fetch_page\.py/i);
+    assert.doesNotMatch(state.stdoutTail, /legacy-geo-project/);
+
+    const persisted = JSON.parse(await readFile(statePath, "utf8")) as {
+      projectRoot: string;
+      command: { file: string; args: string[] };
+    };
+    assert.equal(persisted.projectRoot, harness.projectRoot);
+    assert.equal(persisted.command.file, nextPythonPath);
+    assert.equal(persisted.command.args[0], nextScriptPath);
   } finally {
     await mod.resetGeoSuiteRuntimeForTest();
   }

@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 const geoAuditModuleHref = pathToFileURL(join(process.cwd(), "src", "runtime", "geo-audit.ts")).href;
 
 interface GeoAuditModule {
+  getGeoAuditState(): Promise<{
+    projectRoot: string;
+    scriptPath: string;
+    outputDir?: string;
+    stdoutTail: string;
+    command: { file: string; args: string[] };
+    artifacts: Array<{ name: string; path?: string; relativePath?: string }>;
+  }>;
   startGeoAuditRun(input: {
     url: string;
     brandName?: string;
@@ -260,6 +268,173 @@ test("GEO summary stays bounded to the latest standalone audit artifact", async 
   }
 });
 
+test("GEO state rebases a migrated project root and persists the normalized paths", async () => {
+  const harness = assertDefined(sharedHarness);
+  const mod = assertDefined(sharedModule);
+  await mod.resetGeoAuditRuntimeForTest();
+
+  try {
+    const previousProjectRoot = join(dirname(harness.projectRoot), "legacy-geo-project");
+    const previousOutputDir = join(previousProjectRoot, "standalone-output", "legacy-run");
+    const previousArtifactPath = join(previousOutputDir, "standalone-audit.json");
+    const statePath = join(harness.runtimeDir, "state.json");
+    await writeFile(
+      statePath,
+      `${JSON.stringify(
+        {
+          runId: "legacy-geo-run",
+          status: "completed",
+          warnings: [],
+          params: {
+            url: "https://example.com/rebased",
+            brandName: "Legacy Brand",
+          },
+          projectRoot: previousProjectRoot,
+          scriptPath: join(previousProjectRoot, "run-standalone-audit.ps1"),
+          runtimeDir: harness.runtimeDir,
+          statePath,
+          outputDir: previousOutputDir,
+          command: {
+            file: "powershell.exe",
+            args: [
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              join(previousProjectRoot, "run-standalone-audit.ps1"),
+              "-Url",
+              "https://example.com/rebased",
+            ],
+          },
+          stdoutTail: previousArtifactPath,
+          stderrTail: "",
+          artifacts: [
+            {
+              name: "standalone-audit.json",
+              exists: true,
+              previewable: true,
+              path: previousArtifactPath,
+              relativePath: "legacy/standalone-audit.json",
+              contentType: "application/json; charset=utf-8",
+            },
+          ],
+          lastUpdatedAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const state = await mod.getGeoAuditState();
+    const nextScriptPath = join(harness.projectRoot, "run-standalone-audit.ps1");
+    const nextOutputDir = join(harness.projectRoot, "standalone-output", "legacy-run");
+    const nextArtifactPath = join(nextOutputDir, "standalone-audit.json");
+
+    assert.equal(state.projectRoot, harness.projectRoot);
+    assert.equal(state.scriptPath, nextScriptPath);
+    assert.equal(state.outputDir, nextOutputDir);
+    assert.equal(state.command.file, "powershell.exe");
+    assert.deepEqual(state.command.args.slice(0, 4), [
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      nextScriptPath,
+    ]);
+    assert.equal(state.artifacts[0]?.path, nextArtifactPath);
+    assert.match(state.stdoutTail, /legacy-run/);
+    assert.doesNotMatch(state.stdoutTail, /legacy-geo-project/);
+
+    const persisted = JSON.parse(await readFile(statePath, "utf8")) as {
+      projectRoot: string;
+      scriptPath: string;
+      outputDir?: string;
+      command: { args: string[] };
+      artifacts: Array<{ path?: string }>;
+    };
+    assert.equal(persisted.projectRoot, harness.projectRoot);
+    assert.equal(persisted.scriptPath, nextScriptPath);
+    assert.equal(persisted.outputDir, nextOutputDir);
+    assert.equal(persisted.command.args[3], nextScriptPath);
+    assert.equal(persisted.artifacts[0]?.path, nextArtifactPath);
+  } finally {
+    await mod.resetGeoAuditRuntimeForTest();
+  }
+});
+
+test("GEO state normalizes persisted stdout tail paths after the project root already changed", async () => {
+  const harness = assertDefined(sharedHarness);
+  const mod = assertDefined(sharedModule);
+  await mod.resetGeoAuditRuntimeForTest();
+
+  try {
+    const previousProjectRoot = join(dirname(harness.projectRoot), "legacy-geo-project");
+    const currentOutputDir = join(harness.projectRoot, "standalone-output", "legacy-run");
+    const currentArtifactPath = join(currentOutputDir, "standalone-audit.json");
+    const escapedCurrentOutputDir = currentOutputDir.replace(/\\/g, "\\\\");
+    const escapedCurrentArtifactPath = currentArtifactPath.replace(/\\/g, "\\\\");
+    const statePath = join(harness.runtimeDir, "state.json");
+    await writeFile(
+      statePath,
+      `${JSON.stringify(
+        {
+          runId: "legacy-tail-run",
+          status: "completed",
+          warnings: [],
+          params: {
+            url: "https://example.com/rebased-tail",
+          },
+          projectRoot: harness.projectRoot,
+          scriptPath: join(harness.projectRoot, "run-standalone-audit.ps1"),
+          runtimeDir: harness.runtimeDir,
+          statePath,
+          outputDir: currentOutputDir,
+          command: {
+            file: "powershell.exe",
+            args: [
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              join(harness.projectRoot, "run-standalone-audit.ps1"),
+              "-Url",
+              "https://example.com/rebased-tail",
+            ],
+          },
+          stdoutTail: `{\n  "output_dir": "${previousProjectRoot.replace(/\\/g, "\\\\")}\\\\standalone-output\\\\legacy-run",\n  "json": "${previousProjectRoot.replace(/\\/g, "\\\\")}\\\\standalone-output\\\\legacy-run\\\\standalone-audit.json"\n}\n`,
+          stderrTail: "",
+          artifacts: [
+            {
+              name: "standalone-audit.json",
+              exists: true,
+              previewable: true,
+              path: currentArtifactPath,
+              relativePath: "..\\\\..\\\\projects\\\\features\\\\GEO\\\\standalone-output\\\\legacy-run\\\\standalone-audit.json",
+              contentType: "application/json; charset=utf-8",
+            },
+          ],
+          lastUpdatedAt: new Date().toISOString(),
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const state = await mod.getGeoAuditState();
+    assert.match(state.stdoutTail, new RegExp(escapeRegExp(escapedCurrentOutputDir)));
+    assert.match(state.stdoutTail, new RegExp(escapeRegExp(escapedCurrentArtifactPath)));
+    assert.doesNotMatch(state.stdoutTail, /legacy-geo-project/);
+
+    const persisted = JSON.parse(await readFile(statePath, "utf8")) as {
+      stdoutTail: string;
+    };
+    assert.match(persisted.stdoutTail, new RegExp(escapeRegExp(escapedCurrentOutputDir)));
+    assert.match(persisted.stdoutTail, new RegExp(escapeRegExp(escapedCurrentArtifactPath)));
+    assert.doesNotMatch(persisted.stdoutTail, /legacy-geo-project/);
+  } finally {
+    await mod.resetGeoAuditRuntimeForTest();
+  }
+});
+
 async function createGeoHarness(options: GeoHarnessOptions = {}): Promise<GeoHarness> {
   const root = await mkdtemp(join(tmpdir(), "geo-audit-runtime-"));
   const projectRoot = join(root, "geo-project");
@@ -369,4 +544,8 @@ exit ${defaultExitCode}
 function assertDefined<T>(value: T | undefined): T {
   assert.notEqual(value, undefined);
   return value;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

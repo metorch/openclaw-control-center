@@ -35,14 +35,22 @@ export function ensureGeoFeatureSnapshotLoop(): void {
 
 export async function loadGeoFeatureSnapshot(): Promise<GeoFeatureSnapshot> {
   const path = getGeoFeatureSnapshotPath();
+  let cachedSnapshot: GeoFeatureSnapshot | undefined;
   try {
     const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw) as Partial<GeoFeatureSnapshot>;
     if (parsed && typeof parsed === "object" && parsed.state && parsed.summary && parsed.modules) {
-      return parsed as GeoFeatureSnapshot;
+      cachedSnapshot = parsed as GeoFeatureSnapshot;
     }
   } catch {}
-  return await refreshGeoFeatureSnapshot();
+  try {
+    return await refreshGeoFeatureSnapshot();
+  } catch (error) {
+    if (cachedSnapshot) {
+      return cachedSnapshot;
+    }
+    throw error;
+  }
 }
 
 export async function refreshGeoFeatureSnapshot(): Promise<GeoFeatureSnapshot> {

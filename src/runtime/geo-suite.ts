@@ -81,7 +81,7 @@ export interface GeoSuiteArtifactContent {
 
 const DEFAULT_GEO_PROJECT_ROOT = resolve(
   process.env.GEO_SUITE_PROJECT_ROOT?.trim() ||
-    "C:\\Users\\45441\\.openclaw\\workspace\\projects\\3-24-19-54-09\\geo-seo-claude",
+    "C:\\Users\\45441\\.openclaw\\workspace\\projects\\features\\GEO",
 );
 const DEFAULT_RUNTIME_DIR = resolve(
   process.env.GEO_SUITE_RUNTIME_DIR?.trim() || join(process.cwd(), "runtime", "geo-suite"),
@@ -221,7 +221,10 @@ export async function getGeoSuiteModuleState(
   try {
     const raw = await readFile(paths.statePath, "utf8");
     const parsed = JSON.parse(raw) as Partial<GeoSuiteModuleRunState>;
+    const previousProjectRoot = typeof parsed.projectRoot === "string" ? parsed.projectRoot.trim() : "";
     const hydrated = hydrateGeoSuiteState(module, parsed, paths);
+    const rebasedFromPreviousProjectRoot =
+      previousProjectRoot && resolve(previousProjectRoot) !== resolve(paths.projectRoot);
     if (hydrated.status === "running") {
       const recovered: GeoSuiteModuleRunState = {
         ...hydrated,
@@ -237,6 +240,9 @@ export async function getGeoSuiteModuleState(
       await persistGeoSuiteState(recovered);
       activeRunStates.set(module, recovered);
       return recovered;
+    }
+    if (rebasedFromPreviousProjectRoot) {
+      await persistGeoSuiteState(hydrated);
     }
     activeRunStates.set(module, hydrated);
     return hydrated;
@@ -636,7 +642,8 @@ function hydrateGeoSuiteState(
   parsed: Partial<GeoSuiteModuleRunState>,
   paths: ReturnType<typeof resolveGeoSuitePaths>,
 ): GeoSuiteModuleRunState {
-  return {
+  const previousProjectRoot = typeof parsed.projectRoot === "string" ? parsed.projectRoot.trim() : "";
+  const nextState: GeoSuiteModuleRunState = {
     module,
     action: typeof parsed.action === "string" ? parsed.action : undefined,
     runId: typeof parsed.runId === "string" ? parsed.runId : `geo-suite-${module}-idle`,
@@ -669,6 +676,7 @@ function hydrateGeoSuiteState(
         : parsed.finishedAt || parsed.startedAt || new Date().toISOString(),
     processId: typeof parsed.processId === "number" ? parsed.processId : process.pid,
   };
+  return rebaseGeoSuiteStatePaths(nextState, previousProjectRoot, paths.projectRoot);
 }
 
 function hydrateGeoSuiteArtifactDescriptor(parsed: Partial<GeoSuiteArtifactDescriptor>): GeoSuiteArtifactDescriptor {
@@ -683,6 +691,43 @@ function hydrateGeoSuiteArtifactDescriptor(parsed: Partial<GeoSuiteArtifactDescr
     contentType: typeof parsed.contentType === "string" ? parsed.contentType : getGeoSuiteArtifactContentType(name),
     sizeBytes: typeof parsed.sizeBytes === "number" ? parsed.sizeBytes : undefined,
     updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
+  };
+}
+
+function rebaseGeoSuiteStatePaths(
+  state: GeoSuiteModuleRunState,
+  previousProjectRoot: string,
+  nextProjectRoot: string,
+): GeoSuiteModuleRunState {
+  if (!previousProjectRoot || resolve(previousProjectRoot) === resolve(nextProjectRoot)) {
+    return state;
+  }
+  const rebasedOutputDir = rebaseProjectPath(state.outputDir, previousProjectRoot, nextProjectRoot);
+  const rebasedStdoutTail = replaceProjectRootInText(state.stdoutTail, previousProjectRoot, nextProjectRoot);
+  const rebasedStderrTail = replaceProjectRootInText(state.stderrTail, previousProjectRoot, nextProjectRoot);
+  const rebasedArtifacts = state.artifacts.map((artifact) => {
+    const path = rebaseProjectPath(artifact.path, previousProjectRoot, nextProjectRoot);
+    return {
+      ...artifact,
+      path,
+      relativePath: path ? relative(process.cwd(), path) || basename(path) : artifact.relativePath,
+    };
+  });
+  return {
+    ...state,
+    projectRoot: nextProjectRoot,
+    outputDir: rebasedOutputDir,
+    params: {
+      ...state.params,
+      sourceAuditPath: rebaseProjectPath(state.params.sourceAuditPath, previousProjectRoot, nextProjectRoot),
+    },
+    command: {
+      file: rebaseProjectPath(state.command.file, previousProjectRoot, nextProjectRoot) || state.command.file,
+      args: state.command.args.map((arg) => rebaseProjectPath(arg, previousProjectRoot, nextProjectRoot) || arg),
+    },
+    stdoutTail: rebasedStdoutTail,
+    stderrTail: rebasedStderrTail,
+    artifacts: rebasedArtifacts,
   };
 }
 
@@ -843,6 +888,38 @@ function appendTail(current: string, chunk: string): string {
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function rebaseProjectPath(
+  value: string | undefined,
+  previousProjectRoot: string,
+  nextProjectRoot: string,
+): string | undefined {
+  if (!value) {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const resolvedPrevious = resolve(previousProjectRoot);
+  const resolvedNext = resolve(nextProjectRoot);
+  const resolvedValue = resolve(trimmed);
+  if (resolvedValue === resolvedPrevious) {
+    return resolvedNext;
+  }
+  const relativeValue = relative(resolvedPrevious, resolvedValue);
+  if (relativeValue === "" || relativeValue.startsWith("..") || relativeValue.includes(`..${sep}`)) {
+    return trimmed;
+  }
+  return resolve(join(resolvedNext, relativeValue));
+}
+
+function replaceProjectRootInText(value: string, previousProjectRoot: string, nextProjectRoot: string): string {
+  if (!value) {
+    return value;
+  }
+  return value.split(previousProjectRoot).join(nextProjectRoot);
 }
 
 function getGeoSuiteArtifactContentType(name: string): string {

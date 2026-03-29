@@ -24,6 +24,7 @@ export const AI_EDUCATION_LLM_PROVIDER_PRESETS = [
 ] as const;
 export const AI_EDUCATION_TTS_PROVIDER_PRESETS = [
   "openai-tts",
+  "minimax-tts",
   "azure-tts",
   "glm-tts",
   "qwen-tts",
@@ -646,8 +647,8 @@ function defaultStoredAiEducationState(now = new Date().toISOString()): AiEducat
       llmModel: "",
       llmApiKey: "",
       llmBaseUrl: "",
-      ttsProviderPreset: "openai-tts",
-      ttsModel: "",
+      ttsProviderPreset: "minimax-tts",
+      ttsModel: "speech-02-hd",
       ttsApiKey: "",
       ttsBaseUrl: "",
       imageProviderPreset: "nano-banana",
@@ -847,7 +848,7 @@ function toPublicAiEducationState(input: AiEducationStoredState): AiEducationPub
   const healthMatchesConfig =
     input.health.baseUrl === input.config.baseUrl &&
     (input.health.status === "ok" || input.health.status === "error");
-  const launchUrl = normalizeLaunchUrl(input.config.baseUrl);
+  const launchUrl = buildOpenMaicSelectionSyncUrl(input.config.baseUrl, input.config);
   const embedUrl = launchUrl;
   let ready = Boolean(embedUrl);
   let embedBlockedReason: string | undefined;
@@ -1597,6 +1598,50 @@ function normalizeBaseUrl(mode: AiEducationMode, input: string): string {
 
 function normalizeLaunchUrl(input: string): string | undefined {
   return normalizeOptionalHttpUrl(input);
+}
+
+function buildOpenMaicSelectionSyncUrl(
+  baseUrl: string,
+  config: AiEducationStoredConfig,
+): string | undefined {
+  const normalized = normalizeLaunchUrl(baseUrl);
+  if (!normalized) {
+    return undefined;
+  }
+  try {
+    const url = new URL(normalized);
+    const llmProviderId = resolveManagedProviderId(config.llmProviderPreset);
+    if (llmProviderId) {
+      url.searchParams.set("openclawProviderId", llmProviderId);
+    }
+    if (config.llmModel) {
+      url.searchParams.set("openclawModelId", config.llmModel);
+    }
+    if (config.ttsProviderPreset) {
+      url.searchParams.set("openclawTtsProviderId", config.ttsProviderPreset);
+    }
+    if (config.ttsModel) {
+      url.searchParams.set("openclawTtsModelId", config.ttsModel);
+    }
+    if (config.imageProviderPreset) {
+      url.searchParams.set("openclawImageProviderId", config.imageProviderPreset);
+    }
+    if (config.imageModel) {
+      url.searchParams.set("openclawImageModelId", config.imageModel);
+    }
+    if (config.videoProviderPreset) {
+      url.searchParams.set("openclawVideoProviderId", config.videoProviderPreset);
+    }
+    if (config.videoModel) {
+      url.searchParams.set("openclawVideoModelId", config.videoModel);
+    }
+    if (config.pdfProvider) {
+      url.searchParams.set("openclawPdfProviderId", config.pdfProvider);
+    }
+    return url.toString();
+  } catch {
+    return normalized;
+  }
 }
 
 function normalizeOptionalHttpUrl(input: unknown): string {

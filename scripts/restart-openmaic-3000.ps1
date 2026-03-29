@@ -1,9 +1,23 @@
 $ErrorActionPreference = "Stop"
 
 $controlCenterRoot = Split-Path -Parent $PSScriptRoot
-$openmaicRoot = Join-Path (Split-Path -Parent $controlCenterRoot) "openmaic"
+$workspaceRoot = Split-Path -Parent (Split-Path -Parent $controlCenterRoot)
+$educationStatePath = Join-Path $controlCenterRoot "runtime\ai-education.json"
+$openmaicRoot = Join-Path $workspaceRoot "projects\features\OpenMAIC"
 $port = 3000
 $startScript = Join-Path $PSScriptRoot "start-openmaic-3000.cmd"
+
+if (Test-Path -LiteralPath $educationStatePath) {
+  try {
+    $state = Get-Content -Raw -LiteralPath $educationStatePath | ConvertFrom-Json
+    $configuredRepoDir = [string]$state.config.repoDir
+    if ([string]::IsNullOrWhiteSpace($configuredRepoDir) -eq $false) {
+      $openmaicRoot = $configuredRepoDir
+    }
+  } catch {
+    Write-Warning "Failed to read AI education state file: $educationStatePath"
+  }
+}
 
 function Stop-OpenMaicProcessTree {
   param(

@@ -88,7 +88,7 @@ export interface GeoAuditSummaryData {
 
 const DEFAULT_GEO_PROJECT_ROOT = resolve(
   process.env.GEO_AUDIT_PROJECT_ROOT?.trim() ||
-    "C:\\Users\\45441\\.openclaw\\workspace\\projects\\3-24-19-54-09\\geo-seo-claude",
+    "C:\\Users\\45441\\.openclaw\\workspace\\projects\\features\\GEO",
 );
 const DEFAULT_RUNTIME_DIR = resolve(
   process.env.GEO_AUDIT_RUNTIME_DIR?.trim() || join(process.cwd(), "runtime", "geo-audits"),
@@ -225,7 +225,11 @@ export async function getGeoAuditState(): Promise<GeoAuditRunState> {
   try {
     const raw = await readFile(paths.statePath, "utf8");
     const parsed = JSON.parse(raw) as Partial<GeoAuditRunState>;
-    const hydrated = hydrateGeoAuditState(parsed, paths);
+    const previousProjectRoot = typeof parsed?.projectRoot === "string" ? parsed.projectRoot.trim() : "";
+    const hydrated = normalizeGeoAuditStateTailPaths(hydrateGeoAuditState(parsed, paths));
+    const rebasedFromPreviousProjectRoot =
+      previousProjectRoot && resolve(previousProjectRoot) !== resolve(paths.projectRoot);
+    const repairedTailPaths = hydrated.stdoutTail !== (typeof parsed?.stdoutTail === "string" ? parsed.stdoutTail : "");
     if (hydrated.status === "running") {
       const recovered = {
         ...hydrated,
@@ -241,6 +245,9 @@ export async function getGeoAuditState(): Promise<GeoAuditRunState> {
       await persistGeoAuditState(recovered);
       activeRunState = recovered;
       return recovered;
+    }
+    if (rebasedFromPreviousProjectRoot || repairedTailPaths) {
+      await persistGeoAuditState(hydrated);
     }
     activeRunState = hydrated;
     return hydrated;
@@ -374,8 +381,9 @@ function hydrateGeoAuditState(
   paths = resolveGeoAuditPaths(),
 ): GeoAuditRunState {
   const idle = buildIdleGeoAuditState(paths);
+  const previousProjectRoot = typeof parsed?.projectRoot === "string" ? parsed.projectRoot.trim() : "";
   const status = normalizeGeoAuditStatus(parsed?.status);
-  return {
+  const nextState: GeoAuditRunState = {
     ...idle,
     ...parsed,
     status,
@@ -404,6 +412,7 @@ function hydrateGeoAuditState(
         ? parsed.lastUpdatedAt
         : idle.lastUpdatedAt,
   };
+  return rebaseGeoAuditStatePaths(nextState, previousProjectRoot, paths.projectRoot);
 }
 
 function hydrateArtifactDescriptor(input: Partial<GeoAuditArtifactDescriptor>): GeoAuditArtifactDescriptor {
@@ -423,6 +432,52 @@ function hydrateArtifactDescriptor(input: Partial<GeoAuditArtifactDescriptor>): 
         : DEFAULT_ARTIFACT_CONTENT_TYPES[name],
     sizeBytes: typeof input.sizeBytes === "number" && Number.isFinite(input.sizeBytes) ? input.sizeBytes : undefined,
     updatedAt: typeof input.updatedAt === "string" && input.updatedAt.trim() ? input.updatedAt.trim() : undefined,
+  };
+}
+
+function rebaseGeoAuditStatePaths(
+  state: GeoAuditRunState,
+  previousProjectRoot: string,
+  nextProjectRoot: string,
+): GeoAuditRunState {
+  if (!previousProjectRoot || resolve(previousProjectRoot) === resolve(nextProjectRoot)) {
+    return state;
+  }
+  const rebasedOutputDir = rebaseProjectPath(state.outputDir, previousProjectRoot, nextProjectRoot);
+  const rebasedScriptPath = rebaseProjectPath(state.scriptPath, previousProjectRoot, nextProjectRoot) || state.scriptPath;
+  const rebasedStdoutTail = replaceProjectRootInText(state.stdoutTail, previousProjectRoot, nextProjectRoot);
+  const rebasedStderrTail = replaceProjectRootInText(state.stderrTail, previousProjectRoot, nextProjectRoot);
+  const rebasedArtifacts = state.artifacts.map((artifact) => {
+    const path = rebaseProjectPath(artifact.path, previousProjectRoot, nextProjectRoot);
+    return {
+      ...artifact,
+      path,
+      relativePath: path ? relative(process.cwd(), path) || basename(path) : artifact.relativePath,
+    };
+  });
+  return {
+    ...state,
+    projectRoot: nextProjectRoot,
+    scriptPath: rebasedScriptPath,
+    outputDir: rebasedOutputDir,
+    command: {
+      ...state.command,
+      args: state.command.args.map((arg) => rebaseProjectPath(arg, previousProjectRoot, nextProjectRoot) || arg),
+    },
+    stdoutTail: rebasedStdoutTail,
+    stderrTail: rebasedStderrTail,
+    artifacts: rebasedArtifacts,
+  };
+}
+
+function normalizeGeoAuditStateTailPaths(state: GeoAuditRunState): GeoAuditRunState {
+  const normalizedStdoutTail = normalizeGeoAuditStdoutTail(state);
+  if (normalizedStdoutTail === state.stdoutTail) {
+    return state;
+  }
+  return {
+    ...state,
+    stdoutTail: normalizedStdoutTail,
   };
 }
 
@@ -718,6 +773,82 @@ function normalizeGeoAuditArtifactName(value: unknown): GeoAuditArtifactName | u
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function normalizeGeoAuditStdoutTail(state: GeoAuditRunState): string {
+  if (!state.stdoutTail) {
+    return state.stdoutTail;
+  }
+  try {
+    const payload = JSON.parse(state.stdoutTail.trim()) as Record<string, unknown>;
+    if (!payload || typeof payload !== "object") {
+      return state.stdoutTail;
+    }
+    const artifactPathByName = new Map(
+      state.artifacts
+        .filter((artifact) => typeof artifact.path === "string" && artifact.path.trim())
+        .map((artifact) => [artifact.name, artifact.path as string]),
+    );
+    let changed = false;
+    changed = assignTailPath(payload, "output_dir", state.outputDir) || changed;
+    changed =
+      assignTailPath(payload, "json", artifactPathByName.get("standalone-audit.json")) || changed;
+    changed =
+      assignTailPath(payload, "markdown", artifactPathByName.get("GEO-AUDIT-REPORT.md")) || changed;
+    changed =
+      assignTailPath(payload, "pdf", artifactPathByName.get("GEO-REPORT.pdf")) || changed;
+    changed =
+      assignTailPath(payload, "llms_txt", artifactPathByName.get("llms.txt")) || changed;
+    changed =
+      assignTailPath(payload, "llms_full_txt", artifactPathByName.get("llms-full.txt")) || changed;
+    return changed ? `${JSON.stringify(payload, null, 2)}\n` : state.stdoutTail;
+  } catch {
+    return state.stdoutTail;
+  }
+}
+
+function assignTailPath(
+  payload: Record<string, unknown>,
+  key: string,
+  value: string | undefined,
+): boolean {
+  if (!value || payload[key] === value) {
+    return false;
+  }
+  payload[key] = value;
+  return true;
+}
+
+function rebaseProjectPath(
+  value: string | undefined,
+  previousProjectRoot: string,
+  nextProjectRoot: string,
+): string | undefined {
+  if (!value) {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const resolvedPrevious = resolve(previousProjectRoot);
+  const resolvedNext = resolve(nextProjectRoot);
+  const resolvedValue = resolve(trimmed);
+  if (resolvedValue === resolvedPrevious) {
+    return resolvedNext;
+  }
+  const relativeValue = relative(resolvedPrevious, resolvedValue);
+  if (relativeValue === "" || relativeValue.startsWith("..") || relativeValue.includes(`..${sep}`)) {
+    return trimmed;
+  }
+  return resolve(join(resolvedNext, relativeValue));
+}
+
+function replaceProjectRootInText(value: string, previousProjectRoot: string, nextProjectRoot: string): string {
+  if (!value) {
+    return value;
+  }
+  return value.split(previousProjectRoot).join(nextProjectRoot);
 }
 
 function isPathInsideAnyRoot(path: string, roots: string[]): boolean {

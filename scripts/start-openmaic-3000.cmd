@@ -2,7 +2,7 @@
 setlocal
 
 for %%I in ("%~dp0..") do set "CONTROL_CENTER_ROOT=%%~fI"
-for %%I in ("%CONTROL_CENTER_ROOT%\..\openmaic") do set "OPENMAIC_ROOT=%%~fI"
+for %%I in ("%CONTROL_CENTER_ROOT%\..\..\projects\features\OpenMAIC") do set "OPENMAIC_ROOT=%%~fI"
 set "LOG_DIR=%CONTROL_CENTER_ROOT%\runtime\logs"
 set "JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-17.0.18.8-hotspot"
 

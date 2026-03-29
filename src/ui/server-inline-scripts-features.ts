@@ -976,6 +976,44 @@ function renderFeaturesScript(language = "zh") {
       }
       updateOpenLinks(state || { config: { mode, baseUrl: mode === 'hosted' ? hostedBaseUrl : toText(state?.config?.baseUrl, 'http://127.0.0.1:3000') } });
     };
+    const providerModelFallbacks = {
+      llm: {
+        openai: 'gpt-5.4',
+        google: 'gemini-2.5-flash',
+      },
+      tts: {
+        'openai-tts': 'tts-1-1106',
+        'minimax-tts': 'speech-02-hd',
+      },
+      image: {
+        'nano-banana': 'gemini-2.5-flash-image',
+      },
+      video: {
+        veo: 'veo3.1-fast',
+      },
+    };
+    const readObservedProviderModels = (sectionKey, providerId) => {
+      const section = toObj(educationState?.observedServerProviders?.[sectionKey]);
+      const entry = toObj(section?.[providerId]);
+      const values = Array.isArray(entry?.models) ? entry.models : [];
+      return values.map((value) => toText(value)).filter(Boolean);
+    };
+    const syncProviderModelInput = (sectionKey, providerInput, modelInput) => {
+      if (!(providerInput instanceof HTMLSelectElement) || !(modelInput instanceof HTMLInputElement)) return;
+      const providerId = toText(providerInput.value);
+      if (!providerId) return;
+      const observedModels = readObservedProviderModels(sectionKey, providerId);
+      const fallbackMap = toObj(providerModelFallbacks[sectionKey]);
+      const fallbackModel = toText(fallbackMap?.[providerId]);
+      const nextModel = observedModels[0] || fallbackModel;
+      if (!nextModel) return;
+      const currentModel = toText(modelInput.value);
+      const currentMatchesProvider =
+        observedModels.includes(currentModel) || (fallbackModel && currentModel === fallbackModel);
+      if (!currentModel || !currentMatchesProvider || document.activeElement === providerInput) {
+        modelInput.value = nextModel;
+      }
+    };
     const syncProviderPresentation = () => {
       const provider = llmProviderInput instanceof HTMLSelectElement ? llmProviderInput.value : 'openai';
       if (llmBaseUrlInput instanceof HTMLInputElement) {
@@ -1397,7 +1435,25 @@ function renderFeaturesScript(language = "zh") {
       });
     }
     if (llmProviderInput instanceof HTMLSelectElement) {
-      llmProviderInput.addEventListener('change', syncProviderPresentation);
+      llmProviderInput.addEventListener('change', () => {
+        syncProviderPresentation();
+        syncProviderModelInput('providers', llmProviderInput, llmModelInput);
+      });
+    }
+    if (ttsProviderInput instanceof HTMLSelectElement) {
+      ttsProviderInput.addEventListener('change', () => {
+        syncProviderModelInput('tts', ttsProviderInput, ttsModelInput);
+      });
+    }
+    if (imageProviderInput instanceof HTMLSelectElement) {
+      imageProviderInput.addEventListener('change', () => {
+        syncProviderModelInput('image', imageProviderInput, imageModelInput);
+      });
+    }
+    if (videoProviderInput instanceof HTMLSelectElement) {
+      videoProviderInput.addEventListener('change', () => {
+        syncProviderModelInput('video', videoProviderInput, videoModelInput);
+      });
     }
     if (pdfProviderInput instanceof HTMLSelectElement) {
       pdfProviderInput.addEventListener('change', syncPdfPresentation);
