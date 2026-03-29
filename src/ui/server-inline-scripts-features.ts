@@ -727,6 +727,292 @@ function renderFeaturesScript(language = "zh") {
   if (geoRoot instanceof HTMLElement) void fetchState();
 })();
 (() => {
+  const predictionRoot = document.querySelector('[data-ai-prediction-root]');
+  if (!(predictionRoot instanceof HTMLElement)) return;
+  const lang = (predictionRoot.dataset.language || '${language}').trim().toLowerCase() === 'en' ? 'en' : 'zh';
+  const t = (en, zh) => (lang === 'en' ? en : zh);
+  const toObj = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
+  const toText = (value, fallback = '') => {
+    const text = String(value == null ? '' : value).trim();
+    return text || fallback;
+  };
+  const l = {
+    saving: t('Saving AI Prediction config...', '\\u6B63\\u5728\\u4FDD\\u5B58 AI\\u9884\\u6D4B\\u914D\\u7F6E...'),
+    saved: t('AI Prediction config saved.', 'AI\\u9884\\u6D4B\\u914D\\u7F6E\\u5DF2\\u4FDD\\u5B58\\u3002'),
+    saveFailed: t('Failed to save AI Prediction config', '\\u4FDD\\u5B58 AI\\u9884\\u6D4B\\u914D\\u7F6E\\u5931\\u8D25'),
+    checking: t('Checking MiroFish health...', '\\u6B63\\u5728\\u68C0\\u67E5 MiroFish health...'),
+    healthReady: t('MiroFish health check completed.', 'MiroFish health check \\u5DF2\\u5B8C\\u6210\\u3002'),
+    healthFailed: t('MiroFish health check failed', 'MiroFish health check \\u5931\\u8D25'),
+    loading: t('Loading AI Prediction state...', '\\u6B63\\u5728\\u52A0\\u8F7D AI\\u9884\\u6D4B\\u72B6\\u6001...'),
+    loadFailed: t('Failed to load AI Prediction state', '\\u52A0\\u8F7D AI\\u9884\\u6D4B\\u72B6\\u6001\\u5931\\u8D25'),
+    connected: t('Connected', '\\u5DF2\\u8FDE\\u63A5'),
+    connectionFailed: t('Connection failed', '\\u8FDE\\u63A5\\u5931\\u8D25'),
+    notChecked: t('Not checked', '\\u5C1A\\u672A\\u68C0\\u67E5'),
+    embedReady: t('Embedded workspace ready', '\\u5185\\u5D4C\\u5DE5\\u4F5C\\u533A\\u5DF2\\u5C31\\u7EEA'),
+    embedAttention: t('Attention required', '\\u9700\\u8981\\u5904\\u7406'),
+    reloadEmbed: t('Reloading embedded workspace...', '\\u6B63\\u5728\\u91CD\\u65B0\\u52A0\\u8F7D\\u5185\\u5D4C\\u5DE5\\u4F5C\\u533A...'),
+    embedBlocked: t('Prediction workspace unavailable', '\\u9884\\u6D4B\\u5DE5\\u4F5C\\u533A\\u6682\\u4E0D\\u53EF\\u7528'),
+    fullscreenWorkspace: t('Fullscreen workspace', '\\u5DE5\\u4F5C\\u533A\\u5168\\u5C4F'),
+    exitFullscreen: t('Exit fullscreen', '\\u9000\\u51FA\\u5168\\u5C4F'),
+    fullscreenActive: t('Fullscreen active', '\\u5DF2\\u5168\\u5C4F'),
+    windowed: t('Windowed', '\\u7A97\\u53E3\\u6A21\\u5F0F'),
+    fullscreenUnavailable: t('Fullscreen not supported here', '\\u5F53\\u524D\\u73AF\\u5883\\u4E0D\\u652F\\u6301\\u5168\\u5C4F'),
+    blocked: t('This machine has not set a safety passcode yet, so feature mutations are blocked.', '\\u8FD9\\u53F0\\u673A\\u5668\\u8FD8\\u6CA1\\u6709\\u8BBE\\u7F6E\\u5B89\\u5168\\u53E3\\u4EE4\\uFF0C\\u6240\\u4EE5\\u6682\\u65F6\\u4E0D\\u80FD\\u53D8\\u66F4\\u6388\\u6743\\u3002'),
+    locked: t('Write access is off. Turn on the top toolbar unlock before mutating this feature.', '\\u5199\\u5165\\u89E3\\u9501\\u5DF2\\u5173\\u95ED\\uFF0C\\u8BF7\\u5148\\u6253\\u5F00\\u5199\\u5165\\u89E3\\u9501\\u3002')
+  };
+
+  let predictionState = null;
+  let saveBusy = false;
+  let healthBusy = false;
+
+  const configForm = predictionRoot.querySelector('[data-ai-prediction-config-form]');
+  const configStatusNode = predictionRoot.querySelector('[data-ai-prediction-config-status]');
+  const frontendUrlNode = predictionRoot.querySelector('[data-ai-prediction-frontend-url]');
+  const backendUrlNode = predictionRoot.querySelector('[data-ai-prediction-backend-url]');
+  const healthStatusNode = predictionRoot.querySelector('[data-ai-prediction-health-status]');
+  const embedStatusNode = predictionRoot.querySelector('[data-ai-prediction-embed-status]');
+  const topBadge = predictionRoot.querySelector('[data-ai-prediction-top-badge]');
+  const iframeShell = predictionRoot.querySelector('[data-ai-prediction-iframe-shell]');
+  const iframeNode = predictionRoot.querySelector('[data-ai-prediction-iframe]');
+  const fullscreenTarget = predictionRoot.querySelector('[data-ai-prediction-fullscreen-target]');
+  const fullscreenButton = predictionRoot.querySelector('[data-ai-prediction-fullscreen]');
+  const fullscreenStateNode = predictionRoot.querySelector('[data-ai-prediction-fullscreen-state]');
+  const fallbackNode = predictionRoot.querySelector('[data-ai-prediction-fallback]');
+  const fallbackTitleNode = predictionRoot.querySelector('[data-ai-prediction-fallback-title]');
+  const fallbackReasonNode = predictionRoot.querySelector('[data-ai-prediction-fallback-reason]');
+  const embedMessageNode = predictionRoot.querySelector('[data-ai-prediction-embed-message]');
+  const healthSummaryNode = predictionRoot.querySelector('[data-ai-prediction-health-summary]');
+  const frontendHealthNode = predictionRoot.querySelector('[data-ai-prediction-frontend-health]');
+  const backendHealthNode = predictionRoot.querySelector('[data-ai-prediction-backend-health]');
+  const healthCheckedNode = predictionRoot.querySelector('[data-ai-prediction-health-checked]');
+  const repoDirNode = predictionRoot.querySelector('[data-ai-prediction-repo-dir]');
+  const fallbackSummaryNode = predictionRoot.querySelector('[data-ai-prediction-fallback-summary]');
+  const frontendInput = configForm instanceof HTMLFormElement ? configForm.querySelector('[name="frontendBaseUrl"]') : null;
+  const backendInput = configForm instanceof HTMLFormElement ? configForm.querySelector('[name="backendBaseUrl"]') : null;
+  const repoDirInput = configForm instanceof HTMLFormElement ? configForm.querySelector('[name="repoDir"]') : null;
+  const saveButtons = () => Array.from(predictionRoot.querySelectorAll('[data-ai-prediction-save]')).filter((node) => node instanceof HTMLButtonElement);
+  const healthButtons = () => Array.from(predictionRoot.querySelectorAll('[data-ai-prediction-health]')).filter((node) => node instanceof HTMLButtonElement);
+  const reloadButtons = () => Array.from(predictionRoot.querySelectorAll('[data-ai-prediction-reload-embed]')).filter((node) => node instanceof HTMLButtonElement);
+  const openAppLinks = () => Array.from(predictionRoot.querySelectorAll('[data-ai-prediction-open-app]')).filter((node) => node instanceof HTMLAnchorElement);
+  const openDemoLinks = () => Array.from(predictionRoot.querySelectorAll('[data-ai-prediction-open-demo]')).filter((node) => node instanceof HTMLAnchorElement);
+
+  const mutationState = () => (typeof window.__openclawGetMutationAuthState === 'function' ? window.__openclawGetMutationAuthState() : { gateRequired: false, tokenConfigured: true, canMutate: true });
+  const mutationHeaders = (headers = {}) => (typeof window.__openclawGetMutationAuthHeaders === 'function' ? window.__openclawGetMutationAuthHeaders(headers) : headers);
+  const lockMessage = () => {
+    const state = mutationState();
+    if (!state.gateRequired) return '';
+    if (!state.tokenConfigured) return l.blocked;
+    if (!state.canMutate) return l.locked;
+    return '';
+  };
+  const setConfigStatus = (message) => {
+    if (configStatusNode instanceof HTMLElement) configStatusNode.textContent = message;
+  };
+  const healthLabel = (value) => value === 'ok' ? l.connected : value === 'error' ? l.connectionFailed : l.notChecked;
+  const healthTone = (value) => value === 'ok' ? 'done' : value === 'error' ? 'blocked' : 'enabled';
+  const embedLabel = (state) => state && state.ready === true ? l.embedReady : l.embedAttention;
+  const canFullscreen = () => !!(fullscreenTarget instanceof HTMLElement && document.fullscreenEnabled);
+  const updateFullscreenUi = () => {
+    const active = fullscreenTarget instanceof Element && document.fullscreenElement === fullscreenTarget;
+    if (fullscreenButton instanceof HTMLButtonElement) {
+      fullscreenButton.hidden = !canFullscreen();
+      fullscreenButton.disabled = !canFullscreen();
+      fullscreenButton.textContent = active ? l.exitFullscreen : l.fullscreenWorkspace;
+    }
+    if (fullscreenStateNode instanceof HTMLElement) {
+      fullscreenStateNode.textContent = canFullscreen() ? (active ? l.fullscreenActive : l.windowed) : l.fullscreenUnavailable;
+    }
+  };
+  const showFallback = (message) => {
+    if (iframeShell instanceof HTMLElement) iframeShell.dataset.aiPredictionReady = 'false';
+    if (iframeNode instanceof HTMLIFrameElement) {
+      iframeNode.hidden = true;
+      iframeNode.classList.add('is-hidden');
+    }
+    if (fallbackNode instanceof HTMLElement) {
+      fallbackNode.hidden = false;
+      fallbackNode.classList.add('is-visible');
+    }
+    if (fallbackTitleNode instanceof HTMLElement) fallbackTitleNode.textContent = l.embedBlocked;
+    if (fallbackReasonNode instanceof HTMLElement) fallbackReasonNode.textContent = message || l.embedBlocked;
+  };
+  const syncOpenLinks = (state) => {
+    const externalOpenUrl = toText(state?.externalOpenUrl, 'http://127.0.0.1:3002');
+    const demoUrl = toText(state?.demoUrl, 'https://666ghj.github.io/mirofish-demo/');
+    openAppLinks().forEach((link) => { link.href = externalOpenUrl; });
+    openDemoLinks().forEach((link) => { link.href = demoUrl; });
+  };
+  const applyState = (state, statusMessage = '', forceReloadIframe = false) => {
+    predictionState = toObj(state);
+    const config = toObj(predictionState.config);
+    const health = toObj(predictionState.health);
+    const frontend = toObj(health.frontend);
+    const backend = toObj(health.backend);
+    const ready = predictionState.ready === true;
+    const frontendBaseUrl = toText(config.frontendBaseUrl, 'http://127.0.0.1:3002');
+    const backendBaseUrl = toText(config.backendBaseUrl, 'http://127.0.0.1:5002');
+    const repoDir = toText(config.repoDir);
+    if (frontendInput instanceof HTMLInputElement && document.activeElement !== frontendInput) frontendInput.value = frontendBaseUrl;
+    if (backendInput instanceof HTMLInputElement && document.activeElement !== backendInput) backendInput.value = backendBaseUrl;
+    if (repoDirInput instanceof HTMLInputElement && document.activeElement !== repoDirInput) repoDirInput.value = repoDir;
+    if (frontendUrlNode instanceof HTMLElement) frontendUrlNode.textContent = frontendBaseUrl || '-';
+    if (backendUrlNode instanceof HTMLElement) backendUrlNode.textContent = backendBaseUrl || '-';
+    if (repoDirNode instanceof HTMLElement) repoDirNode.textContent = repoDir || '-';
+    const nextHealthLabel = healthLabel(toText(health.status));
+    const nextEmbedLabel = embedLabel(predictionState);
+    if (healthStatusNode instanceof HTMLElement) healthStatusNode.textContent = nextHealthLabel;
+    if (embedStatusNode instanceof HTMLElement) embedStatusNode.textContent = nextEmbedLabel;
+    if (frontendHealthNode instanceof HTMLElement) frontendHealthNode.textContent = healthLabel(frontend.ok === true ? 'ok' : toText(health.status));
+    if (backendHealthNode instanceof HTMLElement) backendHealthNode.textContent = healthLabel(backend.ok === true ? 'ok' : toText(health.status));
+    if (healthCheckedNode instanceof HTMLElement) healthCheckedNode.textContent = toText(health.checkedAt, '-');
+    if (healthSummaryNode instanceof HTMLElement) healthSummaryNode.textContent = toText(health.message, l.notChecked);
+    if (fallbackSummaryNode instanceof HTMLElement) fallbackSummaryNode.textContent = toText(predictionState.embedBlockedReason || health.message, '');
+    if (embedMessageNode instanceof HTMLElement) embedMessageNode.textContent = ready ? toText(health.message, l.embedReady) : toText(predictionState.embedBlockedReason || health.message, l.embedBlocked);
+    if (topBadge instanceof HTMLElement) {
+      topBadge.className = 'badge ' + (ready ? 'done' : healthTone(toText(health.status)));
+      topBadge.textContent = nextEmbedLabel;
+    }
+    syncOpenLinks(predictionState);
+    if (ready && iframeNode instanceof HTMLIFrameElement) {
+      const embedUrl = toText(predictionState.embedUrl, frontendBaseUrl);
+      if (iframeShell instanceof HTMLElement) iframeShell.dataset.aiPredictionReady = 'true';
+      if (forceReloadIframe || toText(iframeNode.getAttribute('src')) !== embedUrl) {
+        iframeNode.src = embedUrl;
+      }
+      iframeNode.hidden = false;
+      iframeNode.classList.remove('is-hidden');
+      if (fallbackNode instanceof HTMLElement) {
+        fallbackNode.hidden = true;
+        fallbackNode.classList.remove('is-visible');
+      }
+    } else {
+      showFallback(toText(predictionState.embedBlockedReason || health.message, l.embedBlocked));
+    }
+    if (statusMessage) setConfigStatus(statusMessage);
+  };
+  const requestJson = async (url, options) => {
+    const response = await fetch(url, options);
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload || payload.ok !== true) {
+      throw new Error(payload?.error?.message || payload?.error || options?.fallbackError || 'Request failed');
+    }
+    return payload;
+  };
+  const collectConfigBody = () => ({
+    frontendBaseUrl: frontendInput instanceof HTMLInputElement ? toText(frontendInput.value) : '',
+    backendBaseUrl: backendInput instanceof HTMLInputElement ? toText(backendInput.value) : '',
+    repoDir: repoDirInput instanceof HTMLInputElement ? toText(repoDirInput.value) : ''
+  });
+  const persistConfig = async (quiet = false) => {
+    const message = lockMessage();
+    if (message) {
+      setConfigStatus(message);
+      return null;
+    }
+    saveBusy = true;
+    if (!quiet) setConfigStatus(l.saving);
+    try {
+      const payload = await requestJson('/api/features/prediction/config', {
+        method: 'PATCH',
+        headers: mutationHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify(collectConfigBody()),
+        fallbackError: l.saveFailed,
+      });
+      applyState(payload.state || {}, quiet ? '' : l.saved);
+      return payload.state || {};
+    } catch (error) {
+      setConfigStatus(error instanceof Error ? error.message : l.saveFailed);
+      return null;
+    } finally {
+      saveBusy = false;
+    }
+  };
+  const fetchState = async (quiet = false) => {
+    if (!quiet) setConfigStatus(l.loading);
+    try {
+      const payload = await requestJson('/api/features/prediction/state', {
+        method: 'GET',
+        fallbackError: l.loadFailed,
+      });
+      applyState(payload.state || {}, quiet ? '' : toText(payload.state?.health?.message, ''));
+      return payload.state || {};
+    } catch (error) {
+      const message = error instanceof Error ? error.message : l.loadFailed;
+      setConfigStatus(message);
+      showFallback(message);
+      return null;
+    }
+  };
+  const checkHealth = async ({ persist = true, quiet = false } = {}) => {
+    const saved = persist ? await persistConfig(true) : predictionState;
+    if (!saved) return;
+    healthBusy = true;
+    if (!quiet) setConfigStatus(l.checking);
+    try {
+      const payload = await requestJson('/api/features/prediction/health', {
+        method: 'POST',
+        fallbackError: l.healthFailed,
+      });
+      applyState(payload.state || {}, toText(payload.state?.health?.message, l.healthReady));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : l.healthFailed;
+      setConfigStatus(message);
+      showFallback(message);
+    } finally {
+      healthBusy = false;
+    }
+  };
+  const reloadEmbed = async () => {
+    if (saveBusy || healthBusy) return;
+    setConfigStatus(l.reloadEmbed);
+    const saved = await persistConfig(true);
+    if (!saved) return;
+    applyState(saved, toText(saved.embedBlockedReason || saved.health?.message, l.reloadEmbed), true);
+  };
+  const toggleFullscreenWorkspace = async () => {
+    if (!(fullscreenTarget instanceof HTMLElement)) return;
+    if (!canFullscreen()) {
+      setConfigStatus(l.fullscreenUnavailable);
+      updateFullscreenUi();
+      return;
+    }
+    if (document.fullscreenElement === fullscreenTarget) {
+      await document.exitFullscreen().catch(() => {});
+    } else {
+      await fullscreenTarget.requestFullscreen().catch(() => {});
+    }
+    updateFullscreenUi();
+  };
+
+  if (configForm instanceof HTMLFormElement) {
+    configForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      void persistConfig();
+    });
+  }
+  saveButtons().forEach((button) => button.addEventListener('click', (event) => {
+    event.preventDefault();
+    void persistConfig();
+  }));
+  healthButtons().forEach((button) => button.addEventListener('click', (event) => {
+    event.preventDefault();
+    void checkHealth();
+  }));
+  reloadButtons().forEach((button) => button.addEventListener('click', (event) => {
+    event.preventDefault();
+    void reloadEmbed();
+  }));
+  if (fullscreenButton instanceof HTMLButtonElement) {
+    fullscreenButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      void toggleFullscreenWorkspace();
+    });
+  }
+  document.addEventListener('fullscreenchange', updateFullscreenUi);
+  updateFullscreenUi();
+  void fetchState();
+})();
+(() => {
   const educationRoot = document.querySelector('[data-ai-education-root]');
   if (!(educationRoot instanceof HTMLElement)) return;
   const lang = (educationRoot.dataset.language || '${language}').trim().toLowerCase() === 'en' ? 'en' : 'zh';

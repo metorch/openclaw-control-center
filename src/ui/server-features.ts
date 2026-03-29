@@ -13,12 +13,15 @@ const GEO_SUITE_MODULES = [
   { key: "report", titleEn: "Report", titleZh: "\u62A5\u544A\u4EA4\u4ED8", blurbEn: "Findings, quick wins, medium-term work, and final deliverables.", blurbZh: "\u67E5\u770B\u5173\u952E\u53D1\u73B0\u3001\u5FEB\u901F\u6539\u8FDB\u3001\u4E2D\u671F\u8BA1\u5212\u548C\u6700\u7EC8\u4EA4\u4ED8\u7269\u3002" },
 ];
 const GEO_DIRECT_MODULES = GEO_SUITE_MODULES.filter((module) => module.key !== "overview" && module.key !== "platforms");
+const AI_PREDICTION_FRONTEND_DEFAULT_BASE_URL = "http://127.0.0.1:3002";
+const AI_PREDICTION_BACKEND_DEFAULT_BASE_URL = "http://127.0.0.1:5002";
+const AI_PREDICTION_DEMO_URL = "https://666ghj.github.io/mirofish-demo/";
 
 function createFeatureRenderers(deps) {
   const { buildHomeQuery, escapeHtml, formatInt, formatTimeAgoFromNow, pickUiText } = deps;
 
   function normalizeDashboardFeature(value) {
-    return value === "geo" || value === "education" ? value : void 0;
+    return value === "geo" || value === "education" || value === "prediction" ? value : void 0;
   }
 
   function buildFeaturesHref(input, feature) {
@@ -222,6 +225,58 @@ function createFeatureRenderers(deps) {
       embedUrl: state.embedUrl || state.launchUrl || config.baseUrl || "",
       ready: state.ready === true,
       embedBlockedReason: state.embedBlockedReason || "",
+    };
+  }
+
+  function predictionHealthStatusLabel(status, language) {
+    if (status === "ok") return pickUiText(language, "Connected", "\u5DF2\u8FDE\u63A5");
+    if (status === "error") return pickUiText(language, "Connection failed", "\u8FDE\u63A5\u5931\u8D25");
+    return pickUiText(language, "Not checked", "\u5C1A\u672A\u68C0\u67E5");
+  }
+
+  function predictionHealthTone(status) {
+    if (status === "ok") return "done";
+    if (status === "error") return "blocked";
+    return "enabled";
+  }
+
+  function getAiPredictionState(input) {
+    const state = input.aiPredictionState || {};
+    const config = state.config || {};
+    const health = state.health || {};
+    const frontend = health.frontend || {};
+    const backend = health.backend || {};
+    return {
+      ...state,
+      config: {
+        frontendBaseUrl: config.frontendBaseUrl || AI_PREDICTION_FRONTEND_DEFAULT_BASE_URL,
+        backendBaseUrl: config.backendBaseUrl || AI_PREDICTION_BACKEND_DEFAULT_BASE_URL,
+        repoDir: config.repoDir || "",
+      },
+      health: {
+        status: health.status || "unknown",
+        checkedAt: health.checkedAt || "",
+        frontend: {
+          ok: frontend.ok === true,
+          checkedUrl: frontend.checkedUrl || config.frontendBaseUrl || AI_PREDICTION_FRONTEND_DEFAULT_BASE_URL,
+          statusCode: frontend.statusCode,
+          message: frontend.message || "",
+        },
+        backend: {
+          ok: backend.ok === true,
+          checkedUrl: backend.checkedUrl || config.backendBaseUrl || AI_PREDICTION_BACKEND_DEFAULT_BASE_URL,
+          statusCode: backend.statusCode,
+          message: backend.message || "",
+        },
+        message: health.message || "",
+      },
+      launchUrl: state.launchUrl || config.frontendBaseUrl || AI_PREDICTION_FRONTEND_DEFAULT_BASE_URL,
+      embedUrl:
+        state.embedUrl || state.launchUrl || config.frontendBaseUrl || AI_PREDICTION_FRONTEND_DEFAULT_BASE_URL,
+      ready: state.ready === true,
+      embedBlockedReason: state.embedBlockedReason || "",
+      externalOpenUrl: state.externalOpenUrl || state.launchUrl || config.frontendBaseUrl || AI_PREDICTION_FRONTEND_DEFAULT_BASE_URL,
+      demoUrl: state.demoUrl || AI_PREDICTION_DEMO_URL,
     };
   }
 
@@ -926,6 +981,49 @@ function createFeatureRenderers(deps) {
     </article>`;
   }
 
+  function renderPredictionHubCard(input) {
+    const state = getAiPredictionState(input);
+    const badgeLabel = state.ready
+      ? pickUiText(input.language, "Embedded workspace ready", "\u5185\u5D4C\u5DE5\u4F5C\u533A\u5DF2\u5C31\u7EEA")
+      : predictionHealthStatusLabel(state.health?.status, input.language);
+    const badgeTone = state.ready ? "done" : predictionHealthTone(state.health?.status);
+    const subLabel = state.ready
+      ? pickUiText(
+          input.language,
+          `Frontend: ${state.config.frontendBaseUrl} 路 Backend: ${state.config.backendBaseUrl}`,
+          `\u524D\u7AEF\uFF1A${state.config.frontendBaseUrl} \u00B7 \u540E\u7AEF\uFF1A${state.config.backendBaseUrl}`,
+        )
+      : state.embedBlockedReason ||
+        state.health?.message ||
+        pickUiText(
+          input.language,
+          "Finish the local connection setup before the embedded prediction workspace can launch.",
+          "\u9700\u5148\u5B8C\u6210\u672C\u5730\u8FDE\u63A5\u914D\u7F6E\uFF0C\u518D\u80FD\u542F\u52A8\u5185\u5D4C AI \u9884\u6D4B\u5DE5\u4F5C\u533A\u3002",
+        );
+    return `<article class="feature-card">
+      <div class="feature-card-head">
+        <div>
+          <div class="feature-card-kicker">AI\u9884\u6D4B</div>
+          <h3>${escapeHtml(pickUiText(input.language, "AI Prediction", "AI\u9884\u6D4B"))}</h3>
+        </div>
+        <span class="badge ${escapeHtml(badgeTone)}">${escapeHtml(badgeLabel)}</span>
+      </div>
+      <div class="meta">${escapeHtml(
+        pickUiText(
+          input.language,
+          "Embed MiroFish as an in-shell prediction workspace so you can stay in the AI employee system while operating the simulator.",
+          "\u628A MiroFish \u4F5C\u4E3A AI \u5458\u5DE5\u7CFB\u7EDF\u58F3\u5185\u7684\u9884\u6D4B\u5DE5\u4F5C\u533A\u5D4C\u5165\uFF0C\u64CD\u4F5C\u4EFF\u771F\u65F6\u4E0D\u9700\u8981\u8DF3\u51FA\u58F3\u4F53\u3002",
+        ),
+      )}</div>
+      <div class="meta">${escapeHtml(subLabel)}</div>
+      <div class="feature-card-actions">
+        <a class="btn" href="${escapeHtml(buildFeaturesHref(input, "prediction"))}">${escapeHtml(
+          pickUiText(input.language, "Open AI Prediction", "\u6253\u5F00 AI\u9884\u6D4B"),
+        )}</a>
+      </div>
+    </article>`;
+  }
+
   function renderFeaturesHub(input) {
     return `
     <section class="card" data-features-root data-language="${escapeHtml(input.language)}">
@@ -935,8 +1033,8 @@ function createFeatureRenderers(deps) {
           <div class="meta">${escapeHtml(
             pickUiText(
               input.language,
-              "Open focused capability pages here. GEO keeps the controlled external-runner pattern, and AI Education now opens OpenMAIC as an embedded child app inside the same shell.",
-              "\u5728\u8FD9\u91CC\u6253\u5F00\u805A\u7126\u80FD\u529B\u9875\u3002GEO \u7EE7\u7EED\u4FDD\u6301\u53D7\u63A7\u5916\u90E8 runner \u6A21\u5F0F\uFF0CAI\u6559\u80B2\u5219\u5728\u540C\u4E00\u4E2A\u58F3\u91CC\u5185\u5D4C OpenMAIC \u5B50\u5E94\u7528\u3002",
+              "Open focused capability pages here. GEO keeps the controlled external-runner pattern, while AI Education and AI Prediction embed their child workspaces inside the same shell.",
+              "\u5728\u8FD9\u91CC\u6253\u5F00\u805A\u7126\u80FD\u529B\u9875\u3002GEO \u7EE7\u7EED\u4FDD\u6301\u53D7\u63A7\u5916\u90E8 runner \u6A21\u5F0F\uFF0CAI\u6559\u80B2\u548C AI\u9884\u6D4B\u5219\u5728\u540C\u4E00\u4E2A\u58F3\u91CC\u5185\u5D4C\u5B50\u5E94\u7528\u3002",
             ),
           )}</div>
         </div>
@@ -944,6 +1042,7 @@ function createFeatureRenderers(deps) {
       <div class="feature-card-grid">
         ${renderGeoHubCard(input)}
         ${renderEducationHubCard(input)}
+        ${renderPredictionHubCard(input)}
       </div>
     </section>
   `;
@@ -2045,9 +2144,9 @@ function createFeatureRenderers(deps) {
             health.message ||
               pickUiText(
                 input.language,
-                "No health check has been recorded yet.",
-                "\u8FD8\u6CA1\u6709\u8BB0\u5F55\u4EFB\u4F55 health check \u7ED3\u679C\u3002",
-              ),
+        "No health check has been recorded yet.",
+        "\u8FD8\u6CA1\u6709\u8BB0\u5F55\u4EFB\u4F55 health check \u7ED3\u679C\u3002",
+      ),
           )}</div>
           <div class="geo-status-strip">
             <div class="status-chip">
@@ -2121,12 +2220,251 @@ function createFeatureRenderers(deps) {
   `;
   }
 
+  function buildPredictionViewModel(input) {
+    const state = getAiPredictionState(input);
+    const health = state.health || {};
+    return {
+      input,
+      state,
+      config: state.config || {},
+      health,
+      aiTakeoverEnabled: input.featureControl?.prediction?.aiTakeoverEnabled === true,
+      backHref: buildFeaturesHref(input),
+      frontendLabel: predictionHealthStatusLabel(
+        health.frontend?.ok ? "ok" : health.status,
+        input.language,
+      ),
+      backendLabel: predictionHealthStatusLabel(
+        health.backend?.ok ? "ok" : health.status,
+        input.language,
+      ),
+      healthStatusLabel: predictionHealthStatusLabel(health.status, input.language),
+      embedStatusLabel:
+        state.ready === true
+          ? pickUiText(input.language, "Embedded workspace ready", "\u5185\u5D4C\u5DE5\u4F5C\u533A\u5DF2\u5C31\u7EEA")
+          : pickUiText(input.language, "Attention required", "\u9700\u8981\u5904\u7406"),
+      embedTone: state.ready === true ? "done" : predictionHealthTone(health.status),
+      workspaceMessage:
+        state.ready === true
+          ? pickUiText(
+              input.language,
+              "MiroFish is loaded inside this shell. Use the workspace on top, and keep connection controls below.",
+              "MiroFish \u5DF2\u5728\u58F3\u5185\u52A0\u8F7D\u3002\u5DE5\u4F5C\u533A\u5728\u9876\u90E8\uFF0C\u8FDE\u63A5\u4E0E\u8BCA\u65AD\u63A7\u5236\u6536\u5728\u4E0B\u65B9\u3002",
+            )
+          : state.embedBlockedReason ||
+            health.message ||
+            pickUiText(
+              input.language,
+              "Start the local MiroFish frontend and backend, then rerun the health check.",
+              "\u5148\u542F\u52A8\u672C\u5730 MiroFish \u524D\u540E\u7AEF\uFF0C\u518D\u91CD\u8BD5 health check\u3002",
+            ),
+      fallbackTitle: pickUiText(
+        input.language,
+        "Prediction workspace unavailable",
+        "\u9884\u6D4B\u5DE5\u4F5C\u533A\u6682\u4E0D\u53EF\u7528",
+      ),
+      fallbackReason:
+        state.embedBlockedReason ||
+        health.message ||
+        pickUiText(
+          input.language,
+          "MiroFish is not reachable yet. Check both the frontend and backend before reloading the embed.",
+          "MiroFish \u8FD8\u6CA1\u6709\u53EF\u7528\u3002\u8BF7\u5148\u68C0\u67E5\u524D\u7AEF\u548C\u540E\u7AEF\uFF0C\u518D\u91CD\u65B0\u52A0\u8F7D\u5D4C\u5165\u3002",
+        ),
+      configStatusMessage:
+        health.message ||
+        pickUiText(
+          input.language,
+          "MiroFish remains in its own project folder. This page only manages bounded connection and in-shell launch.",
+          "MiroFish \u4ECD\u7136\u4FDD\u6301\u5728\u81EA\u5DF1\u7684\u9879\u76EE\u76EE\u5F55\u5185\u3002\u8FD9\u4E2A\u9875\u9762\u53EA\u7BA1\u7406\u6709\u8FB9\u754C\u7684\u8FDE\u63A5\u548C\u58F3\u5185\u542F\u52A8\u3002",
+        ),
+    };
+  }
+
+  function renderPredictionWorkbench(input) {
+    const view = buildPredictionViewModel(input);
+    return `
+    <div data-features-root data-language="${escapeHtml(input.language)}" data-ai-prediction-root>
+      <section class="ai-education-workspace-row">
+        <section class="card geo-secondary-card ai-education-embed-card" data-ai-prediction-fullscreen-target>
+          <div class="overview-command-head">
+            <div>
+              <div class="meta"><a href="${escapeHtml(view.backHref)}">${escapeHtml(
+                pickUiText(input.language, "Back to function hub", "\u8FD4\u56DE\u529F\u80FD\u4E2D\u5FC3"),
+              )}</a></div>
+              <h2>${escapeHtml(pickUiText(input.language, "AI Prediction", "AI\u9884\u6D4B"))}</h2>
+              <div class="meta" data-ai-prediction-embed-message>${escapeHtml(view.workspaceMessage)}</div>
+            </div>
+            <div class="ai-education-workspace-actions">
+              <span class="meta ai-education-fullscreen-state" data-ai-prediction-fullscreen-state>${escapeHtml(
+                pickUiText(input.language, "Windowed", "\u7A97\u53E3\u6A21\u5F0F"),
+              )}</span>
+              <button class="btn" type="button" data-ai-prediction-fullscreen>${escapeHtml(
+                pickUiText(input.language, "Fullscreen workspace", "\u5DE5\u4F5C\u533A\u5168\u5C4F"),
+              )}</button>
+              <span class="badge ${escapeHtml(view.embedTone)}" data-ai-prediction-top-badge>${escapeHtml(
+                view.embedStatusLabel,
+              )}</span>
+            </div>
+          </div>
+          <div class="ai-education-iframe-shell" data-ai-prediction-iframe-shell data-ai-prediction-ready="${view.state.ready ? "true" : "false"}">
+            <iframe class="ai-education-iframe${view.state.ready ? "" : " is-hidden"}" data-ai-prediction-iframe title="${escapeHtml(
+              pickUiText(input.language, "AI Prediction workspace", "AI\u9884\u6D4B\u5DE5\u4F5C\u533A"),
+            )}" src="${escapeHtml(view.state.ready ? view.state.embedUrl || "about:blank" : "about:blank")}" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+            <div class="ai-education-fallback${view.state.ready ? "" : " is-visible"}" data-ai-prediction-fallback${view.state.ready ? " hidden" : ""}>
+              <div class="feature-card-kicker">MiroFish</div>
+              <h3 data-ai-prediction-fallback-title>${escapeHtml(view.fallbackTitle)}</h3>
+              <div class="meta" data-ai-prediction-fallback-reason>${escapeHtml(view.fallbackReason)}</div>
+              <div class="feature-card-actions">
+                <button class="btn" type="button" data-ai-prediction-health>${escapeHtml(
+                  pickUiText(input.language, "Retry health check", "\u91CD\u8BD5 health check"),
+                )}</button>
+                <button class="btn" type="button" data-ai-prediction-reload-embed>${escapeHtml(
+                  pickUiText(input.language, "Retry embed", "\u91CD\u8BD5\u5D4C\u5165"),
+                )}</button>
+                <a class="btn" href="${escapeHtml(view.state.externalOpenUrl)}" target="_blank" rel="noreferrer" data-ai-prediction-open-app>${escapeHtml(
+                  pickUiText(input.language, "Open externally", "\u5916\u90E8\u6253\u5F00"),
+                )}</a>
+                <a class="btn" href="${escapeHtml(view.state.demoUrl)}" target="_blank" rel="noreferrer" data-ai-prediction-open-demo>${escapeHtml(
+                  pickUiText(input.language, "Open demo", "\u6253\u5F00 demo"),
+                )}</a>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+      <section class="card geo-primary-card ai-education-shell-card">
+        <div class="overview-command-head">
+          <div>
+            <div class="feature-card-kicker">MiroFish</div>
+            <h3>${escapeHtml(pickUiText(input.language, "Workspace controls", "\u5DE5\u4F5C\u533A\u63A7\u5236"))}</h3>
+            <div class="meta">${escapeHtml(
+              pickUiText(
+                input.language,
+                "Keep the prediction workspace on top. Connection, health, and external-open controls stay below.",
+                "\u8BA9\u9884\u6D4B\u5DE5\u4F5C\u533A\u5728\u9876\u90E8\u4F18\u5148\u663E\u793A\u3002\u8FDE\u63A5\u3001health \u548C\u5916\u90E8\u6253\u5F00\u63A7\u5236\u6536\u5728\u4E0B\u65B9\u3002",
+              ),
+            )}</div>
+          </div>
+        </div>
+        <div class="geo-status-strip ai-education-status-strip">
+          <div class="status-chip">
+            <span>${escapeHtml(pickUiText(input.language, "Frontend", "\u524D\u7AEF"))}</span>
+            <strong data-ai-prediction-frontend-url>${escapeHtml(view.state.config.frontendBaseUrl)}</strong>
+          </div>
+          <div class="status-chip">
+            <span>${escapeHtml(pickUiText(input.language, "Backend", "\u540E\u7AEF"))}</span>
+            <strong data-ai-prediction-backend-url>${escapeHtml(view.state.config.backendBaseUrl)}</strong>
+          </div>
+          <div class="status-chip">
+            <span>${escapeHtml(pickUiText(input.language, "Connection", "\u8FDE\u63A5"))}</span>
+            <strong data-ai-prediction-health-status>${escapeHtml(view.healthStatusLabel)}</strong>
+          </div>
+          <div class="status-chip">
+            <span>${escapeHtml(pickUiText(input.language, "Embed state", "\u5D4C\u5165\u72B6\u6001"))}</span>
+            <strong data-ai-prediction-embed-status>${escapeHtml(view.embedStatusLabel)}</strong>
+          </div>
+        </div>
+        <div class="feature-card-actions ai-education-shell-actions">
+          <button class="btn" type="button" data-ai-prediction-health>${escapeHtml(
+            pickUiText(input.language, "Check connection", "\u68C0\u67E5\u8FDE\u63A5"),
+          )}</button>
+          <button class="btn" type="button" data-ai-prediction-reload-embed>${escapeHtml(
+            pickUiText(input.language, "Reload workspace", "\u91CD\u65B0\u52A0\u8F7D\u5DE5\u4F5C\u533A"),
+          )}</button>
+          <a class="btn" href="${escapeHtml(view.state.externalOpenUrl)}" target="_blank" rel="noreferrer" data-ai-prediction-open-app>${escapeHtml(
+            pickUiText(input.language, "Open in new tab", "\u65B0\u6807\u7B7E\u6253\u5F00"),
+          )}</a>
+          <a class="btn" href="${escapeHtml(view.state.demoUrl)}" target="_blank" rel="noreferrer" data-ai-prediction-open-demo>${escapeHtml(
+            pickUiText(input.language, "Open demo", "\u6253\u5F00 demo"),
+          )}</a>
+        </div>
+        <div class="meta geo-run-status" data-ai-prediction-config-status>${escapeHtml(view.configStatusMessage)}</div>
+      </section>
+      <section class="geo-layout ai-education-layout ai-education-controls-grid">
+        <section class="card geo-secondary-card">
+          <h3>${escapeHtml(pickUiText(input.language, "Connection", "\u8FDE\u63A5"))}</h3>
+          <div class="meta">${escapeHtml(
+            pickUiText(
+              input.language,
+              "MiroFish keeps its own frontend and backend. Save both URLs here, then run a health check before embedding.",
+              "MiroFish \u4FDD\u6301\u81EA\u5DF1\u7684\u524D\u540E\u7AEF\u7ED3\u6784\u3002\u5148\u5728\u8FD9\u91CC\u4FDD\u5B58\u4E24\u6761 URL\uff0c\u518D\u505A health check \u540E\u518D\u5185\u5D4C\u3002",
+            ),
+          )}</div>
+          <form class="geo-run-form" data-ai-prediction-config-form>
+            <div class="geo-form-grid">
+              <label class="geo-field">
+                <span>${escapeHtml(pickUiText(input.language, "Frontend URL", "\u524D\u7AEF URL"))}</span>
+                <input type="url" name="frontendBaseUrl" value="${escapeHtml(view.state.config.frontendBaseUrl)}" />
+              </label>
+              <label class="geo-field">
+                <span>${escapeHtml(pickUiText(input.language, "Backend URL", "\u540E\u7AEF URL"))}</span>
+                <input type="url" name="backendBaseUrl" value="${escapeHtml(view.state.config.backendBaseUrl)}" />
+              </label>
+              <label class="geo-field geo-field-wide">
+                <span>${escapeHtml(pickUiText(input.language, "Project directory", "\u9879\u76EE\u76EE\u5F55"))}</span>
+                <input type="text" name="repoDir" value="${escapeHtml(view.state.config.repoDir)}" />
+              </label>
+            </div>
+            <div class="feature-card-actions">
+              <button class="btn" type="submit" data-ai-prediction-save>${escapeHtml(
+                pickUiText(input.language, "Save config", "\u4FDD\u5B58\u914D\u7F6E"),
+              )}</button>
+            </div>
+          </form>
+          ${renderFeatureTakeoverControl("prediction", view.aiTakeoverEnabled, input.language)}
+        </section>
+        <section class="card geo-secondary-card">
+          <h3>${escapeHtml(pickUiText(input.language, "Runtime / health", "\u8FD0\u884C / health"))}</h3>
+          <div class="meta" data-ai-prediction-health-summary>${escapeHtml(
+            view.health.message ||
+              pickUiText(
+                input.language,
+                "No health check has been recorded yet.",
+                "\u8FD8\u6CA1\u6709\u8BB0\u5F55\u4EFB\u4F55 health check \u7ED3\u679C\u3002",
+              ),
+          )}</div>
+          <div class="geo-status-strip">
+            <div class="status-chip">
+              <span>${escapeHtml(pickUiText(input.language, "Frontend health", "\u524D\u7AEF health"))}</span>
+              <strong data-ai-prediction-frontend-health>${escapeHtml(view.frontendLabel)}</strong>
+            </div>
+            <div class="status-chip">
+              <span>${escapeHtml(pickUiText(input.language, "Backend health", "\u540E\u7AEF health"))}</span>
+              <strong data-ai-prediction-backend-health>${escapeHtml(view.backendLabel)}</strong>
+            </div>
+            <div class="status-chip">
+              <span>${escapeHtml(pickUiText(input.language, "Checked", "\u68C0\u67E5\u65F6\u95F4"))}</span>
+              <strong data-ai-prediction-health-checked>${escapeHtml(view.health.checkedAt || "-")}</strong>
+            </div>
+            <div class="status-chip">
+              <span>${escapeHtml(pickUiText(input.language, "Repo", "\u4ED3\u5E93"))}</span>
+              <strong data-ai-prediction-repo-dir>${escapeHtml(view.state.config.repoDir || "-")}</strong>
+            </div>
+          </div>
+          <div class="meta" data-ai-prediction-fallback-summary>${escapeHtml(view.fallbackReason)}</div>
+          <div class="meta">${escapeHtml(
+            pickUiText(
+              input.language,
+              "The bottom-right collaboration chat still belongs to the current room timeline. This feature does not unlock any full-history, full-room, or full-repository scanning.",
+              "\u53F3\u4E0B\u89D2\u534F\u4F5C\u7FA4\u804A\u4ECD\u7136\u5C5E\u4E8E\u5F53\u524D room \u7684\u5171\u4EAB\u65F6\u95F4\u7EBF\u3002\u8FD9\u4E2A\u529F\u80FD\u4E0D\u4F1A\u653E\u5F00\u5168\u5386\u53F2\u3001\u5168 room \u6216\u5168\u4ED3\u5E93\u626B\u63CF\u3002",
+            ),
+          )}</div>
+        </section>
+      </section>
+    </div>
+  `;
+  }
+
   function renderFeaturesSection(input) {
     if (input.feature === "geo") {
       return renderGeoWorkbench(input);
     }
     if (input.feature === "education") {
       return renderEducationWorkbench(input);
+    }
+    if (input.feature === "prediction") {
+      return renderPredictionWorkbench(input);
     }
     return renderFeaturesHub(input);
   }

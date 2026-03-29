@@ -35,6 +35,8 @@ test("feature takeover control defaults to operator-only and persists scoped AI 
     assert.equal(loaded.state.features.geo.mode, "operator_only");
     assert.equal(loaded.state.features.education.aiTakeoverEnabled, false);
     assert.equal(loaded.state.features.education.mode, "operator_only");
+    assert.equal(loaded.state.features.prediction.aiTakeoverEnabled, false);
+    assert.equal(loaded.state.features.prediction.mode, "operator_only");
 
     const patched = await mod.patchFeatureControl({
       feature: "geo",
@@ -44,17 +46,22 @@ test("feature takeover control defaults to operator-only and persists scoped AI 
     assert.equal(patched.state.features.geo.mode, "openclaw_ai_scoped");
     assert.equal(patched.state.features.education.aiTakeoverEnabled, false);
     assert.equal(patched.state.features.education.mode, "operator_only");
+    assert.equal(patched.state.features.prediction.aiTakeoverEnabled, false);
+    assert.equal(patched.state.features.prediction.mode, "operator_only");
 
     const persisted = JSON.parse(await readFile(join(root, "runtime", "feature-control.json"), "utf8")) as {
       features: {
         geo: { aiTakeoverEnabled: boolean; mode: string };
         education: { aiTakeoverEnabled: boolean; mode: string };
+        prediction: { aiTakeoverEnabled: boolean; mode: string };
       };
     };
     assert.equal(persisted.features.geo.aiTakeoverEnabled, true);
     assert.equal(persisted.features.geo.mode, "openclaw_ai_scoped");
     assert.equal(persisted.features.education.aiTakeoverEnabled, false);
     assert.equal(persisted.features.education.mode, "operator_only");
+    assert.equal(persisted.features.prediction.aiTakeoverEnabled, false);
+    assert.equal(persisted.features.prediction.mode, "operator_only");
   } finally {
     process.chdir(previousCwd);
     await rmWithRetries(root);

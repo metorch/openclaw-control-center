@@ -43,6 +43,7 @@ const import_audit_timeline = require("../runtime/audit-timeline");
 const import_digest_renderer = require("../runtime/digest-renderer");
 const import_export_bundle = require("../runtime/export-bundle");
 const import_ai_education = require("../runtime/ai-education");
+const import_ai_prediction = require("../runtime/ai-prediction");
 const import_feature_control = require("../runtime/feature-control");
 const import_geo_audit = require("../runtime/geo-audit");
 const import_geo_feature_snapshot = require("../runtime/geo-feature-snapshot");
@@ -1339,6 +1340,46 @@ function startUiServer(port, toolClient) {
                 const state = jobId ? await (0, import_ai_education.refreshAiEducationJob)(jobId) : await (0, import_ai_education.loadAiEducationState)();
                 return writeJson(res, 200, { ok: true, path: state.path, state: state.state, issues: state.issues });
             }
+            if (method === "GET" && path === "/api/features/prediction/state") {
+                assertAllowedQueryParams(url.searchParams, [], true);
+                const state = await (0, import_ai_prediction.loadAiPredictionState)();
+                return writeJson(res, 200, { ok: true, path: state.path, state: state.state, issues: state.issues });
+            }
+            if (method === "PATCH" && path === "/api/features/prediction/config") {
+                assertMutationAuthorized(req, "/api/features/prediction/config");
+                assertJsonContentType(req);
+                const payload = expectObject(await readJsonBody(req), "ai prediction config payload");
+                const frontendBaseUrl = optionalBoundedString(payload.frontendBaseUrl, "frontendBaseUrl", 4096);
+                const backendBaseUrl = optionalBoundedString(payload.backendBaseUrl, "backendBaseUrl", 4096);
+                const repoDir = optionalBoundedString(payload.repoDir, "repoDir", 4096);
+                for (const [fieldName, fieldValue] of [
+                    ["frontendBaseUrl", frontendBaseUrl],
+                    ["backendBaseUrl", backendBaseUrl]
+                ]) {
+                    if (!fieldValue)
+                        continue;
+                    try {
+                        const parsed = new URL(fieldValue);
+                        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                            throw new Error("invalid protocol");
+                        }
+                    }
+                    catch {
+                        throw new RequestValidationError(`${fieldName} must be a valid http or https URL.`, 400);
+                    }
+                }
+                const saved = await (0, import_ai_prediction.patchAiPredictionConfig)({
+                    frontendBaseUrl,
+                    backendBaseUrl,
+                    repoDir
+                });
+                return writeJson(res, 200, { ok: true, path: saved.path, state: saved.state, issues: saved.issues });
+            }
+            if (method === "POST" && path === "/api/features/prediction/health") {
+                assertAllowedQueryParams(url.searchParams, [], true);
+                const state = await (0, import_ai_prediction.checkAiPredictionHealth)();
+                return writeJson(res, 200, { ok: true, path: state.path, state: state.state, issues: state.issues });
+            }
             if (method === "GET" && path === "/api/features/geo/state") {
                 assertAllowedQueryParams(url.searchParams, [], true);
                 const snapshot = await (0, import_geo_feature_snapshot.loadGeoFeatureSnapshot)();
@@ -1595,7 +1636,7 @@ function startUiServer(port, toolClient) {
                 const payload = expectObject(await readJsonBody(req), "feature control payload");
                 const feature = requiredBoundedString(payload.feature, "feature", 40).toLowerCase();
                 if (!(0, import_feature_control.isFeatureControlKey)(feature)) {
-                    throw new RequestValidationError("feature must be one of: geo, education", 400);
+                    throw new RequestValidationError("feature must be one of: geo, education, prediction", 400);
                 }
                 if (typeof payload.aiTakeoverEnabled !== "boolean") {
                     throw new RequestValidationError("aiTakeoverEnabled must be a boolean.", 400);
@@ -2590,7 +2631,7 @@ async function renderHtml(filters, toolClient, options) {
     const needsProjectsTemplates = showProjectsSection || taskDiagnosticsPartial;
     const usageCostMode = resolveUsageCostModeForSection(activeSection);
     const sectionMeta = sectionLinks.find(item => item.key === activeSection) ?? sectionLinks[0];
-    const sectionTitle = activeSection === "features" && options.feature === "geo" ? t("GEO Suite", "GEO \u5957\u4EF6") : activeSection === "features" && options.feature === "education" ? t("AI Education", "AI\u6559\u80B2") : resolveDashboardSectionTitle(sectionMeta, options.language);
+    const sectionTitle = activeSection === "features" && options.feature === "geo" ? t("GEO Suite", "GEO \u5957\u4EF6") : activeSection === "features" && options.feature === "education" ? t("AI Education", "AI\u6559\u80B2") : activeSection === "features" && options.feature === "prediction" ? t("AI Prediction", "AI\u9884\u6D4B") : resolveDashboardSectionTitle(sectionMeta, options.language);
     const sectionLeadText = activeSection === "overview" ? t("Decide from one screen: system health, items needing your intervention, who is active, and AI burn.", "\u4E00\u4E2A\u9996\u9875\u53EA\u56DE\u7B54\u56DB\u4EF6\u4E8B\uFF1A\u7CFB\u7EDF\u662F\u5426\u6B63\u5E38\u3001\u54EA\u91CC\u9700\u8981\u4F60\u4ECB\u5165\u3001\u8C01\u5728\u5FD9\u3001AI \u7528\u91CF\u662F\u5426\u5F02\u5E38\u3002") : activeSection === "collaboration" ? t("Follow how work moves between agents: who accepted it, who received the handoff, and where collaboration is currently waiting.", "\u76F4\u63A5\u770B\u4EFB\u52A1\u662F\u600E\u4E48\u5728\u667A\u80FD\u4F53\u4E4B\u95F4\u6D41\u8F6C\u7684\uFF1A\u8C01\u5148\u63A5\u5355\u3001\u540E\u6765\u4EA4\u7ED9\u4E86\u8C01\u3001\u5F53\u524D\u5361\u5728\u54EA\u4E00\u6BB5\u534F\u4F5C\u91CC\u3002") : activeSection === "projects-tasks" ? t("Start with the task and schedule card wall. It now merges tracked tasks, due times, and timed jobs into one place before you drill into execution detail.", "\u5148\u770B\u4EFB\u52A1\u4E0E\u6392\u7A0B\u5361\u7247\u5899\u3002\u73B0\u5728\u4F1A\u5148\u628A\u8DDF\u8E2A\u4EFB\u52A1\u3001\u622A\u6B62\u65F6\u95F4\u548C\u5B9A\u65F6\u4EFB\u52A1\u5408\u5230\u4E00\u8D77\uFF0C\u518D\u5F80\u4E0B\u94BB\u6267\u884C\u7EC6\u8282\u3002") : activeSection === "features" ? t("Open focused capability pages inside the AI employee system shell. GEO is the first suite entry and now defaults to one-click full-suite execution, while advanced tools stay folded until needed.", "\u5728 AI \u5458\u5DE5\u7CFB\u7EDF\u58F3\u5185\u6253\u5F00\u805A\u7126\u80FD\u529B\u9875\u3002GEO \u662F\u7B2C\u4E00\u4E2A\u5957\u4EF6\u5165\u53E3\uFF0C\u9ED8\u8BA4\u8D70\u4E00\u952E\u5B8C\u6574\u5957\u4EF6\u6D41\u7A0B\uFF0C\u53EA\u6709\u5728\u9700\u8981\u65F6\u624D\u5C55\u5F00\u9AD8\u7EA7\u5DE5\u5177\u3002") : sectionMeta.blurb;
     const needsSessionPreview = activeSection === "projects-tasks" || activeSection === "overview";
     const needsTaskEvidence = activeSection === "projects-tasks";
@@ -2610,6 +2651,7 @@ async function renderHtml(filters, toolClient, options) {
     const needsSettingsInsights = activeSection === "settings";
     const needsGeoAuditState = activeSection === "features";
     const needsAiEducationState = activeSection === "features";
+    const needsAiPredictionState = activeSection === "features";
     const needsGeoAuditSummary = activeSection === "features" && options.feature === "geo";
     markRenderPhase("snapshot");
     const exceptions = (0, import_commander.commanderExceptions)(snapshot);
@@ -2633,7 +2675,7 @@ async function renderHtml(filters, toolClient, options) {
     markRenderPhase("session-preview");
     const [cronOverview, openclawCronJobs, replayPreview, usageCost, officeRoster, officePresence, agentTeamEmbed] = await Promise.all([(0, import_cron_overview.buildCronOverview)(snapshot, import_config.POLLING_INTERVALS_MS.cron), loadOpenclawCronCatalog(options.language), loadCachedReplayPreview(), loadCachedUsageCost(snapshot, usageCostMode), (0, import_agent_roster.loadBestEffortAgentRoster)(), loadCachedOfficeSessionPresence(), (0, import_agent_team_embed.loadAgentTeamEmbedSnapshot)()]);
     markRenderPhase("shared-data");
-    const [teamSnapshot, memoryFiles, memoryFacetOptions, workspaceFiles, settingsBudgetPolicy, workspaceFacetOptions, workspaceAgentScopes, docHubSnapshot, taskEvidenceItems, connectionHealthSummary, securitySummary, updateSummary, employeeContractSummary, memoryStateSummary, geoAuditState, geoAuditSummary, aiEducationState, featureControlState] = await Promise.all([needsTeamSnapshot ? loadTeamSnapshot(officeRoster) : Promise.resolve({ missionStatement: t("No shared mission loaded.", "\u5C1A\u672A\u52A0\u8F7D\u5171\u540C\u76EE\u6807\u3002"), members: [], sourcePath: OPENCLAW_CONFIG_PATH, detail: t("Loaded on the staff page only.", "\u4EC5\u5728\u5458\u5DE5\u9875\u52A0\u8F7D\u3002"), modelOptions: [], modelEditable: false }), needsMemorySection ? listEditableFiles("memory") : Promise.resolve([]), needsMemorySection ? listMemoryFacetOptions() : Promise.resolve([]), needsDocsHub ? listEditableFiles("workspace") : Promise.resolve([]), (0, import_budget_policy.loadBudgetPolicy)(), needsDocsHub ? listWorkspaceFacetOptions() : Promise.resolve([]), needsDocsHub ? loadEditableAgentScopes() : Promise.resolve([]), needsDocsHub ? (0, import_docs_hub.loadStructuredDocHubSnapshot)(snapshot, toolClient) : Promise.resolve({ generatedAt: snapshot.generatedAt, sourcePath: (0, import_node_path.join)(process.cwd(), "runtime", "doc-hub-chat.json"), detail: t("Loaded on the docs page only.", "\u4EC5\u5728\u6587\u6863\u9875\u52A0\u8F7D\u3002"), items: [] }), needsTaskEvidence ? loadCachedTaskEvidenceSessions(snapshot, toolClient, taskEvidenceSessionKeys, TASK_EVIDENCE_HISTORY_LIMIT) : Promise.resolve([]), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawConnectionSummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawSecuritySummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawUpdateSummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_employee_contract.loadCachedOpenClawEmployeeContractSummary)()) : Promise.resolve(void 0), needsMemorySection ? (0, import_openclaw_cli_insights.loadCachedOpenClawMemorySummary)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_geo_audit.getGeoAuditState)() : Promise.resolve(void 0), needsGeoAuditSummary ? (0, import_geo_audit.getGeoAuditSummary)() : Promise.resolve(void 0), needsAiEducationState ? (0, import_ai_education.loadAiEducationState)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_feature_control.loadFeatureControlState)() : Promise.resolve(void 0)]);
+    const [teamSnapshot, memoryFiles, memoryFacetOptions, workspaceFiles, settingsBudgetPolicy, workspaceFacetOptions, workspaceAgentScopes, docHubSnapshot, taskEvidenceItems, connectionHealthSummary, securitySummary, updateSummary, employeeContractSummary, memoryStateSummary, geoAuditState, geoAuditSummary, aiEducationState, aiPredictionState, featureControlState] = await Promise.all([needsTeamSnapshot ? loadTeamSnapshot(officeRoster) : Promise.resolve({ missionStatement: t("No shared mission loaded.", "\u5C1A\u672A\u52A0\u8F7D\u5171\u540C\u76EE\u6807\u3002"), members: [], sourcePath: OPENCLAW_CONFIG_PATH, detail: t("Loaded on the staff page only.", "\u4EC5\u5728\u5458\u5DE5\u9875\u52A0\u8F7D\u3002"), modelOptions: [], modelEditable: false }), needsMemorySection ? listEditableFiles("memory") : Promise.resolve([]), needsMemorySection ? listMemoryFacetOptions() : Promise.resolve([]), needsDocsHub ? listEditableFiles("workspace") : Promise.resolve([]), (0, import_budget_policy.loadBudgetPolicy)(), needsDocsHub ? listWorkspaceFacetOptions() : Promise.resolve([]), needsDocsHub ? loadEditableAgentScopes() : Promise.resolve([]), needsDocsHub ? (0, import_docs_hub.loadStructuredDocHubSnapshot)(snapshot, toolClient) : Promise.resolve({ generatedAt: snapshot.generatedAt, sourcePath: (0, import_node_path.join)(process.cwd(), "runtime", "doc-hub-chat.json"), detail: t("Loaded on the docs page only.", "\u4EC5\u5728\u6587\u6863\u9875\u52A0\u8F7D\u3002"), items: [] }), needsTaskEvidence ? loadCachedTaskEvidenceSessions(snapshot, toolClient, taskEvidenceSessionKeys, TASK_EVIDENCE_HISTORY_LIMIT) : Promise.resolve([]), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawConnectionSummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawSecuritySummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_cli_insights.loadCachedOpenClawUpdateSummary)()) : Promise.resolve(void 0), needsSettingsInsights ? loadSettingsInsightPreview(() => (0, import_openclaw_employee_contract.loadCachedOpenClawEmployeeContractSummary)()) : Promise.resolve(void 0), needsMemorySection ? (0, import_openclaw_cli_insights.loadCachedOpenClawMemorySummary)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_geo_audit.getGeoAuditState)() : Promise.resolve(void 0), needsGeoAuditSummary ? (0, import_geo_audit.getGeoAuditSummary)() : Promise.resolve(void 0), needsAiEducationState ? (0, import_ai_education.loadAiEducationState)() : Promise.resolve(void 0), needsAiPredictionState ? (0, import_ai_prediction.loadAiPredictionState)() : Promise.resolve(void 0), needsGeoAuditState ? (0, import_feature_control.loadFeatureControlState)() : Promise.resolve(void 0)]);
     markRenderPhase("section-assets");
     const collaborationDirectory = await loadCollaborationParticipantDirectory();
     const dashboardRefreshGeneratedAt = pickLatestSessionActivityTimestamp(snapshot.generatedAt, sessionPreview.generatedAt, collaborationPreview.generatedAt, docHubSnapshot.generatedAt, agentTeamEmbed.runtime.updatedAt) ?? snapshot.generatedAt;
@@ -3610,6 +3652,7 @@ async function renderHtml(filters, toolClient, options) {
     const docsSection = showDocsSection ? await (0, import_docs_hub.renderDocsSection)({ language: options.language, workspaceFiles, workspaceFacetOptions, projectSummaries: snapshot.projectSummaries, agentScopes: workspaceAgentScopes, docHubSnapshot, agentTeamDocsBlockHtml: agentTeamDocsBlock }) : "";
     const featuresSection = showFeaturesSection ? renderFeaturesSection({
         aiEducationState: aiEducationState?.state ?? (0, import_ai_education.defaultAiEducationPublicState)(),
+        aiPredictionState: aiPredictionState?.state ?? (0, import_ai_prediction.defaultAiPredictionPublicState)(),
         compactStatusStrip: options.compactStatusStrip,
         feature: options.feature,
         featureControl: featureControlState?.state?.features ?? (0, import_feature_control.defaultFeatureControlState)().features,

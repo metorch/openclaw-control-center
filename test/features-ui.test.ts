@@ -167,6 +167,11 @@ test("feature hub keeps GEO as the first controlled card without mounting the wo
         mode: "operator_only",
         updatedAt: "2026-03-25T01:00:00.000Z",
       },
+      prediction: {
+        aiTakeoverEnabled: false,
+        mode: "operator_only",
+        updatedAt: "2026-03-25T01:00:00.000Z",
+      },
     },
     filters: { quick: "all" },
     aiEducationState: {
@@ -195,6 +200,32 @@ test("feature hub keeps GEO as the first controlled card without mounting the wo
       updatedAt: "2026-03-25T01:00:00.000Z",
       version: 1,
     },
+    aiPredictionState: {
+      config: {
+        frontendBaseUrl: "http://127.0.0.1:3002",
+        backendBaseUrl: "http://127.0.0.1:5002",
+        repoDir: "C:\\MiroFish",
+      },
+      health: {
+        status: "unknown",
+        frontend: {
+          ok: false,
+          checkedUrl: "http://127.0.0.1:3002",
+        },
+        backend: {
+          ok: false,
+          checkedUrl: "http://127.0.0.1:5002/health",
+        },
+        message: "Run a health check after starting MiroFish.",
+      },
+      launchUrl: "http://127.0.0.1:3002",
+      embedUrl: "http://127.0.0.1:3002",
+      externalOpenUrl: "http://127.0.0.1:3002",
+      demoUrl: "https://666ghj.github.io/mirofish-demo/",
+      ready: false,
+      updatedAt: "2026-03-25T01:00:00.000Z",
+      version: 1,
+    },
     geoProjectRoot: "C:\\geo-root",
     geoState: {
       status: "idle",
@@ -215,11 +246,15 @@ test("feature hub keeps GEO as the first controlled card without mounting the wo
   assert(html.includes("AI Education"));
   assert(html.includes("Open AI Education"));
   assert(html.includes("feature=education"));
+  assert(html.includes("AI Prediction"));
+  assert(html.includes("Open AI Prediction"));
+  assert(html.includes("feature=prediction"));
   assert(html.includes("data-features-root"));
   assert(!html.includes('data-feature-toggle="geo"'));
   assert(html.includes("Run the full GEO suite with one click"));
   assert(!html.includes("data-geo-workbench-root"));
   assert(html.indexOf("feature=geo") < html.indexOf("feature=education"));
+  assert(html.indexOf("feature=education") < html.indexOf("feature=prediction"));
 });
 
 test("AI Education workbench renders the embedded shell instead of the old classroom job form", () => {
@@ -324,7 +359,7 @@ test("AI Education workbench renders the embedded shell instead of the old class
   assert(html.includes('data-ai-education-apply-openmaic-config'));
   assert(html.includes('data-ai-education-sync-status'));
   assert(html.includes('data-ai-education-observed-providers'));
-  assert(html.includes("Write into OpenMAIC"));
+  assert(html.includes("Write provider config into OpenMAIC") || html.includes("Write model config into OpenMAIC"));
   assert(html.includes('data-feature-toggle="education"'));
   assert(html.includes("AI takeover enabled"));
   assert(html.indexOf('data-ai-education-fullscreen-target') < html.indexOf("Connection"));
@@ -383,6 +418,71 @@ test("AI Education workbench renders a fallback card and hosted recovery when lo
   assert(html.includes("Open hosted directly"));
   assert(html.includes('src="about:blank"'));
   assert(!html.includes('data-ai-education-job-form'));
+});
+
+test("AI Prediction workbench renders the embedded shell, connection controls, and runtime health cards", () => {
+  const html = featureRenderers.renderFeaturesSection({
+    compactStatusStrip: false,
+    feature: "prediction",
+    featureControl: {
+      prediction: {
+        aiTakeoverEnabled: true,
+        mode: "openclaw_ai_scoped",
+        updatedAt: "2026-03-30T01:00:00.000Z",
+      },
+    },
+    filters: { quick: "all" },
+    aiPredictionState: {
+      config: {
+        frontendBaseUrl: "http://127.0.0.1:3002",
+        backendBaseUrl: "http://127.0.0.1:5002",
+        repoDir: "C:\\MiroFish",
+      },
+      health: {
+        status: "ok",
+        checkedAt: "2026-03-30T01:05:00.000Z",
+        frontend: {
+          ok: true,
+          checkedUrl: "http://127.0.0.1:3002",
+          statusCode: 200,
+          message: "ok",
+        },
+        backend: {
+          ok: true,
+          checkedUrl: "http://127.0.0.1:5002/health",
+          statusCode: 200,
+          message: "{\"status\":\"ok\"}",
+        },
+        message: "MiroFish frontend and backend are reachable.",
+      },
+      launchUrl: "http://127.0.0.1:3002",
+      embedUrl: "http://127.0.0.1:3002",
+      externalOpenUrl: "http://127.0.0.1:3002",
+      demoUrl: "https://666ghj.github.io/mirofish-demo/",
+      ready: true,
+      updatedAt: "2026-03-30T01:05:00.000Z",
+      version: 1,
+    },
+    language: "en",
+    usageView: "cumulative",
+  });
+
+  assert(html.includes('data-ai-prediction-root'));
+  assert(html.includes('data-ai-prediction-iframe'));
+  assert(html.includes('data-ai-prediction-fullscreen-target'));
+  assert(html.includes('data-ai-prediction-fullscreen'));
+  assert(html.includes('data-ai-prediction-fullscreen-state'));
+  assert(html.includes('data-ai-prediction-embed-status'));
+  assert(html.includes('data-ai-prediction-config-form'));
+  assert(html.includes('data-ai-prediction-health-summary'));
+  assert(html.includes('data-ai-prediction-frontend-health'));
+  assert(html.includes('data-ai-prediction-backend-health'));
+  assert(html.includes('data-ai-prediction-open-demo'));
+  assert(html.includes('data-feature-toggle="prediction"'));
+  assert(html.includes("AI takeover enabled"));
+  assert(html.includes("Open demo"));
+  assert(html.includes("Frontend URL"));
+  assert(html.includes("Backend URL"));
 });
 
 test("GEO workbench renders the controlled run form, suite modules, artifacts, and preview affordances", () => {
@@ -491,6 +591,9 @@ test("GEO feature script stays scoped to the workbench APIs, suite modules, and 
   assert(script.includes("/api/features/education/config"));
   assert(script.includes("/api/features/education/health"));
   assert(script.includes("/api/features/education/apply-openmaic-config"));
+  assert(script.includes("/api/features/prediction/state"));
+  assert(script.includes("/api/features/prediction/config"));
+  assert(script.includes("/api/features/prediction/health"));
   assert(script.includes("[data-ai-education-root]"));
   assert(script.includes("data-ai-education-iframe"));
   assert(script.includes("data-ai-education-reload-embed"));
@@ -501,6 +604,13 @@ test("GEO feature script stays scoped to the workbench APIs, suite modules, and 
   assert(script.includes("data-ai-education-apply-openmaic-config"));
   assert(script.includes("data-ai-education-sync-status"));
   assert(script.includes("data-ai-education-observed-providers"));
+  assert(script.includes("[data-ai-prediction-root]"));
+  assert(script.includes("data-ai-prediction-iframe"));
+  assert(script.includes("data-ai-prediction-reload-embed"));
+  assert(script.includes("data-ai-prediction-fullscreen-target"));
+  assert(script.includes("data-ai-prediction-fullscreen"));
+  assert(script.includes("data-ai-prediction-fullscreen-state"));
+  assert(script.includes("data-ai-prediction-open-demo"));
   assert(script.includes("const collectConfigBody = () => {"));
   assert(script.includes("const applyOpenMaicConfig = async () => {"));
   assert(script.includes("about:blank"));
