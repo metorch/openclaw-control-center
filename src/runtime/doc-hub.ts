@@ -9,6 +9,8 @@ import {
   type SessionHistoryMessage,
 } from "./session-conversations";
 import type { ReadModelSnapshot } from "../types";
+import { parseCollaborationAgentArtifacts } from "./collaboration-agent-artifacts";
+import { parseStageResultEnvelopeFromReply } from "./collaboration-stage-results";
 
 const MAX_DOC_TITLE_CHARS = 88;
 const MAX_DOC_EXCERPT_CHARS = 240;
@@ -155,7 +157,7 @@ function extractStructuredDocsFromDetail(
   for (const entry of history) {
     if (rows.length >= maxDocs) break;
     if (!isDocumentLikeMessage(entry)) continue;
-    const content = normalizeInlineText(entry.content);
+    const content = sanitizeStructuredDocContent(entry.content, detail.session.agentId);
     if (!content) continue;
     const title = inferDocTitle(content, detail.session.label ?? detail.session.sessionKey);
     const category = classifyDocCategory(title, content);
@@ -248,13 +250,16 @@ async function readStructuredDocStore(indexPath: string): Promise<StructuredDocH
       const category = asString(item.category);
       const sourceTimestamp = normalizeIso(asString(item.sourceTimestamp)) ?? new Date().toISOString();
       const updatedAt = normalizeIso(asString(item.updatedAt)) ?? sourceTimestamp;
-      if (!sourceSessionKey || !title || !excerpt || !category) continue;
+      const sanitizedContent = sanitizeStructuredDocContent(asString(item.content) ?? excerpt, asString(item.sourceAgentId));
+      const sanitizedTitle = sanitizeStructuredDocText(title, asString(item.sourceAgentId));
+      const sanitizedExcerpt = sanitizeStructuredDocText(excerpt, asString(item.sourceAgentId));
+      if (!sourceSessionKey || !sanitizedContent || !category) continue;
       const id = asString(item.id) ?? createDocId(sourceSessionKey, sourceTimestamp, title, excerpt);
       items.push({
         id,
-        title: safeTruncate(title, MAX_DOC_TITLE_CHARS),
-        excerpt: safeTruncate(excerpt, MAX_DOC_EXCERPT_CHARS),
-        content: safeTruncate(asString(item.content) ?? excerpt, MAX_DOC_CONTENT_CHARS),
+        title: safeTruncate(sanitizedTitle || inferDocTitle(sanitizedContent, sourceSessionKey), MAX_DOC_TITLE_CHARS),
+        excerpt: safeTruncate(sanitizedExcerpt || toExcerpt(sanitizedContent, MAX_DOC_EXCERPT_CHARS), MAX_DOC_EXCERPT_CHARS),
+        content: safeTruncate(sanitizedContent, MAX_DOC_CONTENT_CHARS),
         category: safeTruncate(category, 24),
         sourceSessionKey,
         sourceAgentId: asString(item.sourceAgentId),
@@ -283,6 +288,24 @@ function toExcerpt(input: string, maxLength: number): string {
 
 function normalizeInlineText(input: string): string {
   return input.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function sanitizeStructuredDocContent(input: string, agentId: string | undefined): string {
+  return normalizeInlineText(sanitizeStructuredDocText(input, agentId));
+}
+
+function sanitizeStructuredDocText(input: string, agentId: string | undefined): string {
+  const raw = String(input || "");
+  if (!raw.trim()) return "";
+  const parsedArtifacts = parseCollaborationAgentArtifacts(raw);
+  const parsedStageResult = parseStageResultEnvelopeFromReply(parsedArtifacts.cleanReplyText, {
+    agentId: agentId || "assistant",
+  });
+  return (
+    parsedStageResult.cleanReplyText.trim() ||
+    parsedArtifacts.cleanReplyText.trim() ||
+    raw.trim()
+  );
 }
 
 function safeTruncate(input: string, maxLength: number): string {

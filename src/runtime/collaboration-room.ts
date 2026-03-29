@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { isPrimaryOperatorAgentId } from "./operator-display";
+import { parseCollaborationAgentArtifacts } from "./collaboration-agent-artifacts";
+import { parseStageResultEnvelopeFromReply } from "./collaboration-stage-results";
 
 // Collaboration rooms are the canonical room store for control-center group chat.
 // OpenClaw transcripts remain optional sidecars for primary-agent compatibility
@@ -1013,7 +1015,7 @@ function normalizeEvent(input: unknown): CollaborationRoomEvent | null {
     authorRole,
     agentId: normalizeId(obj.agentId),
     sourceEventId: normalizeId(obj.sourceEventId),
-    message: trimText(asString(obj.message), 12_000),
+    message: normalizeEventMessage(type, asString(obj.message), normalizeId(obj.agentId)),
     targetAgentIds: asArray(obj.targetAgentIds)
       .map((item) => normalizeId(item))
       .filter((item): item is string => Boolean(item)),
@@ -1276,6 +1278,32 @@ function trimText(input: string | undefined, maxLength: number): string | undefi
   const value = String(input || "").trim();
   if (!value) return undefined;
   return value.slice(0, maxLength);
+}
+
+function normalizeEventMessage(
+  type: CollaborationRoomEventType,
+  message: string | undefined,
+  agentId: string | undefined,
+): string | undefined {
+  const trimmed = trimText(message, 12_000);
+  if (!trimmed) return undefined;
+  if (type !== "agent_reply") {
+    return trimmed;
+  }
+  const visibleReply = extractVisibleAgentReplyText(trimmed, agentId);
+  return trimText(visibleReply || trimmed, 12_000);
+}
+
+export function extractVisibleAgentReplyText(replyText: string, agentId: string | undefined): string {
+  const parsedArtifacts = parseCollaborationAgentArtifacts(replyText);
+  const parsedStageResult = parseStageResultEnvelopeFromReply(parsedArtifacts.cleanReplyText, {
+    agentId: agentId || "agent",
+  });
+  return (
+    parsedStageResult.cleanReplyText.trim() ||
+    parsedArtifacts.cleanReplyText.trim() ||
+    String(replyText || "").trim()
+  );
 }
 
 function normalizeRoomId(input: string | undefined): string | undefined {

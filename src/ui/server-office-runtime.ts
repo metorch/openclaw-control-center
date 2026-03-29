@@ -1,6 +1,7 @@
 // @ts-nocheck
 
 const { basename } = require("node:path");
+const { extractVisibleAgentReplyText } = require("../runtime/collaboration-room");
 
 function createOfficeRuntimeHelpers(deps) {
   const {
@@ -553,6 +554,8 @@ function createOfficeRuntimeHelpers(deps) {
 
   function sanitizeStaffOutputContent(content) {
     let normalized = normalizeInlineText(content);
+    if (!normalized) return normalized;
+    normalized = normalizeInlineText(extractVisibleAgentReplyText(normalized, void 0));
     if (!normalized) return normalized;
     normalized = normalized.replace(/^\[\[reply_to_current\]\]\s*/i, "");
     normalized = normalized.replace(/^\[[^\]]+\]\s*/, "");

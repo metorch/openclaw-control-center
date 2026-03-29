@@ -357,6 +357,80 @@ test("staff overview uses next-up wording when tasks exist but no live session i
   assert.equal(main.currentWork, "Prepare next report");
 });
 
+test("staff overview strips hidden stage_result payloads from recent output", async () => {
+  const { buildStaffOverviewCards } = await import("../src/ui/server");
+  const snapshot = buildSnapshotFixture();
+  snapshot.sessions = [
+    {
+      sessionKey: "agent:main:stage-result",
+      agentId: "main",
+      state: "idle",
+      lastMessageAt: "2026-03-29T07:12:00.000Z",
+    },
+  ];
+
+  const client: ToolClient = {
+    async sessionsList() { return { sessions: [] }; },
+    async sessionStatus() { return { rawText: "" }; },
+    async sessionsHistory() {
+      return {
+        json: {
+          history: [
+            {
+              role: "assistant",
+              content: [
+                "[[reply_to_current]] 宸茬粡澶勭悊瀹屾垚銆?",
+                "",
+                "[[openclaw-files]]",
+                "runtime/result.md",
+                "[[/openclaw-files]]",
+                "",
+                '<stage_result resultState="awaiting_review">{"summary":"hidden"}</stage_result>',
+              ].join("\n"),
+            },
+          ],
+        },
+        rawText: "",
+      };
+    },
+    async cronList() { return { jobs: [] }; },
+    async approvalsGet() { return { rawText: "" }; },
+    async approvalsApprove() { return { ok: false, action: "approve", approvalId: "x", rawText: "" }; },
+    async approvalsReject() { return { ok: false, action: "reject", approvalId: "x", reason: "no", rawText: "" }; },
+  };
+
+  const cards = await buildStaffOverviewCards({
+    snapshot,
+    client,
+    members: [
+      { agentId: "main", displayName: "main", model: "gpt", workspace: "main", toolsProfile: "full" },
+    ],
+    officeCards: [
+      {
+        agentId: "main",
+        identity: { animal: "lion", title: "Commander", accent: "#ff9966", sprite: "lion" },
+        status: "idle",
+        statusLabel: "寰呭懡",
+        officeZone: "Standby Pods",
+        activeSessions: 0,
+        activeTasks: 0,
+        focusItems: [],
+        summary: "寰呭懡涓€?",
+      },
+    ],
+    executionAgentSummaries: [
+      { agentId: "main", displayName: "main", activeSessions: 0, activeTasks: 0, enabledCronJobs: 0, cronJobNames: [], recentTokens30d: 0 },
+    ],
+    language: "zh",
+  });
+
+  const main = cards.find((item) => item.agentId === "main");
+  assert(main);
+  assert.equal(main.recentOutput, "宸茬粡澶勭悊瀹屾垚銆?");
+  assert.doesNotMatch(main.recentOutput, /stage_result/i);
+  assert.doesNotMatch(main.recentOutput, /openclaw-files/i);
+});
+
 test("staff overview does not show standby copy while status is running", async () => {
   const { buildStaffOverviewCards } = await import("../src/ui/server");
   const snapshot = buildSnapshotFixture();
