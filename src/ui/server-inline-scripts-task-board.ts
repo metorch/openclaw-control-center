@@ -82,12 +82,16 @@ function renderTaskBoardScript() {
         : headers;
     const canMutateTaskBoard = () => Boolean(getMutationState().canMutate);
     const collaborationRoomOpenEventName = 'openclaw:collaboration-room-open';
-    const openCollaborationRoom = (roomId, source = 'task-board') => {
+    const openCollaborationRoom = async (roomId, source = 'task-board') => {
       const normalized = String(roomId || '').trim();
       if (!normalized) return false;
       if (typeof window.__openclawOpenCollaborationRoom === 'function') {
         try {
-          return window.__openclawOpenCollaborationRoom(normalized, source) !== false;
+          const result = window.__openclawOpenCollaborationRoom(normalized, source);
+          if (result && typeof result.then === 'function') {
+            return (await result) !== false;
+          }
+          return result !== false;
         } catch {}
       }
       window.dispatchEvent(
@@ -119,7 +123,7 @@ function renderTaskBoardScript() {
     const setStatus = (message) => {
       if (statusNode) statusNode.textContent = message;
     };
-    const requestCollaborationRoomOpen = (roomId) => openCollaborationRoom(roomId, 'task-board');
+    const requestCollaborationRoomOpen = (roomId) => void openCollaborationRoom(roomId, 'task-board');
     const listCards = () => Array.from(grid.querySelectorAll('[data-task-card]')).filter((card) => card instanceof HTMLElement);
     const listRows = () => Array.from(root.querySelectorAll('[data-task-list-row]')).filter((row) => row instanceof HTMLElement);
     const ensureDetailRows = () => {
@@ -709,18 +713,26 @@ function renderTaskBoardScript() {
         const active = normalizeTab(button.dataset.taskQueueTab) === currentTab;
         button.classList.toggle('is-active', active);
         button.setAttribute('aria-selected', active ? 'true' : 'false');
+        button.tabIndex = active ? 0 : -1;
       });
       panels.forEach((panel) => {
-        panel.hidden = normalizeTab(panel.dataset.taskQueuePanel) !== currentTab;
+        const active = normalizeTab(panel.dataset.taskQueuePanel) === currentTab;
+        panel.hidden = !active;
+        panel.setAttribute('aria-hidden', active ? 'false' : 'true');
       });
     };
+
+    buttons.forEach((button) => {
+      button.addEventListener('click', () => {
+        applyTab(button.dataset.taskQueueTab || root.dataset.taskQueueDefaultTab || 'decision');
+      });
+    });
 
     root.addEventListener('click', (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
       const button = target.closest('[data-task-queue-tab-button]');
       if (button instanceof HTMLButtonElement) {
-        applyTab(button.dataset.taskQueueTab || root.dataset.taskQueueDefaultTab || 'decision');
         return;
       }
       const bootstrapButton = target.closest('[data-collaboration-room-bootstrap]');
@@ -775,7 +787,13 @@ function renderTaskBoardScript() {
           bootstrapButton.removeAttribute('data-collaboration-room-bootstrap');
           bootstrapButton.removeAttribute('data-collaboration-room-bootstrap-id');
           bootstrapButton.removeAttribute('data-collaboration-room-bootstrap-source');
-          dispatchCollaborationRoomOpen(roomId, bootstrapButton.dataset.collaborationRoomSource || 'task-queue-bootstrap');
+          const opened = await dispatchCollaborationRoomOpen(
+            roomId,
+            bootstrapButton.dataset.collaborationRoomSource || 'task-queue-bootstrap',
+          );
+          if (!opened) {
+            window.location.href = '/?section=collaboration&roomId=' + encodeURIComponent(roomId);
+          }
         })
         .catch((error) => {
           bootstrapButton.disabled = false;

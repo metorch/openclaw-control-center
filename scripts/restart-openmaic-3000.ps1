@@ -60,6 +60,14 @@ if (-not (Test-Path $openmaicRoot)) {
 
 Stop-OpenMaicProcessTree -Port $port
 
+$nextDevCacheDir = Join-Path $openmaicRoot ".next\dev"
+$nextTurbopackDir = Join-Path $openmaicRoot ".next\turbopack"
+foreach ($cachePath in @($nextDevCacheDir, $nextTurbopackDir)) {
+  if (Test-Path $cachePath) {
+    Remove-Item -LiteralPath $cachePath -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 $started = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "`"$startScript`"" -WorkingDirectory $controlCenterRoot -WindowStyle Minimized -PassThru
 
 $listener = $null

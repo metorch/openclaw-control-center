@@ -264,10 +264,7 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
     return true;
   };
 
-  window.__openclawOpenCollaborationRoom = (roomId, source) => {
-    void openRoomFromExternalTrigger(roomId, source);
-    return true;
-  };
+  window.__openclawOpenCollaborationRoom = (roomId, source) => openRoomFromExternalTrigger(roomId, source);
 
   toggleButton.addEventListener('click', () => {
     setExpanded(!state.expanded);

@@ -1780,6 +1780,7 @@ test("collaboration source includes primary dispatcher filter and floating room 
   assert(widgetRenderingSource.includes('renderAttachmentTextPreview'));
   assert(widgetRenderingSource.includes("contentType.includes('application/pdf') || extension === 'pdf'"));
   assert(widgetRenderingSource.includes('renderAttachmentFilePreview'));
+  assert(widgetRenderingSource.includes("'<span class=\"collab-chat-attachment-icon\" data-file-mode=\"' + escapeHtml(fileMode) + '\">'"));
   assert(widgetRenderingSource.includes("item.status === 'uploaded'"));
   assert(widgetRenderingSource.includes("const stoppedPending = pendingEvent && event.pendingState === 'stopped';"));
   assert(widgetRenderingSource.includes("if (stoppedPending) {"));
@@ -1800,6 +1801,10 @@ test("collaboration source includes primary dispatcher filter and floating room 
   assert(widgetHtml.includes('.collab-chat-file-preview-frame {'));
   assert(widgetHtml.includes('.collab-chat-file-preview.is-office {'));
   assert(widgetHtml.includes('.collab-chat-attachment-icon[data-file-mode="pdf"] {'));
+  assert(widgetHtml.includes('.collab-chat-attachment-icon[data-file-mode="ppt"] {'));
+  assert(widgetHtml.includes('.collab-chat-attachment-icon[data-file-mode="word"] {'));
+  assert(widgetHtml.includes('.collab-chat-attachment-icon[data-file-mode="excel"] {'));
+  assert(widgetHtml.includes('.collab-chat-attachment-icon[data-file-mode="md"] {'));
   assert(widgetHtml.includes('data-collab-chat-person-card'));
   assert(widgetHtml.includes('data-person-agent'));
   assert(widgetHtml.includes('collab-chat-avatar-state'));

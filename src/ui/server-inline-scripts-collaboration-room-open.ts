@@ -5,12 +5,19 @@ function renderCollaborationRoomOpenScript(language = "zh") {
 (() => {
   const roomOpenEventName = 'openclaw:collaboration-room-open';
 
-  const openRoomDirect = (roomId, source) => {
+  const openRoomDirect = async (roomId, source) => {
     const normalizedRoomId = String(roomId || '').trim();
     if (!normalizedRoomId) return false;
     if (typeof window.__openclawOpenCollaborationRoom === 'function') {
       try {
-        return window.__openclawOpenCollaborationRoom(normalizedRoomId, String(source || '').trim() || 'dashboard') !== false;
+        const result = window.__openclawOpenCollaborationRoom(
+          normalizedRoomId,
+          String(source || '').trim() || 'dashboard',
+        );
+        if (result && typeof result.then === 'function') {
+          return (await result) !== false;
+        }
+        return result !== false;
       } catch {}
     }
     window.dispatchEvent(
@@ -32,7 +39,7 @@ function renderCollaborationRoomOpenScript(language = "zh") {
     const roomId = (control.dataset.collaborationRoomOpen || '').trim();
     if (!roomId) return;
     event.preventDefault();
-    openRoomDirect(roomId, control.dataset.collaborationRoomSource || 'dashboard');
+    void openRoomDirect(roomId, control.dataset.collaborationRoomSource || 'dashboard');
   });
 })();
 </script>`;

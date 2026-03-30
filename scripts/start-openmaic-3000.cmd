@@ -20,4 +20,4 @@ if not exist "%JAVA_HOME%\bin\java.exe" (
 
 set "PATH=%JAVA_HOME%\bin;%PATH%"
 echo openmaicRoot=%OPENMAIC_ROOT%>"%LOG_DIR%\openmaic-3000.meta.log"
-pnpm --dir "%OPENMAIC_ROOT%" dev 1>"%LOG_DIR%\openmaic-3000.out.log" 2>"%LOG_DIR%\openmaic-3000.err.log"
+pnpm --dir "%OPENMAIC_ROOT%" exec next dev --webpack 1>"%LOG_DIR%\openmaic-3000.out.log" 2>"%LOG_DIR%\openmaic-3000.err.log"

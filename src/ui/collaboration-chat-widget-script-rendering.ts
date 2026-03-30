@@ -292,6 +292,39 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     return 'text';
   };
 
+  const attachmentFileMode = (attachment, previewMode) => {
+    const contentType = String(attachment?.contentType || '').toLowerCase();
+    const extension = attachmentExtension(attachment?.fileName);
+    if (previewMode === 'pdf') return 'pdf';
+    if (previewMode === 'html') return 'html';
+    if (previewMode === 'markdown') return 'md';
+    if (attachment?.kind === 'image') return 'image';
+    if (previewMode === 'code') return 'code';
+    if (
+      contentType.includes('presentationml') ||
+      contentType.includes('powerpoint') ||
+      ['ppt', 'pptx', 'key'].includes(extension)
+    ) {
+      return 'ppt';
+    }
+    if (
+      contentType.includes('wordprocessingml') ||
+      contentType.includes('msword') ||
+      ['doc', 'docx'].includes(extension)
+    ) {
+      return 'word';
+    }
+    if (
+      contentType.includes('spreadsheetml') ||
+      contentType.includes('ms-excel') ||
+      ['xls', 'xlsx', 'csv'].includes(extension)
+    ) {
+      return 'excel';
+    }
+    if (previewMode === 'office') return 'office';
+    return extension || previewMode || attachment?.kind || 'file';
+  };
+
   const normalizePreviewText = (value) => String(value || '').replace(/\\r/g, '').trim();
 
   const truncatePreviewText = (value, maxLength) => {
@@ -440,6 +473,7 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     return '<div class="collab-chat-attachments">' + attachments.map((attachment) => {
       state.attachmentIndex.set(attachment.attachmentId, attachment);
       const mode = attachmentPreviewMode(attachment);
+      const fileMode = attachmentFileMode(attachment, mode);
       const meta = attachmentMetaLine(attachment, mode);
       let preview = '';
       if (attachment.kind === 'image') {
@@ -456,12 +490,12 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
         ? (embeddedLanguage === 'zh' ? '\u5DF2\u4F5C\u4E3A\u7FA4\u804A\u9644\u4EF6\u53D1\u9001' : 'Sent as a chat attachment')
         : (embeddedLanguage === 'zh' ? '\u70B9\u51FB\u76F4\u63A5\u6253\u5F00' : 'Click to open');
       return '<div class="collab-chat-attachment">' +
-        '<div class="collab-chat-attachment-card" data-file-mode="' + escapeHtml(mode || attachment.kind || 'file') + '" data-open-attachment="' + escapeHtml(attachment.attachmentId) + '" tabindex="0" role="button" aria-label="' + escapeHtml(openLabel + ': ' + attachment.fileName) + '">' +
+        '<div class="collab-chat-attachment-card" data-file-mode="' + escapeHtml(fileMode) + '" data-open-attachment="' + escapeHtml(attachment.attachmentId) + '" tabindex="0" role="button" aria-label="' + escapeHtml(openLabel + ': ' + attachment.fileName) + '">' +
           '<div class="collab-chat-attachment-copy">' +
             '<strong>' + escapeHtml(attachment.fileName) + '</strong>' +
             '<span>' + escapeHtml(meta) + '</span>' +
           '</div>' +
-          '<span class="collab-chat-attachment-icon" data-file-mode="' + escapeHtml(mode || attachment.kind || 'file') + '">' +
+          '<span class="collab-chat-attachment-icon" data-file-mode="' + escapeHtml(fileMode) + '">' +
             '<span>' + escapeHtml(attachmentCardLabel(attachment, mode)) + '</span>' +
           '</span>' +
         '</div>' +

@@ -3810,13 +3810,13 @@ async function renderHtml(filters, toolClient, options) {
         <div class="meta">${escapeHtml(t("Decision items", "\u5F85\u51B3\u7B56"))} ${pendingDecisionCount} \xB7 ${escapeHtml(t("Approvals", "\u5BA1\u6279"))} ${pendingApprovalsCount} \xB7 ${escapeHtml(t("Follow-up tasks", "\u5F85\u8DDF\u8FDB\u4EFB\u52A1"))} ${taskFollowupCardsForPanel.length}</div>
       </div>
       <div class="task-queue-tabs" role="tablist" aria-label="${escapeHtml(t("Pending queue segments", "\u5F85\u5904\u7406\u961F\u5217\u5206\u6BB5"))}">
-        <button class="task-queue-tab" type="button" role="tab" data-task-queue-tab-button data-task-queue-tab="decision">${escapeHtml(t(`Waiting for decision (${pendingDecisionCount})`, `\u5F85\u51B3\u7B56\uFF08${pendingDecisionCount}\uFF09`))}</button>
-        <button class="task-queue-tab" type="button" role="tab" data-task-queue-tab-button data-task-queue-tab="followup">${escapeHtml(t(`Needs follow-up (${taskFollowupCardsForPanel.length})`, `\u5F85\u8DDF\u8FDB\uFF08${taskFollowupCardsForPanel.length}\uFF09`))}</button>
+        <button class="task-queue-tab" type="button" role="tab" id="task-queue-tab-decision" aria-controls="task-queue-panel-decision" data-task-queue-tab-button data-task-queue-tab="decision">${escapeHtml(t(`Waiting for decision (${pendingDecisionCount})`, `\u5F85\u51B3\u7B56\uFF08${pendingDecisionCount}\uFF09`))}</button>
+        <button class="task-queue-tab" type="button" role="tab" id="task-queue-tab-followup" aria-controls="task-queue-panel-followup" data-task-queue-tab-button data-task-queue-tab="followup">${escapeHtml(t(`Needs follow-up (${taskFollowupCardsForPanel.length})`, `\u5F85\u8DDF\u8FDB\uFF08${taskFollowupCardsForPanel.length}\uFF09`))}</button>
       </div>
-      <section class="task-queue-panel" role="tabpanel" data-task-queue-panel="decision">
+      <section class="task-queue-panel" role="tabpanel" id="task-queue-panel-decision" aria-labelledby="task-queue-tab-decision" data-task-queue-panel="decision">
         ${taskDecisionPreviewHtml}
       </section>
-      <section class="task-queue-panel" role="tabpanel" data-task-queue-panel="followup" hidden>
+      <section class="task-queue-panel" role="tabpanel" id="task-queue-panel-followup" aria-labelledby="task-queue-tab-followup" data-task-queue-panel="followup" hidden>
         ${taskFollowupListHtml}
       </section>
     </section>

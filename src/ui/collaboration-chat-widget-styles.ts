@@ -1320,11 +1320,11 @@ function renderCollaborationChatStyles(): string {
 }
 
 .collab-chat-attachment-icon[data-file-mode="html"] {
-  background: linear-gradient(180deg, #7481a7, #59698e);
+  background: linear-gradient(180deg, #e34f26, #c63c1f);
 }
 
-.collab-chat-attachment-icon[data-file-mode="markdown"] {
-  background: linear-gradient(180deg, #4f7cff, #335fdb);
+.collab-chat-attachment-icon[data-file-mode="md"] {
+  background: linear-gradient(180deg, #2f343a, #111827);
 }
 
 .collab-chat-attachment-icon[data-file-mode="code"] {
@@ -1336,11 +1336,23 @@ function renderCollaborationChatStyles(): string {
 }
 
 .collab-chat-attachment-icon[data-file-mode="pdf"] {
-  background: linear-gradient(180deg, #c2410c, #9a3412);
+  background: linear-gradient(180deg, #dc2626, #b91c1c);
+}
+
+.collab-chat-attachment-icon[data-file-mode="ppt"] {
+  background: linear-gradient(180deg, #f4c542, #d4a514);
+}
+
+.collab-chat-attachment-icon[data-file-mode="word"] {
+  background: linear-gradient(180deg, #185abd, #103f91);
+}
+
+.collab-chat-attachment-icon[data-file-mode="excel"] {
+  background: linear-gradient(180deg, #107c41, #0b5a2a);
 }
 
 .collab-chat-attachment-icon[data-file-mode="office"] {
-  background: linear-gradient(180deg, #1d4ed8, #1e3a8a);
+  background: linear-gradient(180deg, #6b7280, #475569);
 }
 
 .collab-chat-attachment-preview {
