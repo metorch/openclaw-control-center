@@ -82,6 +82,21 @@ function renderTaskBoardScript() {
         : headers;
     const canMutateTaskBoard = () => Boolean(getMutationState().canMutate);
     const collaborationRoomOpenEventName = 'openclaw:collaboration-room-open';
+    const openCollaborationRoom = (roomId, source = 'task-board') => {
+      const normalized = String(roomId || '').trim();
+      if (!normalized) return false;
+      if (typeof window.__openclawOpenCollaborationRoom === 'function') {
+        try {
+          return window.__openclawOpenCollaborationRoom(normalized, source) !== false;
+        } catch {}
+      }
+      window.dispatchEvent(
+        new CustomEvent(collaborationRoomOpenEventName, {
+          detail: { roomId: normalized, source },
+        }),
+      );
+      return true;
+    };
     const taskBoardLockMessage = () => {
       const state = getMutationState();
       if (!state.gateRequired) return '';
@@ -104,16 +119,7 @@ function renderTaskBoardScript() {
     const setStatus = (message) => {
       if (statusNode) statusNode.textContent = message;
     };
-    const requestCollaborationRoomOpen = (roomId) => {
-      const normalized = String(roomId || '').trim();
-      if (!normalized) return false;
-      window.dispatchEvent(
-        new CustomEvent(collaborationRoomOpenEventName, {
-          detail: { roomId: normalized, source: 'task-board' },
-        }),
-      );
-      return true;
-    };
+    const requestCollaborationRoomOpen = (roomId) => openCollaborationRoom(roomId, 'task-board');
     const listCards = () => Array.from(grid.querySelectorAll('[data-task-card]')).filter((card) => card instanceof HTMLElement);
     const listRows = () => Array.from(root.querySelectorAll('[data-task-list-row]')).filter((row) => row instanceof HTMLElement);
     const ensureDetailRows = () => {
@@ -685,16 +691,7 @@ function renderTaskBoardScript() {
     typeof window.__openclawGetMutationAuthHeaders === 'function'
       ? window.__openclawGetMutationAuthHeaders(headers)
       : headers;
-  const dispatchCollaborationRoomOpen = (roomId, source = 'task-queue') => {
-    const normalizedRoomId = String(roomId || '').trim();
-    if (!normalizedRoomId) return false;
-    window.dispatchEvent(
-      new CustomEvent('openclaw:collaboration-room-open', {
-        detail: { roomId: normalizedRoomId, source },
-      }),
-    );
-    return true;
-  };
+  const dispatchCollaborationRoomOpen = (roomId, source = 'task-queue') => openCollaborationRoom(roomId, source);
 
   const queueRoots = Array.from(document.querySelectorAll('[data-task-queue-root]'));
   queueRoots.forEach((root) => {

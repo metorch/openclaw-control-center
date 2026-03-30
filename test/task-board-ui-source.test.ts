@@ -14,7 +14,7 @@ test("task board source includes delete controls and card/details view switch", 
   assert(taskPagesSource.includes('data-task-view-mode-button'));
   assert(taskPagesSource.includes('data-task-board-bulk-delete'));
   assert(taskPagesSource.includes('data-task-delete'));
-  assert(taskPagesSource.includes('data-task-open-room="${escapeHtml(linkedRoomId)}"'));
+  assert(taskPagesSource.includes('data-task-open-room="${escapeHtml(item.linkedRoomId)}"'));
   assert(taskPagesSource.includes('data-task-open-room-missing'));
   assert(taskPagesSource.includes('task-detail-table'));
   assert(taskPagesSource.includes('const completedCount = cards.filter((item) => item.statusTone === "done").length;'));
@@ -28,12 +28,14 @@ test("task board source includes delete controls and card/details view switch", 
   assert(taskBoardScriptSource.includes("method: 'DELETE'"));
   assert(taskBoardScriptSource.includes("taskBoardViewMode: nextMode"));
   assert(taskBoardScriptSource.includes("const collaborationRoomOpenEventName = 'openclaw:collaboration-room-open';"));
+  assert(taskBoardScriptSource.includes("typeof window.__openclawOpenCollaborationRoom === 'function'"));
   assert(taskBoardScriptSource.includes("requestCollaborationRoomOpen(roomId);"));
   assert(taskBoardScriptSource.includes("target.closest('[data-task-open-room-missing]')"));
   assert(taskBoardScriptSource.includes("setStatus(l.missingRoom);"));
   assert(collaborationBootSource.includes("window.addEventListener('openclaw:collaboration-room-open'"));
-  assert(collaborationBootSource.includes("setExpanded(true);"));
-  assert(collaborationBootSource.includes("void activateRoom(normalizedRoomId).finally(() => {"));
+  assert(collaborationBootSource.includes("window.__openclawOpenCollaborationRoom = (roomId, source) => {"));
+  assert(collaborationBootSource.includes("const openRoomFromExternalTrigger = async (roomId, source = 'external') => {"));
+  assert(collaborationBootSource.includes("await activateRoom(normalizedRoomId);"));
   assert(serverSource.includes('if (method === "POST" && path === "/api/tasks/bulk-delete") {'));
   assert(serverSource.includes('if (method === "DELETE" && path.startsWith("/api/tasks/") && !path.endsWith("/status")) {'));
   assert(serverSource.includes('const taskSpotlightCardsWithRoomRefs = collaborationRoomStates.length > 0 ? attachCollaborationRoomRefsToCards(taskSpotlightCards, collaborationRoomStates, options.language) : taskSpotlightCards;'));

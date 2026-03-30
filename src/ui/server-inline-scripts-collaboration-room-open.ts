@@ -5,9 +5,14 @@ function renderCollaborationRoomOpenScript(language = "zh") {
 (() => {
   const roomOpenEventName = 'openclaw:collaboration-room-open';
 
-  const dispatchRoomOpen = (roomId, source) => {
+  const openRoomDirect = (roomId, source) => {
     const normalizedRoomId = String(roomId || '').trim();
     if (!normalizedRoomId) return false;
+    if (typeof window.__openclawOpenCollaborationRoom === 'function') {
+      try {
+        return window.__openclawOpenCollaborationRoom(normalizedRoomId, String(source || '').trim() || 'dashboard') !== false;
+      } catch {}
+    }
     window.dispatchEvent(
       new CustomEvent(roomOpenEventName, {
         detail: {
@@ -27,7 +32,7 @@ function renderCollaborationRoomOpenScript(language = "zh") {
     const roomId = (control.dataset.collaborationRoomOpen || '').trim();
     if (!roomId) return;
     event.preventDefault();
-    dispatchRoomOpen(roomId, control.dataset.collaborationRoomSource || 'dashboard');
+    openRoomDirect(roomId, control.dataset.collaborationRoomSource || 'dashboard');
   });
 })();
 </script>`;

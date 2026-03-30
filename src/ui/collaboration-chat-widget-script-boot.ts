@@ -253,6 +253,22 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
     }
   };
 
+  const openRoomFromExternalTrigger = async (roomId, source = 'external') => {
+    const normalizedRoomId = String(roomId || '').trim();
+    if (!normalizedRoomId) return false;
+    setExpanded(true);
+    await activateRoom(normalizedRoomId);
+    window.requestAnimationFrame(() => {
+      inputNode.focus();
+    });
+    return true;
+  };
+
+  window.__openclawOpenCollaborationRoom = (roomId, source) => {
+    void openRoomFromExternalTrigger(roomId, source);
+    return true;
+  };
+
   toggleButton.addEventListener('click', () => {
     setExpanded(!state.expanded);
     if (state.expanded) void refreshRoom('manual');
@@ -462,14 +478,7 @@ function renderCollaborationChatScriptBoot(_input: CollaborationChatScriptRender
   });
   window.addEventListener('openclaw:collaboration-room-open', (event) => {
     const roomId = event instanceof CustomEvent ? event.detail?.roomId : '';
-    const normalizedRoomId = String(roomId || '').trim();
-    if (!normalizedRoomId) return;
-    setExpanded(true);
-    void activateRoom(normalizedRoomId).finally(() => {
-      window.requestAnimationFrame(() => {
-        inputNode.focus();
-      });
-    });
+    void openRoomFromExternalTrigger(roomId, event instanceof CustomEvent ? event.detail?.source : 'event');
   });
   window.addEventListener('resize', () => {
     applyPanelSize(false);
