@@ -19,6 +19,7 @@ function createOfficeRuntimeHelpers(deps) {
     safeTruncate,
     stableHashIndex,
   } = deps;
+  const STALE_ISSUE_SESSION_WINDOW_MS = 2 * 60 * 60 * 1000;
 
   function normalizeLookupKey(input) {
     return input.trim().toLowerCase();
@@ -139,9 +140,23 @@ function createOfficeRuntimeHelpers(deps) {
     return String(left?.sessionKey ?? "").localeCompare(String(right?.sessionKey ?? ""));
   }
 
+  function isStaleIssueSession(session) {
+    const state = String(session?.state ?? "").trim().toLowerCase();
+    if (state !== "error" && state !== "blocked" && state !== "waiting_approval") {
+      return false;
+    }
+    const lastMessageAtMs = Number.isFinite(Date.parse(session?.lastMessageAt ?? ""))
+      ? Date.parse(session?.lastMessageAt ?? "")
+      : 0;
+    if (!lastMessageAtMs) {
+      return false;
+    }
+    return Date.now() - lastMessageAtMs >= STALE_ISSUE_SESSION_WINDOW_MS;
+  }
+
   function resolveLatestOfficeSessionState(sessions) {
     const latestNonIdle = (Array.isArray(sessions) ? sessions : [])
-      .filter((session) => session?.state && session.state !== "idle")
+      .filter((session) => session?.state && session.state !== "idle" && !isStaleIssueSession(session))
       .sort(compareOfficeSessionsByFreshness)[0];
     if (latestNonIdle?.state) {
       return latestNonIdle.state;
@@ -247,7 +262,9 @@ function createOfficeRuntimeHelpers(deps) {
     const cards = [...agentIds].map((agentId) => {
       const sessions = snapshot.sessions.filter((session) => session.agentId === agentId);
       const runtimeActiveSessions = Math.max(0, runtimeActiveSessionsByAgent.get(agentId) ?? 0);
-      const snapshotActiveSessions = sessions.filter((session) => session.state !== "idle").length;
+      const snapshotActiveSessions = sessions.filter(
+        (session) => session.state !== "idle" && !isStaleIssueSession(session),
+      ).length;
       const activeSessions = Math.max(snapshotActiveSessions, runtimeActiveSessions);
       const ownedActiveTasks = tasks.filter((task) => task.owner.toLowerCase() === agentId.toLowerCase() && task.status !== "done");
       const sessionTaskSet = new Map();

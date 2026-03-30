@@ -166,24 +166,20 @@ export class OpenClawLiveClient implements ToolClient {
       { timeoutMs: options?.timeoutMs },
     );
 
-    return (data.sessions ?? []).map((item) => ({
-      key: asString(item.key) ?? asString(item.sessionKey),
-      sessionKey: asString(item.sessionKey) ?? asString(item.key),
-      sessionId: asString(item.sessionId),
-      agentId: asString(item.agentId),
-      updatedAtMs: asNumber(item.updatedAt),
-      sessionFile:
-        asString(item.sessionFile) ??
-        buildSessionFilePath(openclawHome, asString(item.agentId), asString(item.sessionId)),
-      model: asString(item.model),
-      inputTokens: asNumber(item.inputTokens),
-      outputTokens: asNumber(item.outputTokens),
-      totalTokens: asNumber(item.totalTokens),
-      state: readSessionState(item),
-      active: asBoolean(item.active) ?? false,
-    })).filter((item) =>
-      matchesConfiguredAgents(item.agentId ?? extractAgentIdFromSessionKey(item.sessionKey), configuredAgentKeys),
-    );
+    const sessions: NonNullable<SessionsListResponse["sessions"]> = [];
+    for (const item of data.sessions ?? []) {
+      const mapped = await mapRawSessionRecordToListItem({
+        record: item,
+        openclawHome,
+      });
+      if (!mapped) continue;
+      if (!matchesConfiguredAgents(mapped.agentId ?? extractAgentIdFromSessionKey(mapped.sessionKey), configuredAgentKeys)) {
+        continue;
+      }
+      sessions.push(mapped);
+    }
+
+    return sessions;
   }
 
   async sessionStatus(sessionKey: string): Promise<SessionStatusResponse> {
@@ -820,25 +816,13 @@ export class OpenClawLiveClient implements ToolClient {
         const parsed = JSON.parse(await readFile(sessionsPath, "utf8")) as unknown;
         const records = extractSessionRecords(parsed);
         for (const record of records) {
-          const sessionKey = asString(record.key) ?? asString(record.sessionKey);
-          if (!sessionKey) continue;
-          const updatedAtMs = readUpdatedAtMs(record);
-          sessions.push({
-            key: sessionKey,
-            sessionKey,
-            sessionId: asString(record.sessionId),
-            agentId: asString(record.agentId) ?? agentId,
-            updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : undefined,
-            sessionFile:
-              asString(record.sessionFile) ??
-              buildSessionFilePath(openclawHome, asString(record.agentId) ?? agentId, asString(record.sessionId)),
-            model: asString(record.model),
-            inputTokens: asNumber(record.inputTokens),
-            outputTokens: asNumber(record.outputTokens),
-            totalTokens: asNumber(record.totalTokens),
-            state: readSessionState(record),
-            active: isSessionActive(record, updatedAtMs),
+          const mapped = await mapRawSessionRecordToListItem({
+            record,
+            openclawHome,
+            fallbackAgentId: agentId,
           });
+          if (!mapped) continue;
+          sessions.push(mapped);
         }
       } catch {
         continue;
@@ -2260,6 +2244,13 @@ function isSessionActive(item: Record<string, unknown>, updatedAtMs: number): bo
   return Date.now() - updatedAtMs <= FALLBACK_ACTIVE_RECENCY_WINDOW_MS;
 }
 
+function isStateActive(state: string | undefined): boolean | undefined {
+  if (!state) return undefined;
+  if (ACTIVE_SESSION_STATES.has(state)) return true;
+  if (INACTIVE_SESSION_STATES.has(state)) return false;
+  return undefined;
+}
+
 function readSessionState(item: Record<string, unknown>): string | undefined {
   const direct =
     asString(item.state) ??
@@ -2271,6 +2262,88 @@ function readSessionState(item: Record<string, unknown>): string | undefined {
   const acp = asObject(item.acp);
   const acpState = asString(acp?.state);
   return acpState ? acpState.trim().toLowerCase() : undefined;
+}
+
+async function mapRawSessionRecordToListItem(input: {
+  record: Record<string, unknown>;
+  openclawHome: string;
+  fallbackAgentId?: string;
+}): Promise<NonNullable<SessionsListResponse["sessions"]>[number] | undefined> {
+  const sessionKey = asString(input.record.key) ?? asString(input.record.sessionKey);
+  if (!sessionKey) return undefined;
+
+  const agentId = asString(input.record.agentId) ?? input.fallbackAgentId;
+  const updatedAtMs = readUpdatedAtMs(input.record);
+  const sessionFile =
+    asString(input.record.sessionFile) ??
+    buildSessionFilePath(input.openclawHome, agentId, asString(input.record.sessionId));
+  const state = await resolveSessionStateFromTranscript({
+    item: input.record,
+    sessionFile,
+    updatedAtMs,
+  });
+  const explicitActive = asBoolean(input.record.active) ?? asBoolean(input.record.isActive);
+  const derivedActive = typeof explicitActive === "boolean" ? explicitActive : isStateActive(state);
+
+  return {
+    key: sessionKey,
+    sessionKey,
+    sessionId: asString(input.record.sessionId),
+    agentId,
+    updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : undefined,
+    sessionFile,
+    model: asString(input.record.model),
+    inputTokens: asNumber(input.record.inputTokens),
+    outputTokens: asNumber(input.record.outputTokens),
+    totalTokens: asNumber(input.record.totalTokens),
+    state,
+    active: typeof derivedActive === "boolean" ? derivedActive : isSessionActive(input.record, updatedAtMs),
+  };
+}
+
+async function resolveSessionStateFromTranscript(input: {
+  item: Record<string, unknown>;
+  sessionFile?: string;
+  updatedAtMs: number;
+}): Promise<string | undefined> {
+  const storedState = readSessionState(input.item);
+  const stateActivity = isStateActive(storedState);
+  if (stateActivity === true || !input.sessionFile) {
+    return storedState;
+  }
+
+  const history = await readSessionHistoryFile(input.sessionFile, 12);
+  const historyState = deriveSessionStateFromHistory(history, input.updatedAtMs);
+  return historyState ?? storedState;
+}
+
+function deriveSessionStateFromHistory(
+  history: SessionsHistoryResponse | undefined,
+  updatedAtMs: number,
+): string | undefined {
+  const items = asObject(history?.json)?.history;
+  if (!Array.isArray(items)) return undefined;
+
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const record = asObject(items[index]);
+    const message = asObject(record?.message);
+    const role = asString(message?.role);
+    if (role === "assistant") {
+      const stopReason = asString(message?.stopReason)?.trim().toLowerCase();
+      if (stopReason === "error" || stopReason === "failed") return "error";
+      if (stopReason === "aborted" || stopReason === "cancelled" || stopReason === "canceled") {
+        return "aborted";
+      }
+      if (stopReason && /tool|function/.test(stopReason)) return "running";
+      return "idle";
+    }
+    if (role === "user") {
+      if (!Number.isFinite(updatedAtMs)) return "running";
+      return Date.now() - updatedAtMs <= FALLBACK_ACTIVE_RECENCY_WINDOW_MS ? "running" : "idle";
+    }
+  }
+
+  return undefined;
 }
 
 function readUpdatedAtMs(item: Record<string, unknown>): number {
