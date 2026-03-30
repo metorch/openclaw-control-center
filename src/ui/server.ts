@@ -252,6 +252,7 @@ const CONTROL_CENTER_MAPPING_TASK_IDS = new Set(["due-fast", "todo-second", "alr
 const LEGACY_DASHBOARD_ROUTE_SECTION = { "/calendar": "projects-tasks", "/heartbeat": "overview", "/tools": "settings" };
 const LEGACY_DASHBOARD_ROUTE_ANCHOR = { "/calendar": "calendar-board", "/heartbeat": "heartbeat-health", "/tools": "tool-connectors" };
 (0, import_ai_education.ensureAiEducationBackgroundRefreshLoop)();
+(0, import_ai_prediction.ensureAiPredictionBackgroundRefreshLoop)();
 (0, import_geo_feature_snapshot.ensureGeoFeatureSnapshotLoop)();
 function resolveOpenClawWorkspaceRootForSmoke(input) {
     return resolveOpenClawWorkspaceRootForSmokeImpl(input);

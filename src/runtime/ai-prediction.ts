@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { startSerialIntervalLoop, type SerialIntervalLoopHandle } from "./serial-interval-loop";
 
 export const AI_PREDICTION_STATE_PATH = resolveAiPredictionStatePath();
 export const AI_PREDICTION_FRONTEND_DEFAULT_BASE_URL = "http://127.0.0.1:3002";
@@ -7,6 +8,10 @@ export const AI_PREDICTION_BACKEND_DEFAULT_BASE_URL = "http://127.0.0.1:5002";
 export const AI_PREDICTION_DEFAULT_REPO_DIR = "C:\\Users\\45441\\.openclaw\\workspace\\projects\\features\\MiroFish";
 export const AI_PREDICTION_DEMO_URL = "https://666ghj.github.io/mirofish-demo/";
 const AI_PREDICTION_DEFAULT_ENV_FILE = ".env";
+const AI_PREDICTION_BACKGROUND_REFRESH_INTERVAL_MS = 15_000;
+const AI_PREDICTION_BACKGROUND_HEALTH_MAX_AGE_MS = 60_000;
+
+let aiPredictionBackgroundRefreshLoop: SerialIntervalLoopHandle | undefined;
 
 export type AiPredictionHealthStatus = "unknown" | "ok" | "error";
 
@@ -77,12 +82,27 @@ export function defaultAiPredictionPublicState(now = new Date().toISOString()): 
 
 export async function loadAiPredictionState(): Promise<AiPredictionLoadResult> {
   const stored = await loadStoredAiPredictionState();
+  if (shouldRefreshAiPredictionHealth(stored.state)) {
+    return await checkAiPredictionHealth();
+  }
   await syncAiPredictionProjectEnv(stored.state.config);
   return {
     path: getAiPredictionStatePath(),
     state: toPublicAiPredictionState(stored.state),
     issues: stored.issues,
   };
+}
+
+export function ensureAiPredictionBackgroundRefreshLoop(): void {
+  if (aiPredictionBackgroundRefreshLoop) {
+    return;
+  }
+  aiPredictionBackgroundRefreshLoop = startSerialIntervalLoop({
+    intervalMs: AI_PREDICTION_BACKGROUND_REFRESH_INTERVAL_MS,
+    runOnce: async () => {
+      await refreshAiPredictionStateInBackground();
+    },
+  });
 }
 
 export async function patchAiPredictionConfig(
@@ -169,6 +189,27 @@ function defaultStoredAiPredictionState(now = new Date().toISOString()): AiPredi
     config,
     health: defaultPredictionHealthState(config, now),
   };
+}
+
+async function refreshAiPredictionStateInBackground(): Promise<void> {
+  const current = await loadStoredAiPredictionState();
+  if (shouldRefreshAiPredictionHealth(current.state)) {
+    await checkAiPredictionHealth();
+  }
+}
+
+function shouldRefreshAiPredictionHealth(state: AiPredictionStoredState): boolean {
+  if (!state.config.frontendBaseUrl.trim()) {
+    return false;
+  }
+  if (state.health.status === "unknown") {
+    return true;
+  }
+  const checkedAtMs = Date.parse(state.health.checkedAt || "");
+  if (!Number.isFinite(checkedAtMs)) {
+    return true;
+  }
+  return Date.now() - checkedAtMs >= AI_PREDICTION_BACKGROUND_HEALTH_MAX_AGE_MS;
 }
 
 function defaultPredictionHealthState(

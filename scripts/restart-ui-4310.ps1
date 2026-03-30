@@ -4,6 +4,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $port = 4310
 $startScript = Join-Path $PSScriptRoot "start-ui-4310.cmd"
 $restartOpenMaicScript = Join-Path $PSScriptRoot "restart-openmaic-3000.ps1"
+$restartMiroFishScript = Join-Path $PSScriptRoot "restart-mirofish-3002.ps1"
 $logDir = Join-Path $repoRoot "runtime\\logs"
 
 function Stop-UiProcessTree {
@@ -42,6 +43,10 @@ Stop-UiProcessTree -Port $port
 
 if (Test-Path $restartOpenMaicScript) {
   & powershell -ExecutionPolicy Bypass -File $restartOpenMaicScript
+}
+
+if (Test-Path $restartMiroFishScript) {
+  & powershell -ExecutionPolicy Bypass -File $restartMiroFishScript
 }
 
 $started = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "`"$startScript`"" -WorkingDirectory $repoRoot -WindowStyle Minimized -PassThru
