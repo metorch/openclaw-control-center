@@ -264,9 +264,17 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
   };
 
   const attachmentPreviewMode = (attachment) => {
-    if (String(attachment?.kind || '') !== 'text') return 'none';
     const contentType = String(attachment?.contentType || '').toLowerCase();
     const extension = attachmentExtension(attachment?.fileName);
+    if (contentType.includes('application/pdf') || extension === 'pdf') return 'pdf';
+    if (
+      contentType.includes('presentationml') ||
+      contentType.includes('powerpoint') ||
+      ['ppt', 'pptx', 'key'].includes(extension)
+    ) {
+      return 'office';
+    }
+    if (String(attachment?.kind || '') !== 'text') return 'none';
     if (contentType.includes('html') || extension === 'html' || extension === 'htm') return 'html';
     if (contentType.includes('markdown') || extension === 'md' || extension === 'markdown' || extension === 'mdx') {
       return 'markdown';
@@ -350,6 +358,8 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     if (mode === 'html') return 'HTML';
     if (mode === 'markdown') return 'MD';
     if (mode === 'code') return (attachmentExtension(attachment?.fileName) || 'CODE').toUpperCase().slice(0, 6);
+    if (mode === 'pdf') return 'PDF';
+    if (mode === 'office') return (attachmentExtension(attachment?.fileName) || 'FILE').toUpperCase().slice(0, 6);
     if (attachment?.kind === 'image') return 'IMG';
     return (attachmentExtension(attachment?.fileName) || (embeddedLanguage === 'zh' ? '\u6587\u4ef6' : 'FILE')).toUpperCase().slice(0, 6);
   };
@@ -406,6 +416,25 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
     return '<details><summary class="collab-chat-link">' + escapeHtml(labels.preview) + '</summary><pre class="collab-chat-preview">' + escapeHtml(truncatePreviewText(rawPreview, 1400)) + '</pre></details>';
   };
 
+  const renderAttachmentFilePreview = (attachment, mode) => {
+    if (mode === 'pdf') {
+      const previewSrc = String(attachment.contentHref || '').trim();
+      if (!previewSrc) return '';
+      return '<div class="collab-chat-file-preview is-pdf">' +
+        '<iframe class="collab-chat-file-preview-frame" src="' + escapeHtml(previewSrc + '#toolbar=0&navpanes=0&scrollbar=0') + '" loading="lazy" referrerpolicy="no-referrer" title="' + escapeHtml(attachment.fileName) + '"></iframe>' +
+      '</div>';
+    }
+    if (mode === 'office') {
+      return '<div class="collab-chat-file-preview is-office">' +
+        '<div class="collab-chat-file-preview-copy">' +
+          '<strong>' + escapeHtml(embeddedLanguage === 'zh' ? '\u7FA4\u804A\u6587\u4EF6' : 'Shared file') + '</strong>' +
+          '<span>' + escapeHtml(embeddedLanguage === 'zh' ? '\u8FD9\u4EFD\u6587\u4EF6\u5DF2\u7ECF\u4F5C\u4E3A\u9644\u4EF6\u53D1\u8FDB\u534F\u4F5C\u7FA4\u804A\uFF0C\u53EF\u4EE5\u76F4\u63A5\u6253\u5F00\u6216\u4FDD\u5B58\u3002' : 'This file is attached directly in the collaboration chat. Open it or save it locally.') + '</span>' +
+        '</div>' +
+      '</div>';
+    }
+    return '';
+  };
+
   const renderAttachments = (attachments) => {
     if (!Array.isArray(attachments) || attachments.length === 0) return '';
     return '<div class="collab-chat-attachments">' + attachments.map((attachment) => {
@@ -417,13 +446,17 @@ function renderCollaborationChatScriptRendering(input: CollaborationChatScriptRe
         preview = '<img class="collab-chat-image" src="' + escapeHtml(attachment.contentHref) + '" alt="' + escapeHtml(attachment.fileName) + '" />';
       } else if (attachment.kind === 'text' && attachment.previewText) {
         preview = renderAttachmentTextPreview(attachment);
+      } else if (mode === 'pdf' || mode === 'office') {
+        preview = renderAttachmentFilePreview(attachment, mode);
       }
       const openLabel = mode === 'html'
         ? (embeddedLanguage === 'zh' ? '\u6253\u5f00\u9875\u9762' : 'Open page')
         : labels.openFile;
-      const openHint = embeddedLanguage === 'zh' ? '\u70b9\u51fb\u76f4\u63a5\u6253\u5f00' : 'Click to open';
+      const openHint = mode === 'pdf' || mode === 'office'
+        ? (embeddedLanguage === 'zh' ? '\u5DF2\u4F5C\u4E3A\u7FA4\u804A\u9644\u4EF6\u53D1\u9001' : 'Sent as a chat attachment')
+        : (embeddedLanguage === 'zh' ? '\u70B9\u51FB\u76F4\u63A5\u6253\u5F00' : 'Click to open');
       return '<div class="collab-chat-attachment">' +
-        '<div class="collab-chat-attachment-card" data-open-attachment="' + escapeHtml(attachment.attachmentId) + '" tabindex="0" role="button" aria-label="' + escapeHtml(openLabel + ': ' + attachment.fileName) + '">' +
+        '<div class="collab-chat-attachment-card" data-file-mode="' + escapeHtml(mode || attachment.kind || 'file') + '" data-open-attachment="' + escapeHtml(attachment.attachmentId) + '" tabindex="0" role="button" aria-label="' + escapeHtml(openLabel + ': ' + attachment.fileName) + '">' +
           '<div class="collab-chat-attachment-copy">' +
             '<strong>' + escapeHtml(attachment.fileName) + '</strong>' +
             '<span>' + escapeHtml(meta) + '</span>' +

@@ -1212,14 +1212,15 @@ function renderCollaborationChatStyles(): string {
 
 .collab-chat-attachments {
   display: grid;
-  gap: 0.5rem;
+  gap: 0.42rem;
+  margin-top: 0.12rem;
 }
 
 .collab-chat-attachment {
   display: grid;
-  gap: 0.55rem;
-  padding: 0.35rem 0;
-  border-radius: 0.95rem;
+  gap: 0.38rem;
+  padding: 0;
+  max-width: min(100%, 34rem);
 }
 
 .collab-chat-attachment-card {
@@ -1227,11 +1228,11 @@ function renderCollaborationChatStyles(): string {
   align-items: center;
   justify-content: space-between;
   gap: 0.8rem;
-  padding: 0.82rem 0.9rem;
-  border-radius: 1rem;
+  padding: 0.72rem 0.82rem;
+  border-radius: 0.92rem;
   border: 1px solid rgba(148, 163, 184, 0.18);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 247, 251, 0.96));
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 253, 0.97));
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
   cursor: pointer;
   transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
 }
@@ -1239,12 +1240,17 @@ function renderCollaborationChatStyles(): string {
 .collab-chat-attachment-card:hover {
   transform: translateY(-1px);
   border-color: rgba(37, 99, 235, 0.2);
-  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.1);
 }
 
 .collab-chat-attachment-card:focus-visible {
   outline: 2px solid rgba(37, 99, 235, 0.34);
   outline-offset: 2px;
+}
+
+.collab-chat-event.is-user .collab-chat-attachment-card,
+.collab-chat-event.is-agent .collab-chat-attachment-card {
+  background: rgba(255, 255, 255, 0.82);
 }
 
 .collab-chat-attachment-head,
@@ -1329,6 +1335,14 @@ function renderCollaborationChatStyles(): string {
   background: linear-gradient(180deg, #8b5cf6, #6d28d9);
 }
 
+.collab-chat-attachment-icon[data-file-mode="pdf"] {
+  background: linear-gradient(180deg, #c2410c, #9a3412);
+}
+
+.collab-chat-attachment-icon[data-file-mode="office"] {
+  background: linear-gradient(180deg, #1d4ed8, #1e3a8a);
+}
+
 .collab-chat-attachment-preview {
   display: grid;
   gap: 0.45rem;
@@ -1354,6 +1368,44 @@ function renderCollaborationChatStyles(): string {
   color: #64748b;
   font-size: 0.68rem;
   font-weight: 600;
+}
+
+.collab-chat-file-preview {
+  overflow: hidden;
+  border-radius: 0.92rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.collab-chat-file-preview-frame {
+  display: block;
+  width: 100%;
+  min-height: 18rem;
+  border: 0;
+  background: #f8fafc;
+}
+
+.collab-chat-file-preview.is-office {
+  padding: 0.82rem 0.9rem;
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.96), rgba(248, 250, 252, 0.98));
+}
+
+.collab-chat-file-preview-copy {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.collab-chat-file-preview-copy strong {
+  font-size: 0.78rem;
+  line-height: 1.3;
+  color: #0f172a;
+}
+
+.collab-chat-file-preview-copy span {
+  font-size: 0.71rem;
+  line-height: 1.45;
+  color: #475569;
 }
 
 .collab-chat-link {
