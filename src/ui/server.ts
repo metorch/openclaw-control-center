@@ -1485,9 +1485,9 @@ function startUiServer(port, toolClient) {
                     return writeApiError(res, statusCode, statusCode === 400 ? "VALIDATION_ERROR" : "NOT_FOUND", message);
                 }
                 if (url.searchParams.get("download") === "1") {
-                    res.setHeader("content-disposition", `attachment; filename="${sanitizeHeaderFileName(artifact.descriptor.name)}"`);
+                    res.setHeader("content-disposition", buildContentDispositionHeader("attachment", artifact.descriptor.name));
                 } else if (artifact.descriptor.contentType === "application/pdf") {
-                    res.setHeader("content-disposition", `inline; filename="${sanitizeHeaderFileName(artifact.descriptor.name)}"`);
+                    res.setHeader("content-disposition", buildContentDispositionHeader("inline", artifact.descriptor.name));
                 }
                 return writeBinary(res, 200, artifact.buffer, artifact.descriptor.contentType);
             }
@@ -2140,7 +2140,7 @@ function startUiServer(port, toolClient) {
                 }
                 res.setHeader("content-type", attachmentPayload.attachment.contentType || "application/octet-stream");
                 const disposition = url.searchParams.get("download") === "1" ? "attachment" : "inline";
-                res.setHeader("content-disposition", `${disposition}; filename="${sanitizeHeaderFileName(attachmentPayload.attachment.fileName)}"`);
+                res.setHeader("content-disposition", buildContentDispositionHeader(disposition, attachmentPayload.attachment.fileName));
                 return writeBinary(res, 200, attachmentPayload.content, attachmentPayload.attachment.contentType);
             }
             if (method === "PATCH" && path.startsWith("/api/staff/") && path.endsWith("/model")) {
@@ -10510,7 +10510,7 @@ class RequestValidationError extends Error {
     static { __name(this, "RequestValidationError"); }
     issues;
 }
-const { assertAllowedQueryParams, assertJsonContentType, assertMutationAuthorized, boundedTextField, decodeRouteParam, decodeURIComponentSafe, expectObject, normalizeOptionalPositiveInt, normalizeQueryString, optionalBoundedString, optionalIntegerField, optionalIsoTimestampField, optionalPositiveNumberField, readBinaryBody, readFormBody, readHeaderValue, readJsonBody, readPositiveIntQuery, readRequiredFormValue, redirect, requiredBoundedString, resolveRequestId, sanitizeHeaderFileName, writeApiError, writeBinary, writeJson, writeText } = createServerRequestHelpers({
+const { assertAllowedQueryParams, assertJsonContentType, assertMutationAuthorized, boundedTextField, buildContentDispositionHeader, decodeRouteParam, decodeURIComponentSafe, expectObject, normalizeOptionalPositiveInt, normalizeQueryString, optionalBoundedString, optionalIntegerField, optionalIsoTimestampField, optionalPositiveNumberField, readBinaryBody, readFormBody, readHeaderValue, readJsonBody, readPositiveIntQuery, readRequiredFormValue, redirect, requiredBoundedString, resolveRequestId, sanitizeHeaderFileName, writeApiError, writeBinary, writeJson, writeText } = createServerRequestHelpers({
     RequestValidationError,
     searchLimitMax: SEARCH_LIMIT_MAX,
     jsonMaxBytes: JSON_MAX_BYTES,

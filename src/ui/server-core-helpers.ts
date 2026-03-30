@@ -203,8 +203,21 @@ function createServerRequestHelpers(deps) {
     const normalized = basename(fileName.trim())
       .replace(/[\u0000-\u001F\u007F]/g, "")
       .replace(/["\\;]/g, "_")
+      .normalize("NFKD")
+      .replace(/[^\x20-\x7E]/g, "_")
       .trim();
     return normalized || "download";
+  }
+
+  function buildContentDispositionHeader(dispositionType, fileName) {
+    const normalizedOriginal = basename(String(fileName || "").trim())
+      .replace(/[\u0000-\u001F\u007F]/g, "")
+      .trim() || "download";
+    const fallback = sanitizeHeaderFileName(normalizedOriginal);
+    const encoded = encodeURIComponent(normalizedOriginal)
+      .replace(/['()]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+      .replace(/\*/g, "%2A");
+    return `${dispositionType}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
   }
 
   function writeText(res, statusCode, body, contentType) {
@@ -478,6 +491,7 @@ function createServerRequestHelpers(deps) {
     redirect,
     requiredBoundedString,
     resolveRequestId,
+    buildContentDispositionHeader,
     sanitizeHeaderFileName,
     writeApiError,
     writeBinary,
