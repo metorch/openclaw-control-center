@@ -7,6 +7,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { createCollaborationChatHelpers } from "../src/ui/server-collaboration-chat";
+import { parseCollaborationAgentArtifacts } from "../src/runtime/collaboration-agent-artifacts";
 
 const execFileAsync = promisify(execFile);
 const tsxLoaderHref = pathToFileURL(join(process.cwd(), "node_modules", "tsx", "dist", "loader.mjs")).href;
@@ -121,6 +122,23 @@ test("reply output strips stage_result markup and keeps artifact paths for attac
   assert.equal(output.replyText, "Weather report is ready.");
   assert.deepEqual(output.rawPaths, [artifactPath]);
   assert.deepEqual(output.parsedStageResult.envelope?.artifacts, [{ label: "HTML", location: artifactPath }]);
+});
+
+test("artifact parser recognizes standalone office filenames from visible bullet lists", () => {
+  const replyText = [
+    "Sir，已经按老板汇报版收口好了。",
+    "",
+    "- AI员工系统_老板汇报版_最终版.pptx",
+    "- AI员工系统_老板汇报版_最终版.pdf",
+  ].join("\n");
+
+  const parsed = parseCollaborationAgentArtifacts(replyText);
+
+  assert.deepEqual(parsed.hintedPaths, [
+    "AI员工系统_老板汇报版_最终版.pptx",
+    "AI员工系统_老板汇报版_最终版.pdf",
+  ]);
+  assert.equal(parsed.cleanReplyText, "Sir，已经按老板汇报版收口好了。");
 });
 
 test("artifact replies can auto-promote an in-progress stage result into a reviewable completion", () => {
@@ -970,13 +988,16 @@ test("artifact path resolution stays inside the current collaboration project wh
   const projectDir = "C:\\Users\\demo\\.openclaw\\workspace\\projects\\proj-scope";
   const artifactsDir = join(projectDir, "artifacts");
   const insideProjectArtifact = join(artifactsDir, "status.html");
+  const insideProjectDeck = join(artifactsDir, "老板汇报版_最终版.pptx");
   const outsideProjectArtifact = "C:\\Users\\demo\\.openclaw\\workspace\\mini-collab-smoke\\index.html";
 
   const resolved = helper.resolveCollaborationArtifactPaths({
     rawPaths: [
       insideProjectArtifact,
+      insideProjectDeck,
       outsideProjectArtifact,
       "projects\\proj-scope\\artifacts\\status.html",
+      "老板汇报版_最终版.pptx",
       "status.html",
     ],
     workspaceRoot: "C:\\Users\\demo\\.openclaw\\workspace",
@@ -987,6 +1008,7 @@ test("artifact path resolution stays inside the current collaboration project wh
   });
 
   assert(resolved.includes(insideProjectArtifact));
+  assert(resolved.includes(insideProjectDeck));
   assert.equal(resolved.some((item: string) => item === outsideProjectArtifact), false);
   assert.equal(resolved.some((item: string) => /mini-collab-smoke/i.test(item)), false);
 });

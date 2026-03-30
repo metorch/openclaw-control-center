@@ -4680,6 +4680,12 @@ function createCollaborationChatHelpers(deps) {
       ".gif",
       ".webp",
       ".pdf",
+      ".ppt",
+      ".pptx",
+      ".doc",
+      ".docx",
+      ".xls",
+      ".xlsx",
     ].includes(extname(path).toLowerCase());
   }
 

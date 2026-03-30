@@ -6,6 +6,8 @@ for %%I in ("%CONTROL_CENTER_ROOT%\..\..\projects\features\MiroFish") do set "MI
 set "LOG_DIR=%CONTROL_CENTER_ROOT%\runtime\logs"
 set "MIROFISH_FRONTEND_PORT=3002"
 set "VITE_API_BASE_URL=http://127.0.0.1:5002"
+set "BROWSER=none"
+set "npm_config_open=false"
 
 if not exist "%MIROFISH_ROOT%\package.json" (
   echo MiroFish repo not found: %MIROFISH_ROOT% 1>&2

@@ -188,6 +188,14 @@ test("collaboration attachment filenames are sanitized for storage", () => {
   assert.equal(sanitizeUploadFileName(""), "");
 });
 
+test("collaboration room runtime recognizes office document content types", async () => {
+  const source = await readFile("src/runtime/collaboration-room.ts", "utf8");
+  assert(source.includes('case ".ppt":'));
+  assert(source.includes('case ".pptx":'));
+  assert(source.includes('application/vnd.ms-powerpoint'));
+  assert(source.includes('application/vnd.openxmlformats-officedocument.presentationml.presentation'));
+});
+
 test("primary controller prefers user-facing mention alias while preserving raw id", () => {
   const aliases = buildMentionAliases("main", "Jarvis");
   assert.equal(aliases[0], "jarvis");

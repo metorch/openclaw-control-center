@@ -152,6 +152,11 @@ function extractHintedPaths(replyText: string): string[] {
       if (candidate) matches.push(candidate);
       continue;
     }
+    const standaloneCandidate = normalizeStandaloneArtifactHintCandidate(line);
+    if (standaloneCandidate) {
+      matches.push(standaloneCandidate);
+      continue;
+    }
     const pathMatch = line.match(/([A-Za-z]:[\\/][^\s"'<>|]+|\.{0,2}[\\/][^\s"'<>|]+|\/[^\s"'<>|]+)\.[A-Za-z0-9]{1,12}/g);
     if (!pathMatch) continue;
     for (const item of pathMatch) {
@@ -217,20 +222,13 @@ function isStandaloneArtifactHintLine(input: string): boolean {
     const candidate = normalizePathCandidate(line.slice(line.indexOf(":") + 1));
     return Boolean(candidate);
   }
-
-  const unwrapped = line
-    .replace(/^[-*]\s*/, "")
-    .trim()
-    .replace(/^`+|`+$/g, "")
-    .replace(/^"+|"+$/g, "")
-    .replace(/^'+|'+$/g, "")
-    .trim();
-  const candidate = isStandalonePathCandidate(unwrapped) ? normalizePathCandidate(unwrapped) : undefined;
-  return Boolean(candidate && candidate === unwrapped);
+  return Boolean(normalizeStandaloneArtifactHintCandidate(line));
 }
 
 function isStandalonePathCandidate(input: string): boolean {
-  return /^(?:[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/]).+\.[A-Za-z0-9]{1,12}$/.test(String(input || "").trim());
+  return /^(?:(?:[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/]).+\.[A-Za-z0-9]{1,12}|[^<>:"/\\|?*\r\n]+\.[A-Za-z0-9]{1,12})$/.test(
+    String(input || "").trim(),
+  );
 }
 
 function normalizePathCandidate(input: string): string | undefined {
@@ -246,6 +244,19 @@ function normalizePathCandidate(input: string): string | undefined {
   if (/^https?:\/\//i.test(normalized)) return undefined;
   if (!/[\\/]/.test(normalized) && !/\.[A-Za-z0-9]{1,12}$/.test(normalized)) return undefined;
   return normalized;
+}
+
+function normalizeStandaloneArtifactHintCandidate(input: string): string | undefined {
+  const unwrapped = String(input || "")
+    .trim()
+    .replace(/^[-*]\s*/, "")
+    .trim()
+    .replace(/^`+|`+$/g, "")
+    .replace(/^"+|"+$/g, "")
+    .replace(/^'+|'+$/g, "")
+    .trim();
+  if (!isStandalonePathCandidate(unwrapped)) return undefined;
+  return normalizePathCandidate(unwrapped);
 }
 
 function dedupe(values: string[]): string[] {
